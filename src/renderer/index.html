@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:"
+    />
+    <title>Claude Hub</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="titlebar">
+        <div class="brand"><img class="brand-logo" src="logo.png" alt="" />Claude Hub</div>
+      </header>
+
+      <aside class="sidebar">
+        <div class="side-section">
+          <div class="side-label">Maître</div>
+          <div id="master-slot"></div>
+        </div>
+        <div class="side-section side-workers">
+          <div class="side-label">Workers <span id="worker-count"></span></div>
+          <div class="worker-list" id="worker-list"></div>
+          <p class="side-empty" id="worker-empty">Aucun worker.<br />Demande au maître de lancer une mission.</p>
+        </div>
+        <div class="side-repo" id="repo"></div>
+      </aside>
+
+      <main class="workspace solo" id="workspace">
+        <section class="pane pane-master" id="pane-master"></section>
+        <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"></div>
+        <aside class="dock" id="dock">
+          <div class="dock-tiles" id="dock-tiles"></div>
+          <div class="dock-tabs">
+            <div class="dock-tablist" id="dock-tabs"></div>
+            <button class="icon-btn" id="dock-collapse" title="Réduire en mini-fenêtres" aria-label="Réduire en mini-fenêtres"></button>
+          </div>
+          <section class="pane pane-worker" id="pane-worker"></section>
+        </aside>
+      </main>
+
+      <footer class="statusbar">
+        <div class="sb-group" id="sb-left"></div>
+        <div class="sb-group" id="sb-right"></div>
+      </footer>
+    </div>
+    <div class="menu" id="menu" hidden></div>
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,416 @@
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+import {
+  MENU_MODES,
+  MODE_HINT,
+  MODE_LABEL,
+  STATUS_LABEL,
+  type ChatItem,
+  type Effort,
+  type HubApi,
+  type ModelOption,
+  type SessionView,
+} from '../shared/types';
+import { displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openMenu } from './dom';
+import { activityOf, lastOf, WorkingLine } from './working';
+
+// Model output is untrusted: no inline styles or form controls, so it cannot overlay or mimic the app's own UI.
+const markdown = (text: string): string =>
+  DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true }), {
+    FORBID_ATTR: ['style'],
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
+  });
+
+type Items = Map<string, ChatItem>;
+
+/** One conversation panel: header, message stream and composer (VS Code extension layout). */
+export class ChatView {
+  private readonly head: { dot: HTMLSpanElement; name: HTMLSpanElement; status: HTMLSpanElement; mission: HTMLSpanElement; cwd: HTMLSpanElement };
+  private readonly scroller: HTMLDivElement;
+  private readonly stream: HTMLDivElement;
+  private readonly empty: HTMLDivElement;
+  private readonly input: HTMLTextAreaElement;
+  private readonly modeBtn: HTMLButtonElement;
+  private readonly modelBtn: HTMLButtonElement;
+  private readonly ctx: { root: HTMLSpanElement; arc: SVGCircleElement; text: HTMLSpanElement };
+  private readonly cost: HTMLSpanElement;
+  private readonly sendBtn: HTMLButtonElement;
+  private readonly working = new WorkingLine(false);
+  private readonly nodes = new Map<string, HTMLElement>();
+  private readonly drafts = new Map<string, string>();
+  private session: SessionView | null = null;
+  private items: Items | undefined;
+  private models: ModelOption[] = [];
+
+  constructor(
+    pane: HTMLElement,
+    private readonly hub: HubApi,
+    emptyText: string,
+  ) {
+    const head = h('div', 'pane-head');
+    this.head = { dot: h('span', 'dot'), name: h('span', 'ph-name'), status: h('span', 'ph-status'), mission: h('span', 'ph-mission'), cwd: h('span', 'ph-cwd') };
+    head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, this.head.cwd);
+
+    this.scroller = h('div', 'chat');
+    this.stream = h('div', 'chat-inner');
+    this.empty = h('div', 'chat-empty', emptyText);
+    this.stream.append(this.empty, this.working.root);
+    this.scroller.append(this.stream);
+    this.scroller.addEventListener('click', (e) => {
+      const a = (e.target as HTMLElement).closest('a');
+      if (!a) return;
+      e.preventDefault();
+      const href = a.getAttribute('href');
+      if (href) this.hub.openExternal(href);
+    });
+
+    this.input = h('textarea', 'composer-input');
+    this.input.rows = 1;
+    this.input.addEventListener('input', () => {
+      this.autosize();
+      this.syncSend();
+    });
+    this.input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        this.submit();
+      } else if (e.key === 'Escape' && this.isBusy()) {
+        e.preventDefault();
+        this.interrupt();
+      }
+    });
+
+    this.modeBtn = h('button', 'cbtn');
+    this.modeBtn.addEventListener('click', () => this.openModeMenu());
+    this.modelBtn = h('button', 'cbtn');
+    this.modelBtn.addEventListener('click', () => this.openModelMenu());
+
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    ring.setAttribute('viewBox', '0 0 18 18');
+    ring.setAttribute('class', 'ring');
+    const track = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    const arc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    for (const c of [track, arc]) {
+      c.setAttribute('cx', '9');
+      c.setAttribute('cy', '9');
+      c.setAttribute('r', '7');
+    }
+    track.setAttribute('class', 'ring-track');
+    arc.setAttribute('class', 'ring-arc');
+    ring.append(track, arc);
+    const ctxRoot = h('span', 'ctx');
+    const ctxText = h('span');
+    ctxRoot.append(ring, ctxText);
+    this.ctx = { root: ctxRoot, arc, text: ctxText };
+
+    this.cost = h('span', 'cost');
+    this.cost.title = 'Coût estimé au tarif API';
+    this.sendBtn = h('button', 'send');
+    this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.input.value.trim() ? this.interrupt() : this.submit()));
+
+    const bar = h('div', 'composer-bar');
+    bar.append(this.modeBtn, this.modelBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    const box = h('div', 'composer-box');
+    box.append(this.input, bar);
+    box.addEventListener('mousedown', (e) => {
+      if (e.target === box) e.preventDefault();
+    });
+    box.addEventListener('click', (e) => {
+      if (e.target === box) this.input.focus();
+    });
+    const composer = h('div', 'composer');
+    composer.append(box);
+
+    pane.append(head, this.scroller, composer);
+  }
+
+  get sessionId(): string | null {
+    return this.session?.id ?? null;
+  }
+
+  focus(): void {
+    this.input.focus();
+  }
+
+  /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
+  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
+    this.models = models;
+    const switched = (session?.id ?? null) !== this.sessionId;
+    if (switched && this.session) this.drafts.set(this.session.id, this.input.value);
+    this.session = session ?? null;
+    this.items = items;
+    if (switched) {
+      this.input.value = session ? (this.drafts.get(session.id) ?? '') : '';
+      this.autosize();
+      this.reset(items);
+    }
+    this.renderChrome();
+    this.syncWorking();
+  }
+
+  reset(items: Items | undefined): void {
+    this.items = items;
+    for (const node of this.nodes.values()) node.remove();
+    this.nodes.clear();
+    for (const item of items?.values() ?? []) this.place(item);
+    this.empty.hidden = this.nodes.size > 0;
+    this.syncWorking();
+    this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  upsert(items: ChatItem[]): void {
+    const stick = this.atBottom();
+    for (const item of items) this.place(item);
+    this.empty.hidden = this.nodes.size > 0;
+    this.syncWorking();
+    if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  private atBottom(): boolean {
+    return this.scroller.scrollHeight - this.scroller.scrollTop - this.scroller.clientHeight < 48;
+  }
+
+  /** Working line at the end of the stream, driven by the session status and its latest item. */
+  private syncWorking(): void {
+    const stick = this.atBottom();
+    const s = this.session;
+    this.working.update(s?.status, s?.busySince ?? null, activityOf(lastOf(this.items)));
+    if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  // ---------- chrome (header + composer state) ----------
+
+  private isBusy(): boolean {
+    return this.session?.status === 'busy' || this.session?.status === 'attention';
+  }
+
+  private renderChrome(): void {
+    const s = this.session;
+    if (!s) return;
+    this.head.dot.className = `dot s-${s.status}`;
+    this.head.name.textContent = displayName(s);
+    this.head.status.textContent = STATUS_LABEL[s.status];
+    this.head.mission.textContent = s.role === 'worker' ? oneLine(s.mission) : '';
+    this.head.mission.title = s.mission;
+    this.head.cwd.textContent = s.cwd.split(/[\\/]/).filter(Boolean).pop() ?? s.cwd;
+    this.head.cwd.title = s.cwd;
+
+    this.input.placeholder =
+      s.status === 'exited'
+        ? 'Session arrêtée — écris pour la reprendre'
+        : s.role === 'master'
+          ? 'Écris au maître…  (Entrée pour envoyer, Maj+Entrée pour une ligne)'
+          : 'Écris directement à ce worker…';
+
+    this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? MODE_LABEL[s.mode] : 'Mode'));
+    this.modeBtn.title = s.mode ? (MODE_HINT[s.mode] ?? '') : 'Mode de permissions';
+    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ?? ''), icon(ICONS.chevron, 'ico small'));
+    this.modelBtn.title = 'Modèle et effort';
+
+    const m = s.metrics;
+    const pct = m?.contextPct ?? null;
+    const circumference = 2 * Math.PI * 7;
+    this.ctx.arc.setAttribute('stroke-dasharray', `${(circumference * Math.min(100, pct ?? 0)) / 100} ${circumference}`);
+    this.ctx.root.className = `ctx ${level(pct)}`;
+    this.ctx.text.textContent = fmtPct(pct);
+    this.ctx.root.title = m && m.contextSize ? `Contexte : ${fmtTokens(m.contextTokens)} / ${fmtTokens(m.contextSize)} tokens` : 'Contexte';
+    this.cost.textContent = fmtCost(m?.costUsd);
+    this.syncSend();
+  }
+
+  private syncSend(): void {
+    const stop = this.isBusy() && !this.input.value.trim();
+    this.sendBtn.replaceChildren(icon(stop ? ICONS.stop : ICONS.send));
+    this.sendBtn.classList.toggle('stop', stop);
+    this.sendBtn.disabled = !stop && !this.input.value.trim();
+    this.sendBtn.title = stop ? 'Interrompre (Échap)' : 'Envoyer (Entrée)';
+  }
+
+  private autosize(): void {
+    this.input.style.height = 'auto';
+    this.input.style.height = `${Math.min(this.input.scrollHeight, 240)}px`;
+  }
+
+  private submit(): void {
+    const text = this.input.value.trim();
+    if (!text || !this.session) return;
+    this.hub.send(this.session.id, text);
+    this.input.value = '';
+    this.autosize();
+    this.syncSend();
+    this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  private interrupt(): void {
+    if (this.session) this.hub.interrupt(this.session.id);
+  }
+
+  private openModeMenu(): void {
+    const s = this.session;
+    if (!s) return;
+    openMenu(this.modeBtn, (menu, close) => {
+      menu.append(h('div', 'menu-label', 'Mode de permissions'));
+      for (const mode of MENU_MODES) {
+        const row = this.menuRow(MODE_LABEL[mode], MODE_HINT[mode] ?? '', s.mode === mode);
+        row.addEventListener('click', () => {
+          this.hub.setMode(s.id, mode);
+          close();
+        });
+        menu.append(row);
+      }
+    });
+  }
+
+  private openModelMenu(): void {
+    const s = this.session;
+    if (!s) return;
+    openMenu(this.modelBtn, (menu, close) => {
+      menu.append(h('div', 'menu-label', 'Modèle'));
+      if (this.models.length === 0) menu.append(h('div', 'menu-note', 'Liste disponible après le démarrage de la session.'));
+      for (const model of this.models) {
+        const row = this.menuRow(model.label, model.description, model.value === s.model);
+        row.addEventListener('click', () => {
+          this.hub.setModel(s.id, model.value);
+          close();
+        });
+        menu.append(row);
+      }
+      const current = this.models.find((m) => m.value === s.model);
+      const efforts: Effort[] = current?.efforts.length ? current.efforts : ['low', 'medium', 'high', 'xhigh', 'max'];
+      menu.append(h('div', 'menu-sep'), h('div', 'menu-label', 'Effort'));
+      const seg = h('div', 'segmented');
+      for (const effort of efforts) {
+        const b = h('button', effort === s.effort ? 'seg active' : 'seg', effort);
+        b.addEventListener('click', () => {
+          this.hub.setEffort(s.id, effort);
+          close();
+        });
+        seg.append(b);
+      }
+      menu.append(seg);
+    });
+  }
+
+  private menuRow(label: string, hint: string, checked: boolean): HTMLButtonElement {
+    const row = h('button', checked ? 'menu-row checked' : 'menu-row');
+    const text = h('span', 'menu-text');
+    text.append(h('span', 'menu-title', label));
+    if (hint) text.append(h('span', 'menu-hint', hint));
+    row.append(checked ? icon(ICONS.check) : h('span', 'ico'), text);
+    return row;
+  }
+
+  // ---------- stream ----------
+
+  private place(item: ChatItem): void {
+    const old = this.nodes.get(item.id);
+    const node = this.render(item);
+    if (old instanceof HTMLDetailsElement && node instanceof HTMLDetailsElement) node.open = old.open;
+    if (old) old.replaceWith(node);
+    else this.stream.insertBefore(node, this.working.root);
+    this.nodes.set(item.id, node);
+  }
+
+  private render(item: ChatItem): HTMLElement {
+    switch (item.kind) {
+      case 'user': {
+        const wrap = h('div', 'msg msg-user');
+        wrap.append(h('div', 'bubble', item.text));
+        return wrap;
+      }
+      case 'peer': {
+        const wrap = h('div', 'msg msg-peer');
+        const label = h('div', 'peer-head');
+        label.append(h('span', '', 'Message de '), h('b', '', item.from));
+        const body = h('div', 'md');
+        body.innerHTML = markdown(item.text);
+        wrap.append(label, body);
+        return wrap;
+      }
+      case 'assistant': {
+        const el = h('div', item.live ? 'msg msg-assistant md live' : 'msg msg-assistant md');
+        el.innerHTML = markdown(item.text);
+        return el;
+      }
+      case 'thinking': {
+        const d = h('details', 'step thinking');
+        const sum = h('summary');
+        sum.append(icon(ICONS.chevron, 'ico caret'), h('span', 'step-name', 'Réflexion'));
+        d.append(sum, h('div', 'step-body thinking-text', item.text));
+        return d;
+      }
+      case 'tool': {
+        const state = item.result === null ? 'running' : item.isError ? 'error' : 'done';
+        const d = h('details', `step tool ${state}`);
+        const sum = h('summary');
+        sum.append(h('span', 'step-dot'), h('span', 'step-name', item.name), h('span', 'step-summary', item.summary));
+        const body = h('div', 'step-body');
+        if (item.detail && item.detail !== item.summary) body.append(this.code(item.detail, item.diff));
+        if (item.result) {
+          body.append(h('div', 'step-label', item.isError ? 'Erreur' : 'Résultat'));
+          body.append(this.code(item.result, false, item.isError ? 'result error' : 'result'));
+        }
+        d.append(sum, body);
+        return d;
+      }
+      case 'permission':
+        return item.state === 'pending' ? this.permissionCard(item) : this.permissionDone(item);
+      case 'notice':
+        return h('div', `notice ${item.tone}`, item.text);
+    }
+  }
+
+  private code(text: string, diff: boolean, cls = ''): HTMLPreElement {
+    const pre = h('pre', `code ${cls}`);
+    if (!diff) {
+      pre.textContent = text;
+      return pre;
+    }
+    for (const line of text.split('\n')) {
+      pre.append(h('span', line.startsWith('+ ') ? 'add' : line.startsWith('- ') ? 'del' : '', `${line}\n`));
+    }
+    return pre;
+  }
+
+  private permissionCard(item: Extract<ChatItem, { kind: 'permission' }>): HTMLElement {
+    const sessionId = this.session?.id ?? '';
+    const card = h('div', 'perm');
+    const title = h('div', 'perm-title');
+    title.append(icon(ICONS.shield), h('span', '', 'Autoriser '), h('b', '', item.tool), h('span', '', ' ?'));
+    card.append(title);
+    if (item.summary) card.append(h('div', 'perm-summary', item.summary));
+    if (item.detail && item.detail !== item.summary) card.append(this.code(item.detail, item.diff));
+    if (item.reason) card.append(h('div', 'perm-reason', item.reason));
+
+    const decide = (behavior: 'allow' | 'always' | 'deny', message?: string) => this.hub.decide(sessionId, item.id, { behavior, message });
+    const actions = h('div', 'perm-actions');
+    const allow = h('button', 'btn primary', 'Autoriser');
+    allow.addEventListener('click', () => decide('allow'));
+    actions.append(allow);
+    if (item.canAlways) {
+      const always = h('button', 'btn', 'Toujours autoriser');
+      always.title = 'Ne plus demander pour cette action';
+      always.addEventListener('click', () => decide('always'));
+      actions.append(always);
+    }
+    const deny = h('button', 'btn ghost', 'Refuser');
+    deny.addEventListener('click', () => decide('deny'));
+    actions.append(deny);
+
+    const other = h('input', 'perm-input');
+    other.placeholder = 'Ou dis à Claude quoi faire autrement… (Entrée)';
+    other.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && other.value.trim()) decide('deny', other.value.trim());
+    });
+    card.append(actions, other);
+    return card;
+  }
+
+  private permissionDone(item: Extract<ChatItem, { kind: 'permission' }>): HTMLElement {
+    const labels = { allowed: 'autorisé', denied: 'refusé', expired: 'demande expirée', pending: '' };
+    const row = h('div', `perm-done ${item.state}`);
+    row.append(icon(item.state === 'allowed' ? ICONS.check : ICONS.remove), h('b', '', item.tool), h('span', '', ` ${labels[item.state]}`));
+    if (item.summary) row.append(h('span', 'perm-done-summary', item.summary));
+    return row;
+  }
+}
