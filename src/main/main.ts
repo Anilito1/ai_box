@@ -1,7 +1,17 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import type { ChatItem, Effort, Mode, PermissionDecision } from '../shared/types';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
+import {
+  ATTACH_LIMITS,
+  base64Bytes,
+  IMAGE_TYPES,
+  type ChatItem,
+  type Effort,
+  type ImageInput,
+  type ImageType,
+  type Mode,
+  type PermissionDecision,
+} from '../shared/types';
 import { loadConfig } from './config';
 import { RepoWatcher } from './repoStatus';
 import { SessionManager } from './sessions';
@@ -44,17 +54,34 @@ function createWindow(mgr: SessionManager): void {
   win.webContents.on('did-start-loading', () => {
     rendererReady = false;
   });
+  win.webContents.on('context-menu', (_e, p) => {
+    const items: MenuItemConstructorOptions[] = [];
+    if (p.isEditable) {
+      items.push(
+        { role: 'cut', label: 'Couper', enabled: p.editFlags.canCut },
+        { role: 'copy', label: 'Copier', enabled: p.editFlags.canCopy },
+        { role: 'paste', label: 'Coller', enabled: p.editFlags.canPaste },
+        { type: 'separator' },
+        { role: 'selectAll', label: 'Tout sélectionner' },
+      );
+    } else if (p.selectionText.trim()) {
+      items.push({ role: 'copy', label: 'Copier' });
+    }
+    if (p.mediaType === 'image') items.push({ label: "Copier l'image", click: () => win?.webContents.copyImageAt(p.x, p.y) });
+    if (/^https?:\/\//i.test(p.linkURL)) items.push({ label: 'Copier le lien', click: () => clipboard.writeText(p.linkURL) });
+    if (win && items.length > 0) Menu.buildFromTemplate(items).popup({ window: win });
+  });
   win.on('focus', () => win?.flashFrame(false));
   win.on('close', (e) => {
-    const busy = mgr.busyWorkers();
+    const busy = mgr.busySessions();
     if (busy === 0 || !win) return;
     const choice = dialog.showMessageBoxSync(win, {
       type: 'question',
       buttons: ['Fermer', 'Annuler'],
       defaultId: 1,
       cancelId: 1,
-      message: `${busy} worker${busy > 1 ? 's' : ''} en cours`,
-      detail: 'Ils seront interrompus. Leurs conversations restent reprenables au prochain lancement.',
+      message: `${busy} session${busy > 1 ? 's' : ''} au travail`,
+      detail: 'Leur tour en cours et leurs tâches de fond seront interrompus. Les conversations reprennent au prochain lancement.',
     });
     if (choice !== 0) e.preventDefault();
   });
@@ -63,6 +90,23 @@ function createWindow(mgr: SessionManager): void {
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
+/** Images from the renderer, or null when any is malformed, of an unsupported type or over the per-message limits. */
+function parseImages(value: unknown): ImageInput[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > ATTACH_LIMITS.count) return null;
+  const images: ImageInput[] = [];
+  let total = 0;
+  for (const v of value) {
+    const { mediaType, data } = (v ?? {}) as Record<string, unknown>;
+    if (!IMAGE_TYPES.includes(mediaType as ImageType) || !isStr(data)) return null;
+    total += base64Bytes(data);
+    if (base64Bytes(data) > ATTACH_LIMITS.imageBytes || total > ATTACH_LIMITS.totalBytes) return null;
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return null;
+    images.push({ mediaType: mediaType as ImageType, data });
+  }
+  return images;
+}
+
 function registerIpc(mgr: SessionManager, repo: RepoWatcher): void {
   ipcMain.on('hub:ready', (e) => {
     e.sender.send('hub:snapshot', mgr.snapshot());
@@ -70,8 +114,11 @@ function registerIpc(mgr: SessionManager, repo: RepoWatcher): void {
     e.sender.send('hub:repo', repo.status);
     rendererReady = true;
   });
-  ipcMain.on('session:send', (_e, id: unknown, text: unknown) => {
-    if (isStr(id) && isStr(text)) mgr.send(id, text);
+  ipcMain.on('session:send', (_e, id: unknown, text: unknown, images: unknown) => {
+    if (!isStr(id) || !isStr(text)) return;
+    const parsed = parseImages(images);
+    if (parsed) mgr.send(id, text, parsed);
+    else mgr.refuse(id, text, 'images invalides ou trop lourdes');
   });
   ipcMain.on('session:interrupt', (_e, id: unknown) => {
     if (isStr(id)) mgr.interrupt(id);

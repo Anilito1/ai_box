@@ -1,6 +1,8 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import {
+  ATTACH_LIMITS,
+  base64Bytes,
   MENU_MODES,
   MODE_HINT,
   MODE_LABEL,
@@ -11,7 +13,8 @@ import {
   type ModelOption,
   type SessionView,
 } from '../shared/types';
-import { displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openMenu } from './dom';
+import { toAttachment, type Attachment } from './attachments';
+import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
 import { activityOf, lastOf, WorkingLine } from './working';
 
 // Model output is untrusted: no inline styles or form controls, so it cannot overlay or mimic the app's own UI.
@@ -35,9 +38,16 @@ export class ChatView {
   private readonly ctx: { root: HTMLSpanElement; arc: SVGCircleElement; text: HTMLSpanElement };
   private readonly cost: HTMLSpanElement;
   private readonly sendBtn: HTMLButtonElement;
+  private readonly attachStrip = h('div', 'attachments');
+  private readonly attachNote = h('div', 'attach-note');
+  private readonly fileInput = h('input');
   private readonly working = new WorkingLine(false);
   private readonly nodes = new Map<string, HTMLElement>();
-  private readonly drafts = new Map<string, string>();
+  private readonly drafts = new Map<string, { text: string; attachments: Attachment[] }>();
+  private attachments: Attachment[] = [];
+  /** Images still being decoded or re-encoded: sending waits for them so none is dropped. */
+  private preparing = 0;
+  private noteTimer = 0;
   private session: SessionView | null = null;
   private items: Items | undefined;
   private models: ModelOption[] = [];
@@ -79,6 +89,49 @@ export class ChatView {
         this.interrupt();
       }
     });
+    this.input.addEventListener('paste', (e) => {
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+      if (files.length === 0) return;
+      // A screenshot comes alone; an image copied from a page may also carry text, which still pastes as usual.
+      if (!e.clipboardData?.getData('text/plain')) e.preventDefault();
+      void this.addFiles(files);
+    });
+
+    this.fileInput.type = 'file';
+    this.fileInput.accept = 'image/*';
+    this.fileInput.multiple = true;
+    this.fileInput.hidden = true;
+    this.fileInput.addEventListener('change', () => {
+      void this.addFiles([...(this.fileInput.files ?? [])]);
+      this.fileInput.value = '';
+    });
+    const attachBtn = h('button', 'cbtn cbtn-icon');
+    attachBtn.title = 'Joindre une image — ou colle-la (Ctrl+V), ou glisse-la ici';
+    attachBtn.setAttribute('aria-label', 'Joindre une image');
+    attachBtn.append(icon(ICONS.attach));
+    attachBtn.addEventListener('click', () => this.fileInput.click());
+    this.attachStrip.hidden = true;
+    this.attachNote.hidden = true;
+
+    pane.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      pane.classList.add('drop-target');
+    });
+    pane.addEventListener('dragleave', (e) => {
+      if (!pane.contains(e.relatedTarget as Node | null)) pane.classList.remove('drop-target');
+    });
+    pane.addEventListener('drop', (e) => {
+      pane.classList.remove('drop-target');
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      e.preventDefault();
+      const files = [...e.dataTransfer.files];
+      const images = files.filter((f) => f.type.startsWith('image/'));
+      if (images.length < files.length) this.attachError('Seules les images peuvent être jointes.');
+      void this.addFiles(images);
+      this.input.focus();
+    });
 
     this.modeBtn = h('button', 'cbtn');
     this.modeBtn.addEventListener('click', () => this.openModeMenu());
@@ -106,12 +159,12 @@ export class ChatView {
     this.cost = h('span', 'cost');
     this.cost.title = 'Coût estimé au tarif API';
     this.sendBtn = h('button', 'send');
-    this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.input.value.trim() ? this.interrupt() : this.submit()));
+    this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
     const bar = h('div', 'composer-bar');
-    bar.append(this.modeBtn, this.modelBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
     const box = h('div', 'composer-box');
-    box.append(this.input, bar);
+    box.append(this.attachStrip, this.attachNote, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
       if (e.target === box) e.preventDefault();
     });
@@ -128,6 +181,11 @@ export class ChatView {
     return this.session?.id ?? null;
   }
 
+  /** Releases the draft (and its images) of a session that no longer exists. */
+  forget(id: string): void {
+    this.drafts.delete(id);
+  }
+
   focus(): void {
     this.input.focus();
   }
@@ -136,11 +194,14 @@ export class ChatView {
   show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
     this.models = models;
     const switched = (session?.id ?? null) !== this.sessionId;
-    if (switched && this.session) this.drafts.set(this.session.id, this.input.value);
+    if (switched && this.session) this.drafts.set(this.session.id, { text: this.input.value, attachments: this.attachments });
     this.session = session ?? null;
     this.items = items;
     if (switched) {
-      this.input.value = session ? (this.drafts.get(session.id) ?? '') : '';
+      const draft = session ? this.drafts.get(session.id) : undefined;
+      this.input.value = draft?.text ?? '';
+      this.attachments = draft?.attachments ?? [];
+      this.renderAttachments();
       this.autosize();
       this.reset(items);
     }
@@ -174,7 +235,7 @@ export class ChatView {
   private syncWorking(): void {
     const stick = this.atBottom();
     const s = this.session;
-    this.working.update(s?.status, s?.busySince ?? null, activityOf(lastOf(this.items)));
+    this.working.update(s?.status, s?.busySince ?? null, activityOf(lastOf(this.items)), s?.background);
     if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 
@@ -218,12 +279,16 @@ export class ChatView {
     this.syncSend();
   }
 
+  private hasContent(): boolean {
+    return this.input.value.trim() !== '' || this.attachments.length > 0;
+  }
+
   private syncSend(): void {
-    const stop = this.isBusy() && !this.input.value.trim();
+    const stop = this.isBusy() && !this.hasContent() && this.preparing === 0;
     this.sendBtn.replaceChildren(icon(stop ? ICONS.stop : ICONS.send));
     this.sendBtn.classList.toggle('stop', stop);
-    this.sendBtn.disabled = !stop && !this.input.value.trim();
-    this.sendBtn.title = stop ? 'Interrompre (Échap)' : 'Envoyer (Entrée)';
+    this.sendBtn.disabled = !stop && (!this.hasContent() || this.preparing > 0);
+    this.sendBtn.title = stop ? 'Interrompre (Échap)' : this.preparing > 0 ? 'Préparation de l’image…' : 'Envoyer (Entrée)';
   }
 
   private autosize(): void {
@@ -232,13 +297,74 @@ export class ChatView {
   }
 
   private submit(): void {
-    const text = this.input.value.trim();
-    if (!text || !this.session) return;
-    this.hub.send(this.session.id, text);
+    if (!this.hasContent() || this.preparing > 0 || !this.session) return;
+    this.hub.send(
+      this.session.id,
+      this.input.value.trim(),
+      this.attachments.map((a) => a.image),
+    );
     this.input.value = '';
+    this.attachments = [];
+    this.renderAttachments();
     this.autosize();
     this.syncSend();
     this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  /** Adds images to the draft they were picked for, even if another session is shown by the time they are ready. */
+  private async addFiles(files: File[]): Promise<void> {
+    const target = this.attachments;
+    const batch = files.slice(0, ATTACH_LIMITS.count);
+    if (files.length > batch.length) this.attachError(`${ATTACH_LIMITS.count} images maximum par message.`);
+    this.preparing += batch.length;
+    this.syncSend();
+    for (const file of batch) {
+      try {
+        const attachment = await toAttachment(file);
+        // Checked once ready: concurrent pastes or drops all fill the same draft.
+        const total = target.reduce((sum, a) => sum + base64Bytes(a.image.data), base64Bytes(attachment.image.data));
+        if (target.length >= ATTACH_LIMITS.count) this.attachError(`${ATTACH_LIMITS.count} images maximum par message.`);
+        else if (total > ATTACH_LIMITS.totalBytes) this.attachError('Images trop lourdes pour un seul message : envoie-les en plusieurs fois.');
+        else target.push(attachment);
+      } catch (err) {
+        this.attachError(err instanceof Error ? err.message : String(err));
+      }
+      this.preparing--;
+      this.renderAttachments();
+      this.syncSend();
+    }
+  }
+
+  private renderAttachments(): void {
+    this.attachStrip.hidden = this.attachments.length === 0;
+    this.attachStrip.replaceChildren(
+      ...this.attachments.map((a) => {
+        const chip = h('div', 'attach');
+        const img = h('img');
+        img.src = a.url;
+        img.alt = 'Image jointe';
+        img.addEventListener('click', () => openLightbox(a.url));
+        const remove = h('button', 'attach-remove');
+        remove.title = 'Retirer';
+        remove.setAttribute('aria-label', 'Retirer cette image');
+        remove.append(icon(ICONS.remove));
+        remove.addEventListener('click', () => {
+          this.attachments.splice(this.attachments.indexOf(a), 1);
+          this.renderAttachments();
+          this.syncSend();
+          this.input.focus();
+        });
+        chip.append(img, remove);
+        return chip;
+      }),
+    );
+  }
+
+  private attachError(text: string): void {
+    this.attachNote.textContent = text;
+    this.attachNote.hidden = false;
+    window.clearTimeout(this.noteTimer);
+    this.noteTimer = window.setTimeout(() => (this.attachNote.hidden = true), 4000);
   }
 
   private interrupt(): void {
@@ -315,7 +441,21 @@ export class ChatView {
     switch (item.kind) {
       case 'user': {
         const wrap = h('div', 'msg msg-user');
-        wrap.append(h('div', 'bubble', item.text));
+        const col = h('div', 'user-col');
+        if (item.images.length > 0) {
+          const grid = h('div', 'user-images');
+          for (const src of item.images) {
+            const img = h('img', 'user-image');
+            img.src = src;
+            img.alt = 'Image jointe';
+            img.title = 'Agrandir';
+            img.addEventListener('click', () => openLightbox(src));
+            grid.append(img);
+          }
+          col.append(grid);
+        }
+        if (item.text) col.append(h('div', 'bubble', item.text), this.actions(item.text));
+        wrap.append(col);
         return wrap;
       }
       case 'peer': {
@@ -324,12 +464,17 @@ export class ChatView {
         label.append(h('span', '', 'Message de '), h('b', '', item.from));
         const body = h('div', 'md');
         body.innerHTML = markdown(item.text);
-        wrap.append(label, body);
+        this.addCodeCopy(body);
+        wrap.append(label, body, this.actions(item.text));
         return wrap;
       }
       case 'assistant': {
-        const el = h('div', item.live ? 'msg msg-assistant md live' : 'msg msg-assistant md');
-        el.innerHTML = markdown(item.text);
+        const el = h('div', item.live ? 'msg msg-assistant live' : 'msg msg-assistant');
+        const body = h('div', 'md');
+        body.innerHTML = markdown(item.text);
+        this.addCodeCopy(body);
+        el.append(body);
+        if (!item.live) el.append(this.actions(item.text));
         return el;
       }
       case 'thinking': {
@@ -357,6 +502,23 @@ export class ChatView {
         return item.state === 'pending' ? this.permissionCard(item) : this.permissionDone(item);
       case 'notice':
         return h('div', `notice ${item.tone}`, item.text);
+    }
+  }
+
+  /** Hover row under a message; copies its raw text (markdown source for Claude's replies). */
+  private actions(text: string): HTMLDivElement {
+    const row = h('div', 'msg-actions');
+    row.append(copyButton(() => text, 'Copier le message'));
+    return row;
+  }
+
+  private addCodeCopy(body: HTMLElement): void {
+    for (const pre of body.querySelectorAll('pre')) {
+      const wrap = h('div', 'code-wrap');
+      pre.replaceWith(wrap);
+      const btn = copyButton(() => pre.textContent ?? '', 'Copier le code');
+      btn.classList.add('code-copy');
+      wrap.append(pre, btn);
     }
   }
 

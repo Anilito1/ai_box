@@ -1,4 +1,5 @@
 import { STATUS_LABEL, type ChatItem, type HubApi, type HubSnapshot, type RateLimits, type SessionView } from '../shared/types';
+import { Avatar } from './avatar';
 import { ChatView } from './chat';
 import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
 import { RepoPanel } from './repo';
@@ -31,6 +32,8 @@ interface Actions {
 
 interface Card extends Actions {
   root: HTMLDivElement;
+  /** Workers get their mascot; the master keeps a status dot. */
+  avatar: Avatar | null;
   dot: HTMLSpanElement;
   name: HTMLSpanElement;
   cost: HTMLSpanElement;
@@ -43,7 +46,7 @@ interface Card extends Actions {
 /** A worker's mini window in the dock: live preview of its latest steps; a click opens the conversation. */
 interface Tile extends Actions {
   root: HTMLDivElement;
-  dot: HTMLSpanElement;
+  avatar: Avatar;
   name: HTMLSpanElement;
   nums: HTMLSpanElement;
   meta: HTMLDivElement;
@@ -53,7 +56,7 @@ interface Tile extends Actions {
 
 interface Tab {
   root: HTMLButtonElement;
-  dot: HTMLSpanElement;
+  avatar: Avatar;
   name: HTMLSpanElement;
 }
 
@@ -109,10 +112,11 @@ function ensureCard(s: SessionView): Card {
   if (existing) return existing;
   const root = h('div', s.role === 'master' ? 'card master' : 'card');
   const row = h('div', 'card-row');
+  const avatar = s.role === 'worker' ? new Avatar(s.id) : null;
   const dot = h('span', 'dot');
   const name = h('span', 'card-name');
   const cost = h('span', 'card-cost');
-  row.append(dot, name, cost);
+  row.append(avatar?.root ?? dot, name, cost);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -125,7 +129,7 @@ function ensureCard(s: SessionView): Card {
   root.append(row, meta, meter, sub, actions);
   root.addEventListener('click', () => (s.role === 'worker' ? expand(s.id) : masterView.focus()));
   (s.role === 'master' ? masterSlot : workerList).append(root);
-  const card = { root, dot, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
+  const card = { root, avatar, dot, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -134,6 +138,7 @@ function renderCard(s: SessionView): void {
   const c = ensureCard(s);
   const m = s.metrics;
   c.root.classList.toggle('selected', s.id === expanded);
+  c.avatar?.update(s);
   c.dot.className = `dot s-${s.status}`;
   c.dot.title = STATUS_LABEL[s.status];
   c.name.textContent = displayName(s);
@@ -145,6 +150,7 @@ function renderCard(s: SessionView): void {
 
   let sub = STATUS_LABEL[s.status];
   if (s.status === 'attention') sub = 'Attend ta validation';
+  else if (s.background.length > 0 && s.status !== 'busy' && s.status !== 'exited') sub = `Tâche de fond : ${oneLine(s.background[0])}`;
   else if (s.lastMessage) sub = oneLine(s.lastMessage);
   else if (s.mission) sub = oneLine(s.mission);
   else if (s.role === 'master') sub = 'Ta conversation principale';
@@ -161,11 +167,11 @@ function ensureTile(s: SessionView): Tile {
   if (existing) return existing;
   const root = h('div', 'tile');
   const head = h('div', 'tile-head');
-  const dot = h('span', 'dot');
+  const avatar = new Avatar(s.id);
   const name = h('span', 'tile-name');
   const nums = h('span', 'tile-nums');
   const actions = h('div', 'tile-actions');
-  head.append(dot, name, nums, actions, icon(ICONS.expand, 'ico tile-open'));
+  head.append(avatar.root, name, nums, actions, icon(ICONS.expand, 'ico tile-open'));
   const body = h('div', 'tile-body');
   const meta = h('div', 'tile-meta');
   const feed = h('div', 'tile-feed');
@@ -174,7 +180,7 @@ function ensureTile(s: SessionView): Tile {
   root.append(head, body);
   root.addEventListener('click', () => expand(s.id));
   dockTiles.append(root);
-  const tile = { root, dot, name, nums, meta, feed, working, actions, actionsKey: '' };
+  const tile = { root, avatar, name, nums, meta, feed, working, actions, actionsKey: '' };
   tiles.set(s.id, tile);
   return tile;
 }
@@ -183,8 +189,7 @@ function renderTile(s: SessionView): void {
   const t = ensureTile(s);
   t.root.className = `tile s-${s.status}`;
   t.root.title = `Ouvrir la conversation · ${s.cwd}`;
-  t.dot.className = `dot s-${s.status}`;
-  t.dot.title = STATUS_LABEL[s.status];
+  t.avatar.update(s);
   t.name.textContent = displayName(s);
   t.nums.textContent = s.metrics ? `${fmtPct(s.metrics.contextPct)} · ${fmtCost(s.metrics.costUsd)}` : '';
   t.meta.textContent = [folderOf(s.cwd), s.modelLabel, s.effort].filter(Boolean).join(' · ');
@@ -225,23 +230,23 @@ function renderFeed(s: SessionView): void {
   }
   if (lines.length === 0) lines.push(h('div', 'feed-line feed-muted', s.mission ? oneLine(s.mission).slice(0, 240) : STATUS_LABEL[s.status]));
   t.feed.replaceChildren(...lines);
-  t.working.update(s.status, s.busySince, activityOf(all.at(-1)));
+  t.working.update(s.status, s.busySince, activityOf(all.at(-1)), s.background);
 }
 
 function renderTab(s: SessionView): void {
   let tab = tabs.get(s.id);
   if (!tab) {
     const root = h('button', 'dock-tab');
-    const dot = h('span', 'dot');
+    const avatar = new Avatar(s.id);
     const name = h('span', 'dock-tab-name');
-    root.append(dot, name);
+    root.append(avatar.root, name);
     root.addEventListener('click', () => expand(s.id));
     dockTabs.append(root);
-    tab = { root, dot, name };
+    tab = { root, avatar, name };
     tabs.set(s.id, tab);
   }
   tab.root.classList.toggle('active', s.id === expanded);
-  tab.dot.className = `dot s-${s.status}`;
+  tab.avatar.update(s);
   tab.name.textContent = displayName(s);
   tab.root.title = `${displayName(s)} · ${STATUS_LABEL[s.status]}`;
 }
@@ -302,6 +307,7 @@ function render(): void {
     card.root.remove();
     cards.delete(id);
     store.delete(id);
+    workerView.forget(id);
   }
   for (const [id, tile] of tiles) {
     if (ids.has(id)) continue;

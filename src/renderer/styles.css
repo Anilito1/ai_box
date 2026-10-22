@@ -526,6 +526,7 @@ button {
   min-height: 0;
 }
 .pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -921,8 +922,29 @@ button {
   justify-content: flex-end;
   margin-top: 6px;
 }
-.msg-user .bubble {
+.user-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
   max-width: 88%;
+}
+.user-images {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.user-image {
+  max-width: 240px;
+  max-height: 180px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.msg-user .bubble {
+  max-width: 100%;
   padding: 9px 13px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -1025,7 +1047,7 @@ button {
   border-left: 2px solid var(--line-strong);
   color: var(--text-2);
 }
-.msg-assistant.live > :last-child::after {
+.msg-assistant.live .md > :last-child::after {
   content: '';
   display: inline-block;
   width: 7px;
@@ -1516,4 +1538,596 @@ button {
   width: 1px;
   height: 12px;
   background: var(--line-strong);
+}
+
+/* ---------- copy actions ---------- */
+.msg-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.msg-user .msg-actions {
+  margin-top: 0;
+}
+.msg:hover .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+}
+.copy-btn.done {
+  color: var(--ok);
+}
+.code-wrap {
+  position: relative;
+  margin: 0 0 10px;
+}
+.code-wrap pre {
+  margin: 0;
+}
+.code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--raise);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.code-wrap:hover .code-copy {
+  opacity: 1;
+}
+
+/* ---------- image attachments ---------- */
+.cbtn-icon {
+  padding: 0 7px;
+}
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.attachments[hidden],
+.attach-note[hidden] {
+  display: none;
+}
+.attach {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  animation: tile-in 0.18s ease-out;
+}
+.attach img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.attach-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.attach:hover .attach-remove {
+  opacity: 1;
+}
+.attach-remove .ico {
+  width: 10px;
+  height: 10px;
+  stroke-width: 2;
+}
+.attach-note {
+  margin-bottom: 6px;
+  color: #f0a9a6;
+  font-size: 12px;
+}
+.pane.drop-target::after {
+  content: 'Dépose l\2019 image pour la joindre';
+  position: absolute;
+  inset: 10px;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(12, 13, 15, 0.82);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+  animation: fade-in 0.15s ease-out;
+}
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.working.background .working-glyph {
+  color: var(--text-3);
+}
+.working.background .working-hint {
+  display: none;
+}
+
+/* ---------- worker mascot (Clawd), one look per worker ---------- */
+.avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 30px;
+}
+.tile-head .avatar {
+  width: 24px;
+}
+.dock-tab .avatar {
+  width: 18px;
+}
+.clawd {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.clawd * {
+  transform-box: fill-box;
+}
+.cw-body,
+.cw-arm,
+.cw-leg {
+  fill: var(--cw);
+}
+.cw-eye {
+  fill: #0b1020;
+  transform-origin: 50% 50%;
+  animation: cw-blink 4.8s var(--cw-delay) infinite;
+}
+.cw-root {
+  transform-origin: 50% 100%;
+}
+.cw-arm-l {
+  transform-origin: 100% 50%;
+}
+.cw-arm-r {
+  transform-origin: 0 50%;
+}
+.cw-leg {
+  transform-origin: 50% 0;
+}
+.avatar-badge {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.dock-tab .avatar-badge {
+  display: none;
+}
+
+/* Stopped: grey and asleep. Awaiting a permission: fidgets. */
+.avatar.off .clawd {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+.avatar.off .cw-eye {
+  animation: none;
+  transform: scaleY(0.15);
+}
+.avatar.waiting .cw-root {
+  animation: cw-alert 1.6s ease-in-out infinite;
+}
+
+/* Working: the worker's own body motion, eyes and limbs. */
+.avatar.live .cw-root {
+  animation-duration: var(--cw-speed);
+  animation-delay: var(--cw-delay);
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+.avatar.live .m-hop .cw-root {
+  animation-name: cw-hop;
+}
+.avatar.live .m-wobble .cw-root {
+  animation-name: cw-wobble;
+}
+.avatar.live .m-jelly .cw-root {
+  animation-name: cw-jelly;
+}
+.avatar.live .m-float .cw-root {
+  animation-name: cw-float;
+  animation-duration: calc(var(--cw-speed) * 2);
+}
+.avatar.live .m-flip .cw-root {
+  transform-origin: 50% 50%;
+  animation-name: cw-flip;
+  animation-duration: calc(var(--cw-speed) * 2);
+}
+.avatar.live .m-shake .cw-root {
+  animation-name: cw-shake;
+}
+.avatar.live .m-dance .cw-root {
+  animation-name: cw-dance;
+}
+.avatar.live .m-spin .cw-root {
+  transform-origin: 50% 50%;
+  animation-name: cw-spin;
+  animation-duration: calc(var(--cw-speed) * 2);
+  animation-timing-function: linear;
+}
+.avatar.live .m-pulse .cw-root {
+  transform-origin: 50% 50%;
+  animation-name: cw-pulse;
+}
+.avatar.live .m-swing .cw-root {
+  transform-origin: 50% 0;
+  animation-name: cw-swing;
+}
+.avatar.live .m-moonwalk .cw-root {
+  animation-name: cw-moonwalk;
+  animation-duration: calc(var(--cw-speed) * 2);
+}
+.avatar.live .m-heartbeat .cw-root {
+  transform-origin: 50% 50%;
+  animation-name: cw-heartbeat;
+}
+.avatar.live .m-tilt .cw-root {
+  animation-name: cw-tilt;
+  animation-duration: calc(var(--cw-speed) * 2);
+}
+.avatar.live .m-orbit .cw-root {
+  animation-name: cw-orbit;
+  animation-timing-function: linear;
+}
+.avatar.live .m-peek .cw-root {
+  animation-name: cw-peek;
+}
+.avatar.live .m-stretch .cw-root {
+  animation-name: cw-stretch;
+}
+
+.avatar.live .e-blink .cw-eye {
+  animation: cw-blink 2.2s var(--cw-delay) infinite;
+}
+.avatar.live .e-look .cw-eye {
+  animation: cw-look 2.6s var(--cw-delay) ease-in-out infinite;
+}
+.avatar.live .e-wink .cw-eye-l {
+  animation: cw-blink 1.6s var(--cw-delay) infinite;
+}
+.avatar.live .e-wink .cw-eye-r {
+  animation: none;
+}
+.avatar.live .e-roll .cw-eye {
+  animation: cw-roll 1.8s var(--cw-delay) linear infinite;
+}
+
+.avatar.live .l-walk .cw-leg-a {
+  animation: cw-step calc(var(--cw-speed) / 2) ease-in-out infinite;
+}
+.avatar.live .l-walk .cw-leg-b {
+  animation: cw-step calc(var(--cw-speed) / 2) ease-in-out calc(var(--cw-speed) / -4) infinite;
+}
+.avatar.live .l-wave .cw-arm-r {
+  animation: cw-wave 0.8s ease-in-out infinite;
+}
+.avatar.live .l-flap .cw-arm-l {
+  animation: cw-flap-l 0.6s ease-in-out infinite;
+}
+.avatar.live .l-flap .cw-arm-r {
+  animation: cw-flap-r 0.6s ease-in-out infinite;
+}
+
+@keyframes cw-hop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1.06, 0.94);
+  }
+  45%,
+  55% {
+    transform: translateY(-30%) scale(0.96, 1.04);
+  }
+}
+@keyframes cw-wobble {
+  0%,
+  100% {
+    transform: rotate(-9deg);
+  }
+  50% {
+    transform: rotate(9deg);
+  }
+}
+@keyframes cw-jelly {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  25% {
+    transform: scale(1.14, 0.86);
+  }
+  50% {
+    transform: scale(0.9, 1.1);
+  }
+  75% {
+    transform: scale(1.05, 0.95);
+  }
+}
+@keyframes cw-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-18%);
+  }
+}
+@keyframes cw-flip {
+  0%,
+  35%,
+  100% {
+    transform: scaleX(1);
+  }
+  50%,
+  85% {
+    transform: scaleX(-1);
+  }
+}
+@keyframes cw-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-7%);
+  }
+  40% {
+    transform: translateX(7%);
+  }
+  60% {
+    transform: translateX(-4%);
+  }
+  80% {
+    transform: translateX(4%);
+  }
+}
+@keyframes cw-dance {
+  0%,
+  100% {
+    transform: translateX(-8%) rotate(-8deg);
+  }
+  50% {
+    transform: translateX(8%) rotate(8deg);
+  }
+}
+@keyframes cw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cw-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.16);
+  }
+}
+@keyframes cw-swing {
+  0%,
+  100% {
+    transform: rotate(12deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+@keyframes cw-moonwalk {
+  0%,
+  100% {
+    transform: translateX(-12%);
+  }
+  50% {
+    transform: translateX(12%);
+  }
+}
+@keyframes cw-heartbeat {
+  0%,
+  45%,
+  100% {
+    transform: scale(1);
+  }
+  12%,
+  32% {
+    transform: scale(1.16);
+  }
+  22% {
+    transform: scale(1.02);
+  }
+}
+@keyframes cw-tilt {
+  0%,
+  50%,
+  100% {
+    transform: rotate(0);
+  }
+  20%,
+  30% {
+    transform: rotate(-15deg);
+  }
+  70%,
+  80% {
+    transform: rotate(15deg);
+  }
+}
+@keyframes cw-orbit {
+  0%,
+  100% {
+    transform: translate(8%, 0);
+  }
+  25% {
+    transform: translate(0, -8%);
+  }
+  50% {
+    transform: translate(-8%, 0);
+  }
+  75% {
+    transform: translate(0, 8%);
+  }
+}
+@keyframes cw-peek {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(10%) scale(1.06, 0.9);
+  }
+  55% {
+    transform: translateY(-22%) scale(0.96, 1.05);
+  }
+}
+@keyframes cw-stretch {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  50% {
+    transform: scale(0.9, 1.18);
+  }
+}
+@keyframes cw-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes cw-look {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25%,
+  40% {
+    transform: translateX(-60%);
+  }
+  60%,
+  75% {
+    transform: translateX(60%);
+  }
+}
+@keyframes cw-roll {
+  0%,
+  100% {
+    transform: translate(45%, 0);
+  }
+  25% {
+    transform: translate(0, -20%);
+  }
+  50% {
+    transform: translate(-45%, 0);
+  }
+  75% {
+    transform: translate(0, 20%);
+  }
+}
+@keyframes cw-step {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-35%);
+  }
+}
+@keyframes cw-wave {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  50% {
+    transform: rotate(-45deg);
+  }
+}
+@keyframes cw-flap-l {
+  0%,
+  100% {
+    transform: rotate(-10deg);
+  }
+  50% {
+    transform: rotate(30deg);
+  }
+}
+@keyframes cw-flap-r {
+  0%,
+  100% {
+    transform: rotate(10deg);
+  }
+  50% {
+    transform: rotate(-30deg);
+  }
+}
+@keyframes cw-alert {
+  0%,
+  60%,
+  100% {
+    transform: translateX(0);
+  }
+  8%,
+  24% {
+    transform: translateX(-6%) rotate(-4deg);
+  }
+  16%,
+  32% {
+    transform: translateX(6%) rotate(4deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .clawd * {
+    animation: none !important;
+  }
+}
+
+/* Worker cards: the mascot is wider than the master's dot. */
+.card:not(.master) .card-meta,
+.card:not(.master) .meter,
+.card:not(.master) .card-sub {
+  margin-left: 38px;
 }

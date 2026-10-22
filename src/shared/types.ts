@@ -3,6 +3,18 @@ export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk';
 
+/** Image formats the Messages API accepts. */
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+/** Images per message, checked by the composer and again by the main process (decoded bytes; the API caps a request near 32 MB). */
+export const ATTACH_LIMITS = { count: 10, imageBytes: 2.5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 } as const;
+export const base64Bytes = (data: string) => Math.floor((data.length * 3) / 4);
+/** Pasted or dropped image, base64 without the data: prefix. */
+export interface ImageInput {
+  mediaType: ImageType;
+  data: string;
+}
+
 export const STATUS_LABEL: Record<Status, string> = {
   starting: 'démarrage',
   busy: 'en cours',
@@ -66,6 +78,8 @@ export interface SessionView {
   createdAt: number;
   /** Start of the turn in progress (busy or awaiting a permission), else null. */
   busySince: number | null;
+  /** Descriptions of the background tasks (subagents, shells) still running in this session. */
+  background: string[];
 }
 
 export interface RepoCommit {
@@ -109,7 +123,7 @@ export interface HubSnapshot {
 }
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string }
+  | { kind: 'user'; id: string; text: string; images: string[] }
   | { kind: 'peer'; id: string; from: string; text: string }
   | { kind: 'assistant'; id: string; text: string; live: boolean }
   | { kind: 'thinking'; id: string; text: string }
@@ -138,7 +152,7 @@ export interface HubApi {
   onRepo(cb: (status: RepoStatus) => void): void;
   ready(): void;
   refreshRepo(): void;
-  send(id: string, text: string): void;
+  send(id: string, text: string, images: ImageInput[]): void;
   interrupt(id: string): void;
   setModel(id: string, model: string): void;
   setEffort(id: string, effort: Effort): void;

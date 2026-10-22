@@ -13,7 +13,7 @@ const api: HubApi = {
   },
   ready: () => ipcRenderer.send('hub:ready'),
   refreshRepo: () => ipcRenderer.send('repo:refresh'),
-  send: (id, text) => ipcRenderer.send('session:send', id, text),
+  send: (id, text, images) => ipcRenderer.send('session:send', id, text, images),
   interrupt: (id) => ipcRenderer.send('session:interrupt', id),
   setModel: (id, model) => ipcRenderer.send('session:model', id, model),
   setEffort: (id, effort) => ipcRenderer.send('session:effort', id, effort),

@@ -23,6 +23,7 @@ import {
   type ChatItem,
   type Effort,
   type HubSnapshot,
+  type ImageInput,
   type Metrics,
   type Mode,
   type ModelOption,
@@ -88,7 +89,7 @@ interface Session extends SessionView {
   effortResolved: boolean;
 }
 
-type Persisted = Pick<
+type Persisted = { running?: boolean } & Pick<
   Session,
   | 'id'
   | 'role'
@@ -122,6 +123,11 @@ const HISTORY_MAX = 400;
 const PARENT_SESSION_VARS =
   /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(CHILD_SESSION|SESSION_ID|MESSAGING_SOCKET|MESSAGING_TOKEN|SESSION_ATTENDED|ENTRYPOINT|EXECPATH))$/;
 
+interface Prompt {
+  text: string;
+  images: ImageInput[];
+}
+
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -139,6 +145,8 @@ export class SessionManager extends EventEmitter {
   private itemsTimer: NodeJS.Timeout | null = null;
   private quitting = false;
   private readonly stateFile: string;
+  /** Sessions that were running when the hub last closed: resumed at start so a restart leaves none unreachable. */
+  private readonly resumeOnStart = new Set<string>();
 
   constructor(private readonly opts: ManagerOptions) {
     super();
@@ -154,12 +162,23 @@ export class SessionManager extends EventEmitter {
       this.sessions.get(MASTER_ID) ??
       this.create(MASTER_ID, 'master', MASTER_NAME, '', cfg.masterCwd, cfg.master.model, cfg.master.effort || null);
     void this.launch(master, master.started);
+    for (const s of this.sessions.values()) {
+      // A worker closed before its CLI initialized never received its mission: send it again.
+      if (s.role === 'worker' && this.resumeOnStart.has(s.id)) void this.launch(s, s.started, s.started ? undefined : this.missionPrompt(s));
+    }
+    this.resumeOnStart.clear();
   }
 
-  send(id: string, text: string): void {
+  /** A message the main process could not accept: kept visible in the conversation so its text is not lost. */
+  refuse(id: string, text: string, reason: string): void {
     const s = this.sessions.get(id);
-    const prompt = text.trim();
-    if (!s || !prompt) return;
+    if (s) this.notice(s, `Message non envoyé (${reason})${text.trim() ? ` : « ${oneLine(text, 300)} »` : ''}`, 'error');
+  }
+
+  send(id: string, text: string, images: ImageInput[] = []): void {
+    const s = this.sessions.get(id);
+    const prompt = { text: text.trim(), images };
+    if (!s || (!prompt.text && images.length === 0)) return;
     if (s.inbox) this.pushUser(s, prompt);
     else void this.launch(s, s.started, prompt);
   }
@@ -192,15 +211,20 @@ export class SessionManager extends EventEmitter {
 
   killAll(): void {
     this.quitting = true;
-    this.save();
+    try {
+      this.save();
+    } catch {
+      // State not saved (disk full, file locked): the sessions must still be closed.
+    }
     for (const s of this.sessions.values()) {
       s.inbox?.close();
       s.query?.close();
     }
   }
 
-  busyWorkers(): number {
-    return [...this.sessions.values()].filter((s) => s.role === 'worker' && s.query && (s.status === 'busy' || s.status === 'attention'))
+  /** Sessions whose work a close would cut: a turn in progress, or background tasks left running after one. */
+  busySessions(): number {
+    return [...this.sessions.values()].filter((s) => s.query && (s.status === 'busy' || s.status === 'attention' || s.background.length > 0))
       .length;
   }
 
@@ -265,6 +289,7 @@ export class SessionManager extends EventEmitter {
         metrics: s.metrics,
         createdAt: s.createdAt,
         busySince: s.busySince,
+        background: s.background,
       }));
     return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits };
   }
@@ -275,13 +300,14 @@ export class SessionManager extends EventEmitter {
 
   // ---------- SDK session ----------
 
-  private async launch(s: Session, resume: boolean, firstPrompt?: string): Promise<void> {
+  private async launch(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
     const { cfg } = this.opts;
     // Claimed synchronously: a send() or resume() during the awaits below queues into this inbox instead of launching twice.
     const inbox = new Inbox();
     s.inbox = inbox;
     s.status = 'starting';
     s.liveId = null;
+    s.background = []; // Tracked per CLI process: the new one reports its own.
     this.changed();
 
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
@@ -344,6 +370,7 @@ export class SessionManager extends EventEmitter {
     for (const finish of [...s.pending.values()]) finish({ behavior: 'deny', message: 'Session arrêtée.' });
     s.status = 'exited';
     s.busySince = null;
+    s.background = [];
   }
 
   private onMessage(s: Session, q: Query, msg: SDKMessage): void {
@@ -357,6 +384,9 @@ export class SessionManager extends EventEmitter {
           this.applyModel(s, msg.model);
         } else if (msg.subtype === 'compact_boundary') {
           this.notice(s, 'Contexte compacté', 'info');
+        } else if (msg.subtype === 'background_tasks_changed') {
+          // Level signal with replace semantics; ambient tasks (watchers) are not activity.
+          s.background = msg.tasks.filter((t) => !t.ambient).map((t) => t.description);
         }
         break;
       case 'stream_event': {
@@ -531,9 +561,17 @@ export class SessionManager extends EventEmitter {
     });
   }
 
-  private pushUser(s: Session, text: string): void {
-    this.upsert(s, { kind: 'user', id: `user-${randomUUID()}`, text });
-    s.inbox?.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: s.sessionId });
+  private pushUser(s: Session, { text, images }: Prompt): void {
+    const content =
+      images.length === 0
+        ? text
+        : [
+            ...images.map((img) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: img.mediaType, data: img.data } })),
+            ...(text ? [{ type: 'text' as const, text }] : []),
+          ];
+    const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
+    this.upsert(s, { kind: 'user', id: `user-${randomUUID()}`, text, images: urls });
+    s.inbox?.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: s.sessionId });
     this.markBusy(s);
     this.changed();
   }
@@ -681,12 +719,16 @@ export class SessionManager extends EventEmitter {
     if (!repoRootOf(cwd)) notes.push(`ℹ ${cwd} n'est dans aucun repo git (voir list_repos).`);
 
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', this.uniqueName(args.name), mission, cwd, model, effort);
-    void this.launch(s, false, `[Mission du maître — tu es le worker "${s.name}"]\n${mission}`);
+    void this.launch(s, false, this.missionPrompt(s));
     return [
       `Worker lancé : "${s.name}" (${model || 'modèle habituel'} · ${effort ?? 'effort habituel'}) dans ${cwd}.`,
       ...notes,
       `Pour lui écrire : SendMessage(to: "${s.name}"). Il t'enverra son rapport final.`,
     ].join('\n');
+  }
+
+  private missionPrompt(s: Session): Prompt {
+    return { text: `[Mission du maître — tu es le worker "${s.name}"]\n${s.mission}`, images: [] };
   }
 
   /** Cached 30 s: the scan is synchronous and every worker may call it. */
@@ -799,6 +841,7 @@ export class SessionManager extends EventEmitter {
       metrics: null,
       createdAt: Date.now(),
       busySince: null,
+      background: [],
       sessionId: randomUUID(),
       started: false,
       costBase: 0,
@@ -829,10 +872,11 @@ export class SessionManager extends EventEmitter {
     if (!existsSync(this.stateFile)) return;
     try {
       const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[] };
-      for (const p of saved.sessions ?? []) {
+      for (const { running, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
+        if (running) this.resumeOnStart.add(s.id);
       }
     } catch {
       // Unreadable state file: set it aside (never overwrite it) and start with an empty hub.
@@ -848,7 +892,8 @@ export class SessionManager extends EventEmitter {
     }, 80);
     this.saveTimer ??= setTimeout(() => {
       this.saveTimer = null;
-      this.save();
+      // killAll() saved which sessions were running; the teardowns that follow must not overwrite it.
+      if (!this.quitting) this.save();
     }, 1000);
   }
 
@@ -870,6 +915,7 @@ export class SessionManager extends EventEmitter {
       started: s.started,
       fixedModel: s.fixedModel,
       fixedEffort: s.fixedEffort,
+      running: s.inbox !== null,
     }));
     // Write-then-rename: a crash mid-save can never leave a truncated state.json behind.
     const tmp = `${this.stateFile}.tmp`;

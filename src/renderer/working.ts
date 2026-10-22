@@ -76,7 +76,12 @@ export function activityOf(last: ChatItem | undefined): string {
   return '';
 }
 
-/** "✻ Cogitation… (12 s · Bash npm test)": shown while a session works, so a long turn visibly progresses. */
+const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`;
+
+/**
+ * "✻ Cogitation… (12 s · Bash npm test)": shown while a session works, so a long turn visibly progresses.
+ * Between turns it stays up while background tasks (subagents, shells) are still running.
+ */
 export class WorkingLine {
   readonly root = h('div', 'working');
   private readonly glyph = h('span', 'working-glyph');
@@ -85,7 +90,8 @@ export class WorkingLine {
   private since = 0;
   private seed = 0;
   private activity = '';
-  private waiting = false;
+  private background: string[] = [];
+  private mode: 'busy' | 'waiting' | 'background' = 'busy';
 
   constructor(compact: boolean) {
     this.root.append(this.glyph, this.verb, this.meta);
@@ -94,22 +100,29 @@ export class WorkingLine {
     this.root.hidden = true;
   }
 
-  /** Busy: animated from `since`. Attention: frozen on the permission prompt. Any other status hides it. */
-  update(status: Status | undefined, since: number | null, activity: string): void {
-    const on = status === 'busy' || status === 'attention';
+  /** Busy: animated from `since`. Attention: frozen on the permission prompt. Otherwise shown only for background tasks. */
+  update(status: Status | undefined, since: number | null, activity: string, background: string[] = []): void {
+    const working = status === 'busy' || status === 'attention';
+    const on = working || (status !== 'exited' && background.length > 0);
     this.root.hidden = !on;
     if (!on) {
       active.delete(this);
       this.since = 0;
       return;
     }
-    this.waiting = status === 'attention';
-    this.root.classList.toggle('waiting', this.waiting);
+    this.mode = status === 'attention' ? 'waiting' : working ? 'busy' : 'background';
+    this.root.classList.toggle('waiting', this.mode === 'waiting');
+    this.root.classList.toggle('background', this.mode === 'background');
     this.activity = activity;
-    const start = since ?? (this.since || Date.now());
-    if (start !== this.since) {
-      this.since = start;
-      this.seed = Math.floor(Math.random() * VERBS.length);
+    this.background = background;
+    if (working) {
+      const start = since ?? (this.since || Date.now());
+      if (start !== this.since) {
+        this.since = start;
+        this.seed = Math.floor(Math.random() * VERBS.length);
+      }
+    } else {
+      this.since = 0;
     }
     active.add(this);
     startTicker();
@@ -121,12 +134,22 @@ export class WorkingLine {
   }
 
   tick(now: number): void {
-    setText(this.glyph, this.waiting ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
-    const verb = this.waiting ? 'En attente de ta validation' : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
+    setText(this.glyph, this.mode === 'waiting' ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
+    const verb =
+      this.mode === 'waiting'
+        ? 'En attente de ta validation'
+        : this.mode === 'background'
+          ? 'Tâche de fond…'
+          : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
       this.verb.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' });
     }
-    setText(this.meta, `(${[fmtElapsed(now - this.since), this.activity].filter(Boolean).join(' · ')})`);
+    const n = this.background.length;
+    const parts =
+      this.mode === 'background'
+        ? [oneLine(this.background[0]).slice(0, 90), n > 1 ? `+${n - 1}` : '']
+        : [fmtElapsed(now - this.since), this.activity, n ? plural(n, 'tâche') + ' de fond' : ''];
+    setText(this.meta, `(${parts.filter(Boolean).join(' · ')})`);
   }
 }

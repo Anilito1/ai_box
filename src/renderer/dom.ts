@@ -37,7 +37,49 @@ export const ICONS = {
   branch: 'M6.5 3.5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M6.5 12.5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M12.5 5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M5 5v6M11 6.5c0 2.5-6 1.5-6 4.5',
   expand: 'M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9',
   collapse: 'M13.5 2.5L9.5 6.5M9.5 3v3.5H13M2.5 13.5l4-4M3 9.5h3.5V13',
+  copy: 'M5.5 5.5h7v7h-7zM3.5 10.5v-7h7',
+  attach: 'M10.5 5.5l-4.3 4.3a1.4 1.4 0 0 0 2 2l4.6-4.6a2.8 2.8 0 0 0-4-4L4.2 7.8a4.2 4.2 0 0 0 6 6l3.3-3.3',
 };
+
+/** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */
+export function copyButton(text: () => string, label = 'Copier'): HTMLButtonElement {
+  const btn = h('button', 'icon-btn copy-btn');
+  btn.title = label;
+  btn.setAttribute('aria-label', label);
+  btn.append(icon(ICONS.copy));
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(text()).then(() => {
+      btn.replaceChildren(icon(ICONS.check));
+      btn.classList.add('done');
+      window.setTimeout(() => {
+        btn.replaceChildren(icon(ICONS.copy));
+        btn.classList.remove('done');
+      }, 1200);
+    });
+  });
+  return btn;
+}
+
+/** Full-size view of an image; closes on click or Escape. */
+export function openLightbox(src: string): void {
+  const overlay = h('div', 'lightbox');
+  const img = h('img');
+  img.src = src;
+  overlay.append(img);
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey, true);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    close();
+  };
+  overlay.addEventListener('click', close);
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(overlay);
+}
 
 export const fmtCost = (v: number | undefined) => (v === undefined ? '—' : `$${v.toFixed(2)}`);
 export const fmtPct = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v)}%`);

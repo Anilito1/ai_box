@@ -1,4 +1,4 @@
-import type { ChatItem } from '../shared/types';
+import { IMAGE_TYPES, type ChatItem } from '../shared/types';
 
 // Converts Anthropic message content blocks (live SDK frames or stored transcripts) into chat items.
 
@@ -92,15 +92,25 @@ export function assistantItems(blocks: Block[], baseId: string, textId?: string)
 const PEER = /<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message>/;
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '';
 
-/** Text the user (or a peer session) sent, from a stored transcript entry. */
+/** data: URLs of the base64 images of a user message. */
+function imagesOf(blocks: Block[]): string[] {
+  return blocks.flatMap((b) => {
+    const source = (b.type === 'image' ? b.source : null) as Block | null;
+    const type = str(source?.media_type);
+    return source?.type === 'base64' && (IMAGE_TYPES as readonly string[]).includes(type) ? [`data:${type};base64,${str(source.data)}`] : [];
+  });
+}
+
+/** Text and images the user (or a peer session) sent, from a stored transcript entry. */
 export function userTextItem(blocks: Block[], id: string): Extract<ChatItem, { kind: 'user' | 'peer' }> | null {
   const text = blocks
     .filter((b) => b.type === 'text')
     .map((b) => str(b.text))
     .join('\n')
     .trim();
-  if (!text || /^(<system-reminder>|<command-|<local-command|Caveat:)/.test(text)) return null;
+  const images = imagesOf(blocks);
+  if ((!text && images.length === 0) || /^(<system-reminder>|<command-|<local-command|Caveat:)/.test(text)) return null;
   const peer = PEER.exec(text);
   if (peer) return { kind: 'peer', id, from: attr(peer[1], 'from-name') || attr(peer[1], 'from'), text: peer[2].trim() };
-  return { kind: 'user', id, text };
+  return { kind: 'user', id, text, images };
 }
