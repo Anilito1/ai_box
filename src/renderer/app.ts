@@ -1,5 +1,5 @@
 import { STATUS_LABEL, type ChatItem, type HubApi, type HubSnapshot, type RateLimits, type SessionView } from '../shared/types';
-import { Avatar } from './avatar';
+import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
 import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
 import { RepoPanel } from './repo';
@@ -21,13 +21,11 @@ const closedGroup = $<HTMLDetailsElement>('closed-group');
 const reposRoot = $('repos');
 
 const masterView = new ChatView($('pane-master'), hub, 'Parle au maître : il découpe, délègue les missions à des workers et te fait les rapports.');
-const workerView = new ChatView($('pane-worker'), hub, 'Ce worker n’a encore rien produit.', () => openWorker(null));
+const workerView = new ChatView($('pane-worker'), hub, 'Ce worker n’a encore rien produit.', () => openWorker(null), true);
 
 interface Card {
   root: HTMLDivElement;
-  /** Workers get their mascot; the master keeps a status dot. */
-  avatar: Avatar | null;
-  dot: HTMLSpanElement;
+  avatar: Avatar;
   name: HTMLSpanElement;
   cost: HTMLSpanElement;
   model: HTMLSpanElement;
@@ -47,6 +45,8 @@ let opened: string | null = null;
 
 const viewFor = (id: string) => (masterView.sessionId === id ? masterView : workerView.sessionId === id ? workerView : null);
 const isClosed = (s: SessionView) => s.status === 'exited';
+/** Workers at work: the master's Clawd conducts them. */
+const workersBusy = () => snapshot.sessions.filter((s) => s.role === 'worker' && s.status === 'busy').length;
 
 function actionButton(label: string, path: string, run: () => void): HTMLButtonElement {
   const btn = h('button', 'icon-btn');
@@ -86,11 +86,10 @@ function ensureCard(s: SessionView): Card {
   if (existing) return existing;
   const root = h('div', s.role === 'master' ? 'card master' : 'card');
   const row = h('div', 'card-row');
-  const avatar = s.role === 'worker' ? new Avatar(s.id) : null;
-  const dot = h('span', 'dot');
+  const avatar = new Avatar('card');
   const name = h('span', 'card-name');
   const cost = h('span', 'card-cost');
-  row.append(avatar?.root ?? dot, name, cost);
+  row.append(name, cost);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -100,22 +99,22 @@ function ensureCard(s: SessionView): Card {
   meter.append(fill);
   const sub = h('div', 'card-sub');
   const actions = h('div', 'card-actions');
-  root.append(row, meta, meter, sub, actions);
+  root.append(avatar.root, row, meta, meter, sub, actions);
   root.addEventListener('click', () => {
     if (s.role === 'master') masterView.focus();
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, dot, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
+  const card = { root, avatar, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
 
 /** What the card says under the meter: live activity while working, else the latest news. */
-function cardSub(s: SessionView): { text: string; cls: string } {
+function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
   if (s.status === 'attention') return { text: 'Attend ta validation', cls: 'warn' };
   if (s.status === 'busy') {
-    const activity = activityOf(lastOf(store.get(s.id)));
+    const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : '▸ au travail', cls: 'live' };
   }
   if (s.background.length > 0 && !isClosed(s)) return { text: `Tâche de fond : ${oneLine(s.background[0])}`, cls: 'live' };
@@ -127,18 +126,17 @@ function cardSub(s: SessionView): { text: string; cls: string } {
 function renderCard(s: SessionView): void {
   const c = ensureCard(s);
   const m = s.metrics;
+  const last = lastOf(store.get(s.id));
   c.root.classList.toggle('selected', s.id === opened);
   c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker');
-  c.avatar?.update(s);
-  c.dot.className = `dot s-${s.status}`;
-  c.dot.title = STATUS_LABEL[s.status];
+  c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
   c.name.textContent = displayName(s);
   c.cost.textContent = fmtCost(m?.costUsd);
   c.model.textContent = [s.modelLabel, s.effort].filter(Boolean).join(' · ');
   c.pct.textContent = fmtPct(m?.contextPct);
   c.fill.style.width = `${Math.min(100, m?.contextPct ?? 0)}%`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;
-  const sub = cardSub(s);
+  const sub = cardSub(s, last);
   c.sub.textContent = sub.text;
   c.sub.className = `card-sub ${sub.cls}`;
   c.root.title = s.cwd;
@@ -218,10 +216,13 @@ function render(): void {
   for (const [id, card] of cards) {
     if (ids.has(id)) continue;
     card.root.remove();
+    card.avatar.dispose();
     cards.delete(id);
     store.delete(id);
     workerView.forget(id);
+    forgetClawd(id);
   }
+  noteFleet(sessions);
   if (opened && !ids.has(opened)) opened = null;
 
   for (const s of sessions) renderCard(s);
@@ -300,6 +301,7 @@ hub.onItems((id, items, reset) => {
   const s = snapshot.sessions.find((x) => x.id === id);
   if (s) renderCard(s);
 });
+hub.onEvent((id, kind) => clawdEvent(id, kind));
 hub.onRepo((status) => {
   let panel = repoPanels.get(status.path);
   if (!panel) {

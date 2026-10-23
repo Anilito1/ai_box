@@ -14,6 +14,7 @@ import {
   type SessionView,
 } from '../shared/types';
 import { toAttachment, type Attachment } from './attachments';
+import { Avatar } from './avatar';
 import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -42,6 +43,8 @@ export class ChatView {
   private readonly attachNote = h('div', 'attach-note');
   private readonly fileInput = h('input');
   private readonly working = new WorkingLine();
+  /** The session's Clawd, large, in the header of a panel that asks for one. */
+  private readonly mascot: Avatar | null;
   private readonly nodes = new Map<string, HTMLElement>();
   private readonly drafts = new Map<string, { text: string; attachments: Attachment[] }>();
   private attachments: Attachment[] = [];
@@ -58,10 +61,21 @@ export class ChatView {
     emptyText: string,
     /** Given for a panel that can be hidden: adds a close button to its header. */
     onClose?: () => void,
+    mascot = false,
   ) {
-    const head = h('div', 'pane-head');
+    this.mascot = mascot ? new Avatar('stage') : null;
+    const head = h('div', this.mascot ? 'pane-head portrait' : 'pane-head');
     this.head = { dot: h('span', 'dot'), name: h('span', 'ph-name'), status: h('span', 'ph-status'), mission: h('span', 'ph-mission'), cwd: h('span', 'ph-cwd') };
-    head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, this.head.cwd);
+    if (this.mascot) {
+      // The mascot stands for the status dot; the mission gets a line of its own beside it.
+      const title = h('div', 'ph-title');
+      title.append(this.head.name, this.head.status, this.head.cwd);
+      const text = h('div', 'ph-text');
+      text.append(title, this.head.mission);
+      head.append(this.mascot.root, text);
+    } else {
+      head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, this.head.cwd);
+    }
     if (onClose) {
       const close = h('button', 'icon-btn ph-close');
       close.title = 'Masquer la conversation';
@@ -207,6 +221,7 @@ export class ChatView {
     if (switched && this.session) this.drafts.set(this.session.id, { text: this.input.value, attachments: this.attachments });
     this.session = session ?? null;
     this.items = items;
+    if (!session) this.mascot?.dispose(); // Hidden panel: its Clawd leaves the stage.
     if (switched) {
       const draft = session ? this.drafts.get(session.id) : undefined;
       this.input.value = draft?.text ?? '';
@@ -245,7 +260,9 @@ export class ChatView {
   private syncWorking(): void {
     const stick = this.atBottom();
     const s = this.session;
-    this.working.update(s?.status, s?.busySince ?? null, activityOf(lastOf(this.items)), s?.background);
+    const last = lastOf(this.items);
+    this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background);
+    if (s) this.mascot?.update(s, last);
     if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 

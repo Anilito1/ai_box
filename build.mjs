@@ -14,7 +14,15 @@ await Promise.all([
     external: ['electron', '@anthropic-ai/claude-agent-sdk', 'zod'],
   }),
   build({ ...common, entryPoints: ['src/preload/preload.ts'], outfile: 'dist/preload.cjs', platform: 'node', format: 'cjs', external: ['electron'] }),
-  build({ ...common, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js', platform: 'browser', format: 'iife' }),
+  // The mascot model is embedded in the bundle: three.js loads files with fetch(), which refuses file:// URLs.
+  build({
+    ...common,
+    entryPoints: ['src/renderer/app.ts'],
+    outfile: 'dist/renderer/app.js',
+    platform: 'browser',
+    format: 'iife',
+    loader: { '.glb': 'binary' },
+  }),
 ]);
 
 mkdirSync('dist/renderer', { recursive: true });
