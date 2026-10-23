@@ -7,6 +7,7 @@ import {
   IMAGE_TYPES,
   type ChatItem,
   type Effort,
+  type HubEventKind,
   type ImageInput,
   type ImageType,
   type Mode,
@@ -165,6 +166,7 @@ function start(): void {
   manager = mgr;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
+  mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
   mgr.on('attention', () => {
     if (win && !win.isFocused()) win.flashFrame(true);
   });

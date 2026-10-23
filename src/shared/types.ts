@@ -81,7 +81,31 @@ export interface SessionView {
   busySince: number | null;
   /** Descriptions of the background tasks (subagents, shells) still running in this session. */
   background: string[];
+  /** When it turned idle, else null. */
+  idleSince: number | null;
+  /** Subagents running, in the foreground or in the background. */
+  agents: number;
+  /** The CLI is compacting the conversation. */
+  compacting: boolean;
+  /** An API call failed (overloaded, rate limit) and is being retried. */
+  retrying: boolean;
 }
+
+/** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
+export type HubEventKind =
+  | 'turn_done'
+  | 'interrupted'
+  | 'tool_error'
+  | 'crashed'
+  | 'compacting'
+  | 'retry'
+  | 'message_in'
+  | 'message_out'
+  | 'idle_closed'
+  | 'pushed'
+  | 'deployed'
+  | 'tests_failed'
+  | 'cost_milestone';
 
 export interface RepoCommit {
   hash: string;
@@ -163,6 +187,7 @@ export interface HubApi {
   onSnapshot(cb: (snapshot: HubSnapshot) => void): void;
   onItems(cb: (sessionId: string, items: ChatItem[], reset: boolean) => void): void;
   onRepo(cb: (status: RepoStatus) => void): void;
+  onEvent(cb: (sessionId: string, kind: HubEventKind) => void): void;
   ready(): void;
   refreshRepo(path: string): void;
   pullRepo(path: string): void;

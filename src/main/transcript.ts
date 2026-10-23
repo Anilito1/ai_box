@@ -52,6 +52,29 @@ export function toolDetail(name: string, input: Record<string, unknown>): { deta
   return { detail: clip(JSON.stringify(input, null, 2), DETAIL_MAX), diff: false };
 }
 
+// Matched at the start of each command of a chain (`cd x && npm test`), never inside an argument or a message.
+const TEST_CMD = /^(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test|vitest|jest|pytest|mocha|playwright\s+test|deno\s+test|cargo\s+test|go\s+test|node\s+--test)\b/;
+const DEPLOY_CMD =
+  /^(?:supabase\s+(?:functions\s+deploy|db\s+push)|wrangler\s+(?:pages\s+)?deploy|(?:npm|pnpm|yarn|bun)\s+run\s+deploy|netlify\s+deploy|firebase\s+deploy|vercel\b.*\s--prod)\b/;
+const PUSH_CMD = /^git\s+(?:-C\s+\S+\s+)?push\b(?!.*--dry-run)/;
+/** A test report with failures (jest, vitest, playwright, pytest, mocha, go, cargo, node --test). */
+const TESTS_FAILED = /\b[1-9]\d*\s+(?:failed|failing)\b|^\s*FAIL\b|^# fail [1-9]/m;
+const PUSH_REFUSED = /\[rejected\]|\berror:|\bfatal:|Everything up-to-date/i;
+
+const commandsOf = (line: string) =>
+  line
+    .split(/&&|\|\||[;|\n]/)
+    .map((part) => part.trim().replace(/^(?:npx|bunx|pnpm\s+dlx)\s+/, ''));
+
+/** What a finished shell command shipped or broke (a push, a deploy, failing tests), for the mascots to react. */
+export function commandOutcome(command: string, failed: boolean, output: string): 'pushed' | 'deployed' | 'tests_failed' | null {
+  const commands = commandsOf(command);
+  if (commands.some((c) => TEST_CMD.test(c)) && TESTS_FAILED.test(output)) return 'tests_failed';
+  if (failed) return null;
+  if (commands.some((c) => DEPLOY_CMD.test(c))) return 'deployed';
+  return commands.some((c) => PUSH_CMD.test(c)) && !PUSH_REFUSED.test(output) ? 'pushed' : null;
+}
+
 export function resultText(content: unknown): string {
   if (typeof content === 'string') return clip(content, RESULT_MAX);
   if (!Array.isArray(content)) return '';

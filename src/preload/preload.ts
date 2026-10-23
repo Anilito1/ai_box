@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { ChatItem, HubApi, HubSnapshot, RepoStatus } from '../shared/types';
+import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus } from '../shared/types';
 
 const api: HubApi = {
   onSnapshot: (cb) => {
@@ -10,6 +10,9 @@ const api: HubApi = {
   },
   onRepo: (cb) => {
     ipcRenderer.on('hub:repo', (_e, status: RepoStatus) => cb(status));
+  },
+  onEvent: (cb) => {
+    ipcRenderer.on('hub:event', (_e, id: string, kind: HubEventKind) => cb(id, kind));
   },
   ready: () => ipcRenderer.send('hub:ready'),
   refreshRepo: (path) => ipcRenderer.send('repo:refresh', path),

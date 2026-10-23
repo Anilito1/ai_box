@@ -24,6 +24,7 @@ import {
   STATUS_LABEL,
   type ChatItem,
   type Effort,
+  type HubEventKind,
   type HubSnapshot,
   type ImageInput,
   type Metrics,
@@ -41,6 +42,7 @@ import {
   assistantItems,
   blocksOf,
   capturedLine,
+  commandOutcome,
   resultText,
   TAGS,
   taggedSender,
@@ -83,7 +85,7 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-interface Session extends SessionView {
+interface Session extends Omit<SessionView, 'idleSince'> {
   sessionId: string;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
@@ -109,6 +111,10 @@ interface Session extends SessionView {
   closeWhenDone: boolean;
   /** Last message, turn or prompt: the idle timer runs from here. */
   activeAt: number;
+  /** Ids of the subagent tasks still running (task_started until their notification). */
+  agentTasks: Set<string>;
+  /** When it last turned idle; unlike activeAt, frames arriving meanwhile (tasks, limits) leave it alone. */
+  idleAt: number;
 }
 
 type Persisted = {
@@ -147,6 +153,8 @@ const REPORT_ITEMS = 12;
 // A queued message starts its turn within this delay; only a worker still idle after it has really stopped.
 const SILENCE_MS = 5_000;
 const ATTACHMENTS_MAX_AGE = 30 * 86_400_000;
+// Session costs (USD) the mascot celebrates when a turn crosses them.
+const COST_MILESTONES = [5, 10, 25, 50, 100, 250, 500, 1000];
 const IMAGE_EXT: Record<ImageInput['mediaType'], string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 // Exported by a parent Claude Code session (e.g. when the hub is started from one); children must not inherit them.
 const PARENT_SESSION_VARS =
@@ -160,6 +168,9 @@ interface Prompt {
   /** Text shown in the user bubble when it differs from what the model receives. */
   shown?: string;
 }
+
+// Tool calls that send a message to another session (worker ↔ worker, worker → master, master → worker).
+const OUTGOING = /^(SendMessage|mcp__hub__(message_worker|spawn_worker))$/;
 
 const AFFIRMATIVE = /^(yes|oui|ok|confirm(ed)?|accept(ed)?|approve(d)?|proceed|continue)$/i;
 const CONFIRM_FIELD = /confirm|proceed|accept|approve|continue|agree/i;
@@ -392,6 +403,10 @@ export class SessionManager extends EventEmitter {
         createdAt: s.createdAt,
         busySince: s.busySince,
         background: s.background,
+        idleSince: s.status === 'idle' ? s.idleAt : null,
+        agents: s.agents,
+        compacting: s.compacting,
+        retrying: s.retrying,
       }));
     return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits };
   }
@@ -409,7 +424,7 @@ export class SessionManager extends EventEmitter {
     s.inbox = inbox;
     s.status = 'starting';
     s.liveId = null;
-    s.background = []; // Tracked per CLI process: the new one reports its own.
+    this.resetActivity(s); // Tracked per CLI process: the new one reports its own.
     s.activeAt = Date.now();
     s.closeWhenDone = false;
     s.queued = 0;
@@ -472,6 +487,7 @@ export class SessionManager extends EventEmitter {
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
     if (failure && !this.quitting) {
+      this.event(s, 'crashed');
       this.notice(s, `Session arrêtée : ${failure}`, 'error');
       if (s.role === 'worker') this.notifyMaster(`${s.name} s'est arrêté sur une erreur : ${oneLine(failure, 400)}. message_worker le relance avec sa conversation.`);
     }
@@ -486,7 +502,32 @@ export class SessionManager extends EventEmitter {
     for (const finish of [...s.pending.values()]) finish({ behavior: 'deny', message: 'Session arrêtée.' });
     s.status = 'exited';
     s.busySince = null;
+    this.resetActivity(s);
+  }
+
+  /** Background tasks, subagents, compaction and retries belong to one CLI process. */
+  private resetActivity(s: Session): void {
     s.background = [];
+    s.agentTasks.clear();
+    s.agents = 0;
+    s.compacting = false;
+    s.retrying = false;
+  }
+
+  private event(s: Session, kind: HubEventKind): void {
+    if (!this.quitting) this.emit('event', s.id, kind);
+  }
+
+  private trackAgent(s: Session, taskId: string, running: boolean): void {
+    if (running) s.agentTasks.add(taskId);
+    else s.agentTasks.delete(taskId);
+    s.agents = s.agentTasks.size;
+  }
+
+  /** A subagent ended; its update and its notification both say so, only the first one counts. */
+  private endAgent(s: Session, taskId: string, failed: boolean): void {
+    if (failed && s.agentTasks.has(taskId)) this.event(s, 'tool_error');
+    this.trackAgent(s, taskId, false);
   }
 
   private onMessage(s: Session, q: Query, msg: SDKMessage): void {
@@ -500,16 +541,40 @@ export class SessionManager extends EventEmitter {
           if (msg.effort) s.effort = msg.effort;
           this.applyModel(s, msg.model);
         } else if (msg.subtype === 'compact_boundary') {
+          s.compacting = false;
           this.notice(s, 'Contexte compacté', 'info');
+        } else if (msg.subtype === 'status') {
+          const compacting = msg.status === 'compacting';
+          if (compacting && !s.compacting) this.event(s, 'compacting');
+          s.compacting = compacting;
+        } else if (msg.subtype === 'api_retry') {
+          s.retrying = true;
+          this.event(s, 'retry');
         } else if (msg.subtype === 'background_tasks_changed') {
           // Level signal with replace semantics; ambient tasks (watchers) are not activity.
           s.background = msg.tasks.filter((t) => !t.ambient).map((t) => t.description);
           if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        } else if (msg.subtype === 'task_started') {
+          if (msg.task_type === 'local_agent' && !msg.ambient) this.trackAgent(s, msg.task_id, true);
+        } else if (msg.subtype === 'task_updated') {
+          const { status } = msg.patch;
+          if (status === 'completed' || status === 'failed' || status === 'killed') this.endAgent(s, msg.task_id, status === 'failed');
+        } else if (msg.subtype === 'task_notification') {
+          this.endAgent(s, msg.task_id, msg.status === 'failed');
+        }
+        break;
+      case 'rate_limit_event':
+        // Refused by a plan limit: the CLI waits or gives up; either way the session is stuck until the next frame.
+        if (msg.rate_limit_info.status === 'rejected') {
+          s.retrying = true;
+          this.event(s, 'retry');
         }
         break;
       case 'stream_event': {
         if (msg.parent_tool_use_id) return;
         const before = s.status;
+        const retried = s.retrying;
+        s.retrying = false; // A frame came through: the retry worked.
         this.markBusy(s);
         if (msg.event.type === 'content_block_start' && msg.event.content_block.type === 'text') {
           s.liveId = `live-${randomUUID()}`;
@@ -519,11 +584,12 @@ export class SessionManager extends EventEmitter {
           this.upsert(s, { kind: 'assistant', id: s.liveId, text: s.liveText, live: true });
         }
         // Deltas travel on the items channel; the snapshot only needs a refresh when the status flips.
-        if (s.status !== before) this.changed();
+        if (s.status !== before || retried) this.changed();
         return;
       }
       case 'assistant': {
         if (msg.parent_tool_use_id) break;
+        s.retrying = false;
         this.markBusy(s);
         const blocks = blocksOf(msg.message);
         const hasText = blocks.some((b) => b.type === 'text');
@@ -532,6 +598,7 @@ export class SessionManager extends EventEmitter {
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === MASTER_NAME)) {
           s.owesReport = false;
         }
+        if (blocks.some((b) => b.type === 'tool_use' && OUTGOING.test(String(b.name)))) this.event(s, 'message_out');
         if (msg.error) this.notice(s, `Erreur : ${msg.error}`, 'error');
         const u = msg.message.usage;
         const tokens = (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
@@ -552,28 +619,45 @@ export class SessionManager extends EventEmitter {
           const origin = msg.origin as typeof msg.origin & { body?: string };
           const text = origin.body ?? userTextItem(blocks, '')?.text ?? '';
           this.upsert(s, { kind: 'peer', id: `peer-${msg.uuid ?? randomUUID()}`, from: origin.name || origin.from, text });
+          this.event(s, 'message_in');
           break;
         }
         for (const b of blocks) {
           if (b.type !== 'tool_result') continue;
           const item = s.items.get(String(b.tool_use_id));
-          if (item?.kind === 'tool') this.upsert(s, { ...item, result: resultText(b.content), isError: b.is_error === true });
+          if (item?.kind !== 'tool') continue;
+          const result = resultText(b.content);
+          const isError = b.is_error === true;
+          this.upsert(s, { ...item, result, isError });
+          const outcome = item.name === 'Bash' || item.name === 'PowerShell' ? commandOutcome(item.detail, isError, result) : null;
+          if (outcome) this.event(s, outcome);
+          else if (isError) this.event(s, 'tool_error');
         }
         break;
       }
       case 'result': {
+        const costBefore = s.metrics?.costUsd ?? s.costBase;
         s.liveId = null;
+        s.retrying = false;
+        s.compacting = false;
         s.status = s.pending.size > 0 ? 'attention' : 'idle';
-        if (s.status === 'idle') s.busySince = null;
+        if (s.status === 'idle') {
+          s.busySince = null;
+          s.idleAt = Date.now();
+        }
         if (msg.subtype === 'success') {
           if (msg.result.trim()) s.lastMessage = msg.result;
+          this.event(s, 'turn_done');
         } else {
           this.notice(s, 'Tour interrompu', 'info');
+          this.event(s, 'interrupted');
         }
         const windows = Object.values(msg.modelUsage ?? {}).map((m) => m.contextWindow);
         const size = Math.max(s.metrics?.contextSize ?? 0, ...windows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, size);
         if (s.metrics) s.metrics.costUsd = s.costBase + msg.total_cost_usd;
+        const costAfter = s.metrics?.costUsd ?? costBefore;
+        if (COST_MILESTONES.some((m) => costBefore < m && costAfter >= m)) this.event(s, 'cost_milestone');
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
@@ -612,7 +696,10 @@ export class SessionManager extends EventEmitter {
       return; // The session failed to start: consume() reports it.
     }
     if (s.query !== q) return;
-    if (s.status === 'starting') s.status = 'idle';
+    if (s.status === 'starting') {
+      s.status = 'idle';
+      s.idleAt = Date.now();
+    }
     await this.refreshContext(s, q);
     void this.refreshUsage(q);
     this.changed();
@@ -743,6 +830,7 @@ export class SessionManager extends EventEmitter {
     s.queued++;
     s.activeAt = Date.now();
     this.markBusy(s);
+    this.event(s, 'message_in');
     this.changed();
   }
 
@@ -873,6 +961,7 @@ export class SessionManager extends EventEmitter {
     for (const s of this.sessions.values()) {
       if (s.role !== 'worker' || !s.query || !this.settled(s)) continue;
       if (Date.now() - s.activeAt < IDLE_CLOSE_MIN * 60_000) continue;
+      this.event(s, 'idle_closed');
       this.stop(s.id);
       this.notice(s, `Fermé après ${IDLE_CLOSE_MIN} min d'inactivité. Écris-lui pour le reprendre avec sa conversation.`, 'info');
     }
@@ -1177,6 +1266,9 @@ export class SessionManager extends EventEmitter {
       createdAt: Date.now(),
       busySince: null,
       background: [],
+      agents: 0,
+      compacting: false,
+      retrying: false,
       sessionId: randomUUID(),
       started: false,
       costBase: 0,
@@ -1194,6 +1286,8 @@ export class SessionManager extends EventEmitter {
       owesReport: false,
       closeWhenDone: false,
       activeAt: Date.now(),
+      agentTasks: new Set(),
+      idleAt: Date.now(),
     };
     this.sessions.set(id, s);
     return s;
