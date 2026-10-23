@@ -3,7 +3,7 @@ import { Avatar } from './avatar';
 import { ChatView } from './chat';
 import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
 import { RepoPanel } from './repo';
-import { activityOf, WorkingLine } from './working';
+import { activityOf, lastOf } from './working';
 
 declare global {
   interface Window {
@@ -15,22 +15,15 @@ const hub = window.hub;
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const workspace = $('workspace');
 const masterSlot = $('master-slot');
-const workerList = $('worker-list');
-const dockTiles = $('dock-tiles');
-const dockTabs = $('dock-tabs');
+const activeList = $('active-list');
+const closedList = $('closed-list');
+const closedGroup = $<HTMLDetailsElement>('closed-group');
+const reposRoot = $('repos');
 
 const masterView = new ChatView($('pane-master'), hub, 'Parle au maître : il découpe, délègue les missions à des workers et te fait les rapports.');
-const workerView = new ChatView($('pane-worker'), hub, 'Ce worker n’a encore rien produit.');
-const repoPanel = new RepoPanel($('repo'), hub);
+const workerView = new ChatView($('pane-worker'), hub, 'Ce worker n’a encore rien produit.', () => openWorker(null));
 
-const FEED_LINES = 3;
-
-interface Actions {
-  actions: HTMLDivElement;
-  actionsKey: string;
-}
-
-interface Card extends Actions {
+interface Card {
   root: HTMLDivElement;
   /** Workers get their mascot; the master keeps a status dot. */
   avatar: Avatar | null;
@@ -41,35 +34,19 @@ interface Card extends Actions {
   pct: HTMLSpanElement;
   fill: HTMLDivElement;
   sub: HTMLDivElement;
-}
-
-/** A worker's mini window in the dock: live preview of its latest steps; a click opens the conversation. */
-interface Tile extends Actions {
-  root: HTMLDivElement;
-  avatar: Avatar;
-  name: HTMLSpanElement;
-  nums: HTMLSpanElement;
-  meta: HTMLDivElement;
-  feed: HTMLDivElement;
-  working: WorkingLine;
-}
-
-interface Tab {
-  root: HTMLButtonElement;
-  avatar: Avatar;
-  name: HTMLSpanElement;
+  actions: HTMLDivElement;
+  actionsKey: string;
 }
 
 const cards = new Map<string, Card>();
-const tiles = new Map<string, Tile>();
-const tabs = new Map<string, Tab>();
+const repoPanels = new Map<string, RepoPanel>();
 const store = new Map<string, Map<string, ChatItem>>();
 let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null };
-// Worker whose conversation is open in the dock; null = every worker shows as a mini window.
-let expanded: string | null = null;
+// Worker whose conversation is open beside the master; null = the master alone.
+let opened: string | null = null;
 
 const viewFor = (id: string) => (masterView.sessionId === id ? masterView : workerView.sessionId === id ? workerView : null);
-const folderOf = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
+const isClosed = (s: SessionView) => s.status === 'exited';
 
 function actionButton(label: string, path: string, run: () => void): HTMLButtonElement {
   const btn = h('button', 'icon-btn');
@@ -83,26 +60,23 @@ function actionButton(label: string, path: string, run: () => void): HTMLButtonE
   return btn;
 }
 
-function renderActions(target: Actions, s: SessionView): void {
-  const running = s.status !== 'exited';
-  const key = `${s.role}:${running}`;
-  if (target.actionsKey === key) return;
-  target.actionsKey = key;
-  target.actions.replaceChildren();
-  if (running && s.role === 'worker') target.actions.append(actionButton('Arrêter', ICONS.stop, () => hub.stop(s.id)));
-  if (!running) target.actions.append(actionButton('Reprendre', ICONS.resume, () => hub.resume(s.id)));
-  if (!running && s.role === 'worker') target.actions.append(actionButton('Retirer', ICONS.remove, () => hub.remove(s.id)));
+function renderActions(c: Card, s: SessionView): void {
+  const key = `${s.role}:${isClosed(s)}`;
+  if (c.actionsKey === key) return;
+  c.actionsKey = key;
+  c.actions.replaceChildren();
+  if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton('Fermer ce worker', ICONS.stop, () => hub.stop(s.id)));
+  if (isClosed(s)) c.actions.append(actionButton('Reprendre', ICONS.resume, () => hub.resume(s.id)));
+  if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton('Retirer de la liste', ICONS.remove, () => hub.remove(s.id)));
 }
 
-function expand(id: string | null): void {
-  expanded = id;
+/** Shows a worker's conversation beside the master (a closed one is read from its transcript), or hides it. */
+function openWorker(id: string | null): void {
+  opened = id;
+  if (id) hub.open(id);
   render();
-  if (id) {
-    tabs.get(id)?.root.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    workerView.focus();
-  } else {
-    masterView.focus();
-  }
+  if (id) workerView.focus();
+  else masterView.focus();
 }
 
 // ---------- sidebar ----------
@@ -127,17 +101,34 @@ function ensureCard(s: SessionView): Card {
   const sub = h('div', 'card-sub');
   const actions = h('div', 'card-actions');
   root.append(row, meta, meter, sub, actions);
-  root.addEventListener('click', () => (s.role === 'worker' ? expand(s.id) : masterView.focus()));
-  (s.role === 'master' ? masterSlot : workerList).append(root);
+  root.addEventListener('click', () => {
+    if (s.role === 'master') masterView.focus();
+    else openWorker(opened === s.id ? null : s.id);
+  });
+  if (s.role === 'master') masterSlot.append(root);
   const card = { root, avatar, dot, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
 
+/** What the card says under the meter: live activity while working, else the latest news. */
+function cardSub(s: SessionView): { text: string; cls: string } {
+  if (s.status === 'attention') return { text: 'Attend ta validation', cls: 'warn' };
+  if (s.status === 'busy') {
+    const activity = activityOf(lastOf(store.get(s.id)));
+    return { text: activity ? `▸ ${activity}` : '▸ au travail', cls: 'live' };
+  }
+  if (s.background.length > 0 && !isClosed(s)) return { text: `Tâche de fond : ${oneLine(s.background[0])}`, cls: 'live' };
+  if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
+  if (s.mission) return { text: oneLine(s.mission), cls: '' };
+  return { text: s.role === 'master' ? 'Ta conversation principale' : STATUS_LABEL[s.status], cls: '' };
+}
+
 function renderCard(s: SessionView): void {
   const c = ensureCard(s);
   const m = s.metrics;
-  c.root.classList.toggle('selected', s.id === expanded);
+  c.root.classList.toggle('selected', s.id === opened);
+  c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker');
   c.avatar?.update(s);
   c.dot.className = `dot s-${s.status}`;
   c.dot.title = STATUS_LABEL[s.status];
@@ -147,113 +138,35 @@ function renderCard(s: SessionView): void {
   c.pct.textContent = fmtPct(m?.contextPct);
   c.fill.style.width = `${Math.min(100, m?.contextPct ?? 0)}%`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;
-
-  let sub = STATUS_LABEL[s.status];
-  if (s.status === 'attention') sub = 'Attend ta validation';
-  else if (s.background.length > 0 && s.status !== 'busy' && s.status !== 'exited') sub = `Tâche de fond : ${oneLine(s.background[0])}`;
-  else if (s.lastMessage) sub = oneLine(s.lastMessage);
-  else if (s.mission) sub = oneLine(s.mission);
-  else if (s.role === 'master') sub = 'Ta conversation principale';
-  c.sub.textContent = sub;
-  c.sub.classList.toggle('warn', s.status === 'attention');
+  const sub = cardSub(s);
+  c.sub.textContent = sub.text;
+  c.sub.className = `card-sub ${sub.cls}`;
   c.root.title = s.cwd;
   renderActions(c, s);
 }
 
-// ---------- dock: mini windows + tabs of the open worker ----------
-
-function ensureTile(s: SessionView): Tile {
-  const existing = tiles.get(s.id);
-  if (existing) return existing;
-  const root = h('div', 'tile');
-  const head = h('div', 'tile-head');
-  const avatar = new Avatar(s.id);
-  const name = h('span', 'tile-name');
-  const nums = h('span', 'tile-nums');
-  const actions = h('div', 'tile-actions');
-  head.append(avatar.root, name, nums, actions, icon(ICONS.expand, 'ico tile-open'));
-  const body = h('div', 'tile-body');
-  const meta = h('div', 'tile-meta');
-  const feed = h('div', 'tile-feed');
-  const working = new WorkingLine(true);
-  body.append(meta, feed, working.root);
-  root.append(head, body);
-  root.addEventListener('click', () => expand(s.id));
-  dockTiles.append(root);
-  const tile = { root, avatar, name, nums, meta, feed, working, actions, actionsKey: '' };
-  tiles.set(s.id, tile);
-  return tile;
+/** Re-inserts the cards only when their order or list changed, so hover and focus survive renders. */
+function syncList(list: HTMLElement, nodes: HTMLElement[]): void {
+  const current = [...list.children];
+  if (current.length !== nodes.length || current.some((n, i) => n !== nodes[i])) list.replaceChildren(...nodes);
 }
 
-function renderTile(s: SessionView): void {
-  const t = ensureTile(s);
-  t.root.className = `tile s-${s.status}`;
-  t.root.title = `Ouvrir la conversation · ${s.cwd}`;
-  t.avatar.update(s);
-  t.name.textContent = displayName(s);
-  t.nums.textContent = s.metrics ? `${fmtPct(s.metrics.contextPct)} · ${fmtCost(s.metrics.costUsd)}` : '';
-  t.meta.textContent = [folderOf(s.cwd), s.modelLabel, s.effort].filter(Boolean).join(' · ');
-  renderActions(t, s);
-  renderFeed(s);
+try {
+  closedGroup.open = localStorage.getItem('closedOpen') === '1';
+} catch {
+  // Storage unavailable: collapsed.
 }
-
-function feedLine(item: ChatItem): HTMLElement | null {
-  switch (item.kind) {
-    case 'tool': {
-      const line = h('div', 'feed-line');
-      line.append(h('span', `feed-dot ${item.result === null ? 'running' : item.isError ? 'error' : ''}`), h('b', '', item.name));
-      line.append(h('span', 'feed-muted', item.summary));
-      return line;
-    }
-    case 'assistant':
-      return h('div', 'feed-line', oneLine(item.text).slice(0, 240));
-    case 'user':
-      return h('div', 'feed-line feed-muted', `↳ ${oneLine(item.text).slice(0, 240)}`);
-    case 'peer':
-      return h('div', 'feed-line feed-muted', `↳ ${item.from} : ${oneLine(item.text).slice(0, 240)}`);
-    case 'permission':
-      return item.state === 'pending' ? h('div', 'feed-line feed-warn', `Autoriser ${item.tool} ?`) : null;
-    default:
-      return null;
+closedGroup.addEventListener('toggle', () => {
+  try {
+    localStorage.setItem('closedOpen', closedGroup.open ? '1' : '0');
+  } catch {
+    // Not persisted: fine.
   }
-}
+});
 
-/** Latest steps of a worker, refreshed on every item batch so the mini window stays live. */
-function renderFeed(s: SessionView): void {
-  const t = tiles.get(s.id);
-  if (!t) return;
-  const all = [...(store.get(s.id)?.values() ?? [])];
-  const lines: HTMLElement[] = [];
-  for (let i = all.length - 1; i >= 0 && lines.length < FEED_LINES; i--) {
-    const line = feedLine(all[i]);
-    if (line) lines.unshift(line);
-  }
-  if (lines.length === 0) lines.push(h('div', 'feed-line feed-muted', s.mission ? oneLine(s.mission).slice(0, 240) : STATUS_LABEL[s.status]));
-  t.feed.replaceChildren(...lines);
-  t.working.update(s.status, s.busySince, activityOf(all.at(-1)), s.background);
+function renderRepos(): void {
+  for (const panel of repoPanels.values()) panel.setWorkers(snapshot.sessions);
 }
-
-function renderTab(s: SessionView): void {
-  let tab = tabs.get(s.id);
-  if (!tab) {
-    const root = h('button', 'dock-tab');
-    const avatar = new Avatar(s.id);
-    const name = h('span', 'dock-tab-name');
-    root.append(avatar.root, name);
-    root.addEventListener('click', () => expand(s.id));
-    dockTabs.append(root);
-    tab = { root, avatar, name };
-    tabs.set(s.id, tab);
-  }
-  tab.root.classList.toggle('active', s.id === expanded);
-  tab.avatar.update(s);
-  tab.name.textContent = displayName(s);
-  tab.root.title = `${displayName(s)} · ${STATUS_LABEL[s.status]}`;
-}
-
-const collapse = $('dock-collapse');
-collapse.append(icon(ICONS.collapse));
-collapse.addEventListener('click', () => expand(null));
 
 // ---------- status bar ----------
 
@@ -272,7 +185,7 @@ function resetTime(epochSeconds: number | null, withDay: boolean): string {
 }
 
 function renderStatusbar(rate: RateLimits | null): void {
-  const workers = snapshot.sessions.filter((s) => s.role === 'worker');
+  const workers = snapshot.sessions.filter((s) => s.role === 'worker' && !isClosed(s));
   const running = workers.filter((s) => s.status === 'busy').length;
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
@@ -283,7 +196,7 @@ function renderStatusbar(rate: RateLimits | null): void {
     item.append(h('span', `dot s-${master.status}`), h('span', '', `Maître · ${STATUS_LABEL[master.status]}`));
     left.push(item);
   }
-  left.push(h('span', 'sb-sep'), sbItem('Workers', String(workers.length)));
+  left.push(h('span', 'sb-sep'), sbItem('Workers actifs', String(workers.length)));
   if (running) left.push(sbItem('en cours', String(running)));
   if (attention) left.push(sbItem('à valider', String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
@@ -309,35 +222,28 @@ function render(): void {
     store.delete(id);
     workerView.forget(id);
   }
-  for (const [id, tile] of tiles) {
-    if (ids.has(id)) continue;
-    tile.working.stop();
-    tile.root.remove();
-    tiles.delete(id);
-  }
-  for (const [id, tab] of tabs) {
-    if (ids.has(id)) continue;
-    tab.root.remove();
-    tabs.delete(id);
-  }
-  const workers = sessions.filter((s) => s.role === 'worker');
-  if (expanded && !ids.has(expanded)) expanded = null;
+  if (opened && !ids.has(opened)) opened = null;
 
-  workspace.classList.toggle('solo', workers.length === 0);
-  workspace.classList.toggle('expanded', expanded !== null);
-  $('worker-empty').hidden = workers.length > 0;
-  $('worker-count').textContent = workers.length ? String(workers.length) : '';
   for (const s of sessions) renderCard(s);
-  for (const s of workers) {
-    renderTile(s);
-    renderTab(s);
-  }
+  const workers = sessions.filter((s) => s.role === 'worker');
+  const active = workers.filter((s) => !isClosed(s));
+  // Newest first: the latest missions are the ones worth a look.
+  const closed = workers.filter(isClosed).reverse();
+  const nodeOf = (s: SessionView) => (cards.get(s.id) as Card).root;
+  syncList(activeList, active.map(nodeOf));
+  syncList(closedList, closed.map(nodeOf));
+  closedGroup.hidden = closed.length === 0;
+  $('closed-count').textContent = String(closed.length);
+  $('worker-empty').hidden = active.length > 0;
+  $('worker-count').textContent = active.length ? String(active.length) : '';
 
+  workspace.classList.toggle('expanded', opened !== null);
   const master = sessions.find((s) => s.role === 'master');
   masterView.show(master, master && store.get(master.id), models);
-  const worker = sessions.find((s) => s.id === expanded);
+  const worker = sessions.find((s) => s.id === opened);
   workerView.show(worker, worker && store.get(worker.id), models);
   renderStatusbar(snapshot.rateLimits);
+  renderRepos();
 }
 
 // ---------- splitter (master | open worker) ----------
@@ -364,6 +270,7 @@ splitter.addEventListener('pointerdown', (e) => {
     workspace.classList.remove('resizing');
     splitter.removeEventListener('pointermove', move);
     splitter.removeEventListener('pointerup', up);
+    splitter.removeEventListener('pointercancel', up);
     try {
       localStorage.setItem('dockWidth', workspace.style.getPropertyValue('--dock-width'));
     } catch {
@@ -372,6 +279,7 @@ splitter.addEventListener('pointerdown', (e) => {
   };
   splitter.addEventListener('pointermove', move);
   splitter.addEventListener('pointerup', up);
+  splitter.addEventListener('pointercancel', up);
 });
 
 // ---------- boot ----------
@@ -388,9 +296,19 @@ hub.onItems((id, items, reset) => {
   const view = viewFor(id);
   if (view && fresh) view.reset(map);
   else view?.upsert(items);
+  // The card's activity line follows the latest step.
   const s = snapshot.sessions.find((x) => x.id === id);
-  if (s?.role === 'worker') renderFeed(s);
+  if (s) renderCard(s);
 });
-hub.onRepo((status) => repoPanel.update(status));
+hub.onRepo((status) => {
+  let panel = repoPanels.get(status.path);
+  if (!panel) {
+    panel = new RepoPanel(hub);
+    repoPanels.set(status.path, panel);
+    reposRoot.append(panel.root);
+  }
+  panel.update(status);
+  panel.setWorkers(snapshot.sessions);
+});
 hub.ready();
 masterView.focus();

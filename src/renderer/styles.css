@@ -72,7 +72,7 @@ button {
 .app {
   display: grid;
   height: 100vh;
-  grid-template-columns: 264px 1fr;
+  grid-template-columns: 280px 1fr;
   grid-template-rows: 36px 1fr 26px;
   grid-template-areas:
     'title title'
@@ -134,9 +134,48 @@ button {
 .worker-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
+  min-height: 0;
   overflow-y: auto;
   padding-bottom: 12px;
+}
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.card-list:empty {
+  display: none;
+}
+.side-closed summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  list-style: none;
+  cursor: pointer;
+}
+.side-closed summary::-webkit-details-marker {
+  display: none;
+}
+.side-closed summary::before {
+  content: '▸';
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+.side-closed[open] summary::before {
+  transform: rotate(90deg);
+}
+.side-closed summary:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+.side-closed summary span:last-child {
+  margin-left: auto;
+  font-family: var(--font-mono);
 }
 .side-empty {
   margin: 4px 8px;
@@ -144,23 +183,31 @@ button {
   line-height: 1.6;
 }
 
-/* ---------- pinned repo (bottom of the sidebar) ---------- */
+/* ---------- main repos (bottom of the sidebar): main folder + worktrees ---------- */
+.side-repos {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 40vh;
+  padding: 0 10px 10px;
+  overflow-y: auto;
+}
+.side-repos:empty {
+  display: none;
+}
 .side-repo {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 5px;
-  margin: 0 10px 10px;
-  padding: 9px 10px 9px 11px;
+  gap: 4px;
+  padding: 8px 10px 8px 11px;
   border: 1px solid var(--line);
   border-left: 2px solid var(--ok);
   border-radius: 8px;
   background: var(--raise);
   cursor: pointer;
   transition: background 0.12s;
-}
-.side-repo:empty {
-  display: none;
 }
 .side-repo:hover {
   background: var(--hover);
@@ -199,7 +246,8 @@ button {
   background: var(--danger);
 }
 .repo-name {
-  flex: 1;
+  flex: 1 0 auto;
+  max-width: 60%;
   min-width: 0;
   overflow: hidden;
   font-weight: 600;
@@ -219,36 +267,87 @@ button {
     transform: rotate(360deg);
   }
 }
-.repo-branch {
+.repo-trees {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.repo-tree {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-width: 0;
+  padding: 1px 0 1px 15px;
+}
+.repo-tree:not(.main) {
+  padding-left: 22px;
+}
+.repo-tree:not(.main)::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin: 0 1px 0 -12px;
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  transform: translateY(-2px);
+}
+.repo-tree-text {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.repo-label {
+  flex: none;
+  max-width: 50%;
   overflow: hidden;
   color: var(--text-2);
-  font: 11.5px var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+.repo-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font: 11px/17px var(--font-mono);
+  text-overflow: ellipsis;
+}
+.repo-tree.main .repo-branch-name {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.repo-badges {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+.repo-workers {
+  flex-basis: 100%;
+  overflow: hidden;
+  color: #8fa8f0;
+  font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.side-repo.error .repo-branch {
-  color: #f0a9a6;
-  font-family: var(--font-ui);
-  white-space: normal;
-}
-.repo-base {
+.repo-more {
+  padding-left: 22px;
   color: var(--text-3);
+  font-size: 10.5px;
 }
-.repo-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.repo-chips:empty {
-  display: none;
+.repo-error {
+  color: #f0a9a6;
+  font-size: 11.5px;
 }
 .chip {
-  padding: 1px 7px;
+  padding: 0 6px;
   border-radius: 9px;
   background: var(--line-strong);
   color: var(--text-2);
-  font-size: 11px;
-  font-weight: 500;
+  font: 500 10.5px/16px var(--font-ui);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .chip.ok {
@@ -267,16 +366,6 @@ button {
   background: var(--del);
   color: var(--danger);
 }
-.repo-commit {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-  color: var(--text-2);
-  font-size: 11.5px;
-}
-.repo-commit:empty {
-  display: none;
-}
 .repo-hash {
   flex: none;
   color: var(--text-3);
@@ -290,22 +379,18 @@ button {
   text-overflow: ellipsis;
 }
 .repo-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-3);
   font-size: 10.5px;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .repo-foot:empty {
   display: none;
 }
-.repo-foot > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.repo-fetch.error {
+.repo-foot.error {
   color: var(--danger);
 }
 
@@ -325,6 +410,26 @@ button {
   font-family: var(--font-mono);
   font-size: 11.5px;
   text-overflow: ellipsis;
+}
+.repo-pop-tree {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  white-space: nowrap;
+}
+.repo-pop-branch {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  text-overflow: ellipsis;
+}
+.repo-sub {
+  padding: 4px 8px 2px;
+  color: var(--text-3);
+  font-size: 11px;
 }
 .repo-row {
   display: flex;
@@ -433,6 +538,29 @@ button {
 .card-sub.warn {
   color: var(--warn);
 }
+.card-sub.live {
+  color: #8fa8f0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  -webkit-line-clamp: 1;
+}
+.card.closed {
+  padding-top: 6px;
+  padding-bottom: 7px;
+  opacity: 0.62;
+}
+.card.closed:hover,
+.card.closed.selected {
+  opacity: 1;
+}
+.card.closed .card-meta,
+.card.closed .meter {
+  display: none;
+}
+.card.closed .card-sub {
+  margin-top: 3px;
+  -webkit-line-clamp: 1;
+}
 .card-actions {
   position: absolute;
   top: 5px;
@@ -533,7 +661,7 @@ button {
   min-height: 0;
   background: var(--chat);
 }
-/* The master always fills what the dock leaves; the dock never takes more than half. */
+/* The master always fills what the open worker leaves; the worker never takes more than half. */
 .pane-master {
   flex: 1 1 0;
 }
@@ -553,239 +681,29 @@ button {
   display: block;
 }
 
-/* ---------- dock: workers as mini windows, or one open beside the master ---------- */
-.dock {
-  display: flex;
-  flex: 0 0 292px;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--line);
-  background: var(--panel);
-  transition: flex-basis 0.22s ease;
-}
-.workspace.solo .dock {
+/* ---------- worker conversation, opened from the sidebar beside the master ---------- */
+.pane-worker {
   display: none;
+  flex: 0 0 var(--dock-width, 42%);
 }
-.workspace.expanded .dock {
-  flex-basis: var(--dock-width, 42%);
-  border-left: 0;
-}
-.workspace.resizing .dock {
-  transition: none;
-}
-.dock-tiles {
+.workspace.expanded .pane-worker {
   display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-  padding: 10px;
-  overflow-y: auto;
+  animation: pane-in 0.18s ease-out;
 }
-.dock-tabs,
-.dock .pane-worker,
-.workspace.expanded .dock-tiles {
-  display: none;
+.workspace.resizing .pane-worker {
+  animation: none;
 }
-.workspace.expanded .dock .pane-worker {
-  display: flex;
-  flex: 1;
+@keyframes pane-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
 }
-.workspace.expanded .dock-tabs {
-  display: flex;
-  flex: 0 0 34px;
-  align-items: center;
-  gap: 4px;
-  padding: 0 6px;
-  border-bottom: 1px solid var(--line);
-  background: var(--bg);
-}
-.dock-tablist {
-  display: flex;
-  flex: 1;
-  gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.dock-tablist::-webkit-scrollbar {
-  display: none;
-}
-.dock-tab {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 7px;
-  max-width: 180px;
-  height: 26px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-2);
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.dock-tab:hover {
-  background: var(--hover);
-  color: var(--text);
-}
-.dock-tab.active {
-  background: var(--raise);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--line-strong);
-}
-.dock-tab .dot {
-  width: 7px;
-  height: 7px;
-}
-.dock-tab-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tile {
-  position: relative;
-  flex: none;
-  overflow: hidden;
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  background: var(--chat);
-  cursor: pointer;
-  animation: tile-in 0.24s ease-out;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s,
-    transform 0.15s;
-}
-.tile:hover {
-  border-color: #3a3e46;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
-  transform: translateY(-1px);
-}
-.tile.s-busy {
-  border-color: rgba(90, 125, 232, 0.4);
-}
-.tile.s-attention {
-  border-color: rgba(226, 176, 79, 0.6);
-}
-.tile.s-exited {
-  opacity: 0.6;
-}
-@keyframes tile-in {
+@keyframes pop-in {
   from {
     opacity: 0;
     transform: translateY(8px) scale(0.97);
   }
-}
-.tile-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--line);
-  background: var(--raise);
-}
-.tile-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.tile-nums {
-  color: var(--text-3);
-  font: 11px var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-.tile-actions {
-  display: none;
-  gap: 1px;
-}
-.tile:hover .tile-actions:not(:empty) {
-  display: flex;
-}
-.tile:hover .tile-nums {
-  display: none;
-}
-.tile-actions .icon-btn {
-  width: 22px;
-  height: 20px;
-}
-.tile-open {
-  width: 12px;
-  height: 12px;
-  color: var(--text-3);
-}
-.tile:hover .tile-open {
-  color: var(--text);
-}
-.tile-body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px 9px;
-}
-.tile-meta {
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.tile-feed {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 51px;
-}
-.feed-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-2);
-  font-size: 11.5px;
-  line-height: 17px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.feed-line b {
-  flex: none;
-  color: var(--text);
-  font-weight: 600;
-}
-.feed-line .feed-muted {
-  min-width: 0;
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-}
-.feed-muted {
-  color: var(--text-3);
-}
-.feed-warn {
-  color: var(--warn);
-}
-.feed-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-}
-.feed-dot.running {
-  background: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-.feed-dot.error {
-  background: var(--danger);
 }
 
 /* ---------- working indicator (Claude Code spinner) ---------- */
@@ -850,15 +768,6 @@ button {
   background: none;
   color: var(--warn);
 }
-.working.compact {
-  gap: 6px;
-  margin-top: 0;
-  font-size: 11.5px;
-}
-.working.compact .working-glyph {
-  width: 12px;
-  font-size: 12.5px;
-}
 
 .pane-head {
   display: flex;
@@ -891,6 +800,9 @@ button {
   border-radius: 4px;
   color: var(--text-2);
   font: 11px var(--font-mono);
+}
+.ph-close {
+  margin-right: -8px;
 }
 
 /* ---------- message stream ---------- */
@@ -1422,6 +1334,7 @@ button {
   border-radius: 10px;
   background: #17181c;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  overflow-y: auto;
   user-select: none;
 }
 .menu-label {
@@ -1599,7 +1512,7 @@ button {
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: var(--bg);
-  animation: tile-in 0.18s ease-out;
+  animation: pop-in 0.18s ease-out;
 }
 .attach img {
   width: 100%;
@@ -1689,12 +1602,6 @@ button {
   flex: none;
   width: 30px;
 }
-.tile-head .avatar {
-  width: 24px;
-}
-.dock-tab .avatar {
-  width: 18px;
-}
 .clawd {
   display: block;
   width: 100%;
@@ -1733,9 +1640,6 @@ button {
   width: 7px;
   height: 7px;
   box-shadow: 0 0 0 2px var(--panel);
-}
-.dock-tab .avatar-badge {
-  display: none;
 }
 
 /* Stopped: grey and asleep. Awaiting a permission: fidgets. */

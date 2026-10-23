@@ -12,7 +12,9 @@ const api: HubApi = {
     ipcRenderer.on('hub:repo', (_e, status: RepoStatus) => cb(status));
   },
   ready: () => ipcRenderer.send('hub:ready'),
-  refreshRepo: () => ipcRenderer.send('repo:refresh'),
+  refreshRepo: (path) => ipcRenderer.send('repo:refresh', path),
+  pullRepo: (path) => ipcRenderer.send('repo:pull', path),
+  open: (id) => ipcRenderer.send('session:open', id),
   send: (id, text, images) => ipcRenderer.send('session:send', id, text, images),
   interrupt: (id) => ipcRenderer.send('session:interrupt', id),
   setModel: (id, model) => ipcRenderer.send('session:model', id, model),

@@ -17,10 +17,10 @@ import { toAttachment, type Attachment } from './attachments';
 import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
 import { activityOf, lastOf, WorkingLine } from './working';
 
-// Model output is untrusted: no inline styles or form controls, so it cannot overlay or mimic the app's own UI.
+// Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
 const markdown = (text: string): string =>
   DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true }), {
-    FORBID_ATTR: ['style'],
+    FORBID_ATTR: ['style', 'class'],
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
   });
 
@@ -41,7 +41,7 @@ export class ChatView {
   private readonly attachStrip = h('div', 'attachments');
   private readonly attachNote = h('div', 'attach-note');
   private readonly fileInput = h('input');
-  private readonly working = new WorkingLine(false);
+  private readonly working = new WorkingLine();
   private readonly nodes = new Map<string, HTMLElement>();
   private readonly drafts = new Map<string, { text: string; attachments: Attachment[] }>();
   private attachments: Attachment[] = [];
@@ -56,10 +56,20 @@ export class ChatView {
     pane: HTMLElement,
     private readonly hub: HubApi,
     emptyText: string,
+    /** Given for a panel that can be hidden: adds a close button to its header. */
+    onClose?: () => void,
   ) {
     const head = h('div', 'pane-head');
     this.head = { dot: h('span', 'dot'), name: h('span', 'ph-name'), status: h('span', 'ph-status'), mission: h('span', 'ph-mission'), cwd: h('span', 'ph-cwd') };
     head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, this.head.cwd);
+    if (onClose) {
+      const close = h('button', 'icon-btn ph-close');
+      close.title = 'Masquer la conversation';
+      close.setAttribute('aria-label', close.title);
+      close.append(icon(ICONS.remove));
+      close.addEventListener('click', onClose);
+      head.append(close);
+    }
 
     this.scroller = h('div', 'chat');
     this.stream = h('div', 'chat-inner');
@@ -258,7 +268,7 @@ export class ChatView {
 
     this.input.placeholder =
       s.status === 'exited'
-        ? 'Session arrêtée — écris pour la reprendre'
+        ? 'Session fermée — écris pour la reprendre avec sa conversation'
         : s.role === 'master'
           ? 'Écris au maître…  (Entrée pour envoyer, Maj+Entrée pour une ligne)'
           : 'Écris directement à ce worker…';

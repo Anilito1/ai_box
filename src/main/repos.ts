@@ -6,6 +6,8 @@ export interface RepoInfo {
   path: string;
   remote: string;
   branch: string;
+  /** Main folder of the repo when this one is a linked worktree, else empty. */
+  worktreeOf: string;
 }
 
 const SKIP = new Set(['node_modules', 'dist', 'build', 'out', 'vendor', 'target']);
@@ -20,7 +22,7 @@ export function findRepos(root: string): RepoInfo[] {
       try {
         repos.push(describe(dir, gitPath));
       } catch {
-        repos.push({ name: basename(dir), path: dir, remote: '', branch: 'illisible' }); // locked or placeholder .git
+        repos.push({ name: basename(dir), path: dir, remote: '', branch: 'illisible', worktreeOf: '' }); // locked or placeholder .git
       }
       return;
     }
@@ -58,13 +60,15 @@ function describe(dir: string, gitPath: string): RepoInfo {
     }
   };
   const common = read(join(gitDir, 'commondir')).trim();
-  const config = read(join(common ? resolve(gitDir, common) : gitDir, 'config'));
+  const commonDir = common ? resolve(gitDir, common) : gitDir;
+  const config = read(join(commonDir, 'config'));
   const head = read(join(gitDir, 'HEAD')).trim();
   return {
     name: basename(dir),
     path: dir,
     remote: cleanRemote(remoteUrl(config)),
     branch: head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : `détachée (${head.slice(0, 8)})`,
+    worktreeOf: common ? dirname(commonDir) : '',
   };
 }
 

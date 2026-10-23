@@ -12,18 +12,18 @@ import {
   type Mode,
   type PermissionDecision,
 } from '../shared/types';
-import { loadConfig } from './config';
+import { loadConfig, mainRepoPath } from './config';
 import { RepoWatcher } from './repoStatus';
 import { SessionManager } from './sessions';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto'];
+const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
 const DECISIONS = ['allow', 'always', 'deny'];
 
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
-let repoWatcher: RepoWatcher | undefined;
+let repoWatchers: RepoWatcher[] = [];
 let rendererReady = false;
 
 const send = (channel: string, ...args: unknown[]) => {
@@ -107,11 +107,13 @@ function parseImages(value: unknown): ImageInput[] | null {
   return images;
 }
 
-function registerIpc(mgr: SessionManager, repo: RepoWatcher): void {
+function registerIpc(mgr: SessionManager, repos: RepoWatcher[]): void {
+  // Only the configured repos: a path from the renderer never reaches git otherwise.
+  const repoAt = (path: unknown) => repos.find((r) => r.path === path);
   ipcMain.on('hub:ready', (e) => {
     e.sender.send('hub:snapshot', mgr.snapshot());
     for (const [id, items] of mgr.allItems()) e.sender.send('hub:items', id, items, true);
-    e.sender.send('hub:repo', repo.status);
+    for (const repo of repos) e.sender.send('hub:repo', repo.status);
     rendererReady = true;
   });
   ipcMain.on('session:send', (_e, id: unknown, text: unknown, images: unknown) => {
@@ -147,7 +149,11 @@ function registerIpc(mgr: SessionManager, repo: RepoWatcher): void {
   ipcMain.on('session:remove', (_e, id: unknown) => {
     if (isStr(id)) mgr.remove(id);
   });
-  ipcMain.on('repo:refresh', () => void repo.fetch());
+  ipcMain.on('session:open', (_e, id: unknown) => {
+    if (isStr(id)) mgr.open(id);
+  });
+  ipcMain.on('repo:refresh', (_e, path: unknown) => void repoAt(path)?.fetch());
+  ipcMain.on('repo:pull', (_e, path: unknown) => void repoAt(path)?.pull());
   ipcMain.on('open-external', (_e, url: unknown) => {
     if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
   });
@@ -162,14 +168,13 @@ function start(): void {
   mgr.on('attention', () => {
     if (win && !win.isFocused()) win.flashFrame(true);
   });
-  const repo = new RepoWatcher(cfg.pinnedRepo);
-  repoWatcher = repo;
-  repo.on('changed', (status) => send('hub:repo', status));
+  repoWatchers = cfg.mainRepos.map((r) => new RepoWatcher(mainRepoPath(cfg, r)));
+  for (const repo of repoWatchers) repo.on('changed', (status) => send('hub:repo', status));
 
-  registerIpc(mgr, repo);
+  registerIpc(mgr, repoWatchers);
   createWindow(mgr);
   mgr.startMaster();
-  repo.start();
+  for (const repo of repoWatchers) repo.start();
 }
 
 // Groups the taskbar button under the app's own identity and icon instead of Electron's.
@@ -185,7 +190,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', () => {
-    repoWatcher?.stop();
+    for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
   });
   app

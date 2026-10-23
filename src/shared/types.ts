@@ -20,7 +20,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   busy: 'en cours',
   idle: 'prêt',
   attention: 'attend ta validation',
-  exited: 'arrêté',
+  exited: 'fermé',
 };
 
 export const MODE_LABEL: Record<Mode, string> = {
@@ -28,18 +28,19 @@ export const MODE_LABEL: Record<Mode, string> = {
   default: 'Manuel',
   acceptEdits: 'Édition auto',
   plan: 'Plan',
-  bypassPermissions: 'Sans permissions',
+  bypassPermissions: 'Tout autoriser',
   dontAsk: 'Ne pas demander',
 };
 
 export const MODE_HINT: Partial<Record<Mode, string>> = {
-  auto: 'Un classifieur valide les actions sûres',
+  bypassPermissions: 'Aucune demande : commandes, commit, push, deploy, SQL',
+  auto: 'Un classifieur valide les actions sûres, bloque les déploiements',
   default: 'Demande avant les modifications et la plupart des commandes',
   acceptEdits: 'Modifie les fichiers sans demander',
   plan: 'Explore et propose un plan, sans rien modifier',
 };
 
-export const MENU_MODES: Mode[] = ['auto', 'default', 'acceptEdits', 'plan'];
+export const MENU_MODES: Mode[] = ['bypassPermissions', 'auto', 'default', 'acceptEdits', 'plan'];
 
 export interface ModelOption {
   value: string;
@@ -95,12 +96,13 @@ export interface RepoFile {
   path: string;
 }
 
-/** Live git state of the repo pinned at the bottom of the sidebar. */
-export interface RepoStatus {
-  name: string;
+/** One checkout of a repo: its main folder or a linked worktree. */
+export interface RepoTree {
   path: string;
+  /** Worktree folder without the repo's own prefix ("voice-order"); empty for the main folder. */
+  label: string;
   branch: string;
-  /** Ref compared against: the upstream, else the remote's default branch; empty when there is none. */
+  /** Ref compared against: the upstream (main folder) or the remote's default branch (worktrees); empty when none. */
   base: string;
   ahead: number;
   behind: number;
@@ -110,9 +112,20 @@ export interface RepoStatus {
   head: RepoCommit | null;
   incoming: RepoCommit[];
   outgoing: RepoCommit[];
+  error: string;
+}
+
+/** Live git state of a main repo shown at the bottom of the sidebar, with all its worktrees. */
+export interface RepoStatus {
+  name: string;
+  path: string;
+  /** Main folder first, then the linked worktrees. */
+  trees: RepoTree[];
   fetching: boolean;
   fetchedAt: number | null;
   fetchError: string;
+  pulling: boolean;
+  pullError: string;
   error: string;
 }
 
@@ -151,7 +164,10 @@ export interface HubApi {
   onItems(cb: (sessionId: string, items: ChatItem[], reset: boolean) => void): void;
   onRepo(cb: (status: RepoStatus) => void): void;
   ready(): void;
-  refreshRepo(): void;
+  refreshRepo(path: string): void;
+  pullRepo(path: string): void;
+  /** Loads the conversation of a closed session so it can be read without resuming it. */
+  open(id: string): void;
   send(id: string, text: string, images: ImageInput[]): void;
   interrupt(id: string): void;
   setModel(id: string, model: string): void;

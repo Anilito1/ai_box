@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Effort } from '../shared/types';
 
 export interface HubConfig {
@@ -13,10 +13,10 @@ export interface HubConfig {
   worker: { model: string; effort: Effort | '' };
   /** Models the master may pick explicitly for a worker (default: inherit). */
   workerModels: string[];
-  /** Permission mode for new sessions; empty = Auto, like the VS Code extension. */
+  /** Permission mode of every session at launch; empty = bypassPermissions (nothing waits for a validation). */
   permissionMode: string;
-  /** Repo whose git state stays pinned at the bottom of the sidebar. */
-  pinnedRepo: string;
+  /** Repos the user mainly works on (folders under masterCwd): known to the master, git state shown in the sidebar. */
+  mainRepos: string[];
 }
 
 const DEFAULTS: HubConfig = {
@@ -26,7 +26,7 @@ const DEFAULTS: HubConfig = {
   worker: { model: '', effort: '' },
   workerModels: ['opus', 'sonnet'],
   permissionMode: '',
-  pinnedRepo: '',
+  mainRepos: [],
 };
 
 export function loadConfig(dataDir: string): HubConfig {
@@ -42,5 +42,9 @@ export function loadConfig(dataDir: string): HubConfig {
     master: { ...DEFAULTS.master, ...raw.master },
     worker: { ...DEFAULTS.worker, ...raw.worker },
     workerModels: raw.workerModels?.length ? raw.workerModels : DEFAULTS.workerModels,
+    mainRepos: raw.mainRepos?.length ? raw.mainRepos : DEFAULTS.mainRepos,
   };
 }
+
+/** Absolute folder of a main repo (a bare name resolves under masterCwd). */
+export const mainRepoPath = (cfg: HubConfig, repo: string) => resolve(cfg.masterCwd, repo);

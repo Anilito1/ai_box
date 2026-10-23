@@ -33,10 +33,7 @@ export const ICONS = {
   chevron: 'M4.5 6.5L8 10l3.5-3.5',
   check: 'M3.5 8.5l3 3 6-7',
   shield: 'M8 2l5 2v4c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4z',
-  folder: 'M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z',
   branch: 'M6.5 3.5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M6.5 12.5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M12.5 5a1.5 1.5 0 1 1-3 0a1.5 1.5 0 1 1 3 0M5 5v6M11 6.5c0 2.5-6 1.5-6 4.5',
-  expand: 'M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9',
-  collapse: 'M13.5 2.5L9.5 6.5M9.5 3v3.5H13M2.5 13.5l4-4M3 9.5h3.5V13',
   copy: 'M5.5 5.5h7v7h-7zM3.5 10.5v-7h7',
   attach: 'M10.5 5.5l-4.3 4.3a1.4 1.4 0 0 0 2 2l4.6-4.6a2.8 2.8 0 0 0-4-4L4.2 7.8a4.2 4.2 0 0 0 6 6l3.3-3.3',
 };
@@ -122,6 +119,8 @@ export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: 
   const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 12);
   menu.style.left = `${Math.max(12, left)}px`;
   menu.style.bottom = `${window.innerHeight - r.top + 6}px`;
+  // Never taller than the room above its anchor: long contents scroll inside.
+  menu.style.maxHeight = `${Math.max(160, r.top - 18)}px`;
   document.addEventListener('mousedown', onDown, true);
   document.addEventListener('keydown', onKey, true);
   window.addEventListener('blur', close);

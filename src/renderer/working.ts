@@ -93,10 +93,8 @@ export class WorkingLine {
   private background: string[] = [];
   private mode: 'busy' | 'waiting' | 'background' = 'busy';
 
-  constructor(compact: boolean) {
-    this.root.append(this.glyph, this.verb, this.meta);
-    if (compact) this.root.classList.add('compact');
-    else this.root.append(h('span', 'working-hint', 'Échap pour interrompre'));
+  constructor() {
+    this.root.append(this.glyph, this.verb, this.meta, h('span', 'working-hint', 'Échap pour interrompre'));
     this.root.hidden = true;
   }
 
@@ -127,10 +125,6 @@ export class WorkingLine {
     active.add(this);
     startTicker();
     this.tick(Date.now());
-  }
-
-  stop(): void {
-    active.delete(this);
   }
 
   tick(now: number): void {

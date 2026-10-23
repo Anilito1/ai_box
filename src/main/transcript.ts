@@ -1,4 +1,5 @@
 import { IMAGE_TYPES, type ChatItem } from '../shared/types';
+import { MASTER_NAME } from './prompts';
 
 // Converts Anthropic message content blocks (live SDK frames or stored transcripts) into chat items.
 
@@ -92,6 +93,27 @@ export function assistantItems(blocks: Block[], baseId: string, textId?: string)
 const PEER = /<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message>/;
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '';
 
+/** First line of a message the hub delivers on someone's behalf as a user turn, and who it is shown from. */
+export const TAGS = {
+  mission: (worker: string) => `[Mission du maître — tu es le worker "${worker}"]`,
+  master: '[Message du maître]',
+  hub: '[Hub]',
+} as const;
+const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Hub)\]\s*/;
+/** Appended for each image saved to disk, so the model can hand its path to another session. */
+export const capturedLine = (path: string) => `[Capture jointe : ${path}]`;
+const CAPTURED = /^\[Capture jointe : [^\]\n]+\]\n?/gm;
+
+/** Text as the user sees it: without the saved-image lines the model alone needs. */
+export const visibleText = (text: string) => text.replace(CAPTURED, '').trim();
+
+/** Sender of a hub-delivered message (the master, or "hub"), and its text without the tag; null for a user message. */
+export function taggedSender(text: string): { from: string; text: string } | null {
+  const m = TAGGED.exec(text);
+  if (!m) return null;
+  return { from: m[1] === 'Hub' ? 'hub' : MASTER_NAME, text: text.slice(m[0].length) };
+}
+
 /** data: URLs of the base64 images of a user message. */
 function imagesOf(blocks: Block[]): string[] {
   return blocks.flatMap((b) => {
@@ -101,7 +123,7 @@ function imagesOf(blocks: Block[]): string[] {
   });
 }
 
-/** Text and images the user (or a peer session) sent, from a stored transcript entry. */
+/** Text and images the user, a peer session or the hub sent, from a stored transcript entry. */
 export function userTextItem(blocks: Block[], id: string): Extract<ChatItem, { kind: 'user' | 'peer' }> | null {
   const text = blocks
     .filter((b) => b.type === 'text')
@@ -112,5 +134,7 @@ export function userTextItem(blocks: Block[], id: string): Extract<ChatItem, { k
   if ((!text && images.length === 0) || /^(<system-reminder>|<command-|<local-command|Caveat:)/.test(text)) return null;
   const peer = PEER.exec(text);
   if (peer) return { kind: 'peer', id, from: attr(peer[1], 'from-name') || attr(peer[1], 'from'), text: peer[2].trim() };
-  return { kind: 'user', id, text, images };
+  const tagged = taggedSender(text);
+  if (tagged) return { kind: 'peer', id, ...tagged };
+  return { kind: 'user', id, text: visibleText(text), images };
 }
