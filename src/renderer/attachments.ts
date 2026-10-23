@@ -28,20 +28,13 @@ async function sniff(blob: Blob): Promise<ImageType | null> {
   return null;
 }
 
-function decode(file: Blob): Promise<HTMLImageElement> {
-  const url = URL.createObjectURL(file);
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Image illisible'));
-    img.src = url;
-  }).finally(() => URL.revokeObjectURL(url));
-}
+// Decoded straight from the bytes: an <img> on a blob: URL would be blocked by the page's CSP (img-src 'self' data:).
+const decode = (file: Blob): Promise<ImageBitmap> => createImageBitmap(file).catch(() => Promise.reject(new Error('Image illisible')));
 
-function encode(img: HTMLImageElement, scale: number, type: 'image/png' | 'image/jpeg'): Promise<Blob> {
+function encode(img: ImageBitmap, scale: number, type: 'image/png' | 'image/jpeg'): Promise<Blob> {
   const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
   const ctx = canvas.getContext('2d');
   if (!ctx) return Promise.reject(new Error('Canvas indisponible'));
   if (type === 'image/jpeg') {
@@ -55,19 +48,23 @@ function encode(img: HTMLImageElement, scale: number, type: 'image/png' | 'image
 /** A pasted, dropped or picked image, kept as is when the API accepts it, else downscaled and re-encoded. */
 export async function toAttachment(file: Blob): Promise<Attachment> {
   const img = await decode(file);
-  const edge = Math.max(img.naturalWidth, img.naturalHeight);
   const max = ATTACH_LIMITS.imageBytes;
   let blob: Blob = file;
   let type = await sniff(file);
-  if (!type || file.size > max || edge > MAX_EDGE) {
-    const scale = Math.min(1, MAX_EDGE / edge);
-    blob = await encode(img, scale, 'image/png');
-    type = 'image/png';
-    if (blob.size > max) {
-      blob = await encode(img, scale, 'image/jpeg');
-      type = 'image/jpeg';
+  try {
+    const edge = Math.max(img.width, img.height);
+    if (!type || file.size > max || edge > MAX_EDGE) {
+      const scale = Math.min(1, MAX_EDGE / edge);
+      blob = await encode(img, scale, 'image/png');
+      type = 'image/png';
+      if (blob.size > max) {
+        blob = await encode(img, scale, 'image/jpeg');
+        type = 'image/jpeg';
+      }
+      if (blob.size > max) throw new Error('Image trop lourde, même compressée.');
     }
-    if (blob.size > max) throw new Error('Image trop lourde, même compressée.');
+  } finally {
+    img.close();
   }
   const data = await readBase64(blob);
   return { image: { mediaType: type, data }, url: `data:${type};base64,${data}` };
