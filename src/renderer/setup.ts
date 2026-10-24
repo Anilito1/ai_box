@@ -1063,7 +1063,7 @@ export class SetupView {
 
   private agentList(files: AgentFile[]): HTMLElement {
     const f = this.field(t('team.agents'), t('team.agents.hint'));
-    const box = h('div', 'setup-repos');
+    const box = h('div', 'setup-repos team-agents');
     if (files.length === 0) box.append(h('div', 'setup-hint', t('team.agents.none')));
     for (const file of files) {
       const row = h('div', 'setup-repo remote');
@@ -1071,7 +1071,7 @@ export class SetupView {
       const text = h('span', 'setup-repo-text');
       const title = h('span', 'setup-repo-title');
       title.append(h('b', '', file.role.name), h('span', 'setup-tag', file.scope === 'user' ? t('team.agents.user') : file.scope));
-      text.append(title, h('span', '', file.role.description || folderName(file.path)));
+      text.append(title, h('span', 'team-agent-desc', file.role.description));
       if (file.ignored.length > 0) text.append(h('span', 'team-ignored', t('team.agents.ignored', { list: file.ignored.map((d) => t(`team.agents.drop.${d}`)).join(', ') })));
       row.append(text, this.button(t('team.agents.use'), 'btn ghost small', () => this.edit({ ...file.role, id: '' })));
       box.append(row);
