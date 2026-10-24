@@ -37,7 +37,7 @@ interface Card {
 }
 
 const cards = new Map<string, Card>();
-const repoPanels = new Map<string, RepoPanel>();
+const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
 let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null };
 // Worker whose conversation is open beside the master; null = the master alone.
@@ -163,7 +163,8 @@ closedGroup.addEventListener('toggle', () => {
 });
 
 function renderRepos(): void {
-  for (const panel of repoPanels.values()) panel.setWorkers(snapshot.sessions);
+  repoPanel.setWorkers(snapshot.sessions);
+  repoPanel.setFocus(snapshot.sessions.find((s) => s.id === opened)?.cwd ?? null);
 }
 
 // ---------- status bar ----------
@@ -302,15 +303,7 @@ hub.onItems((id, items, reset) => {
   if (s) renderCard(s);
 });
 hub.onEvent((id, kind) => clawdEvent(id, kind));
-hub.onRepo((status) => {
-  let panel = repoPanels.get(status.path);
-  if (!panel) {
-    panel = new RepoPanel(hub);
-    repoPanels.set(status.path, panel);
-    reposRoot.append(panel.root);
-  }
-  panel.update(status);
-  panel.setWorkers(snapshot.sessions);
-});
+reposRoot.append(repoPanel.root);
+hub.onRepo((status) => repoPanel.update(status));
 hub.ready();
 masterView.focus();

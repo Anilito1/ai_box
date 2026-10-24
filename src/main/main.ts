@@ -15,6 +15,7 @@ import {
 } from '../shared/types';
 import { loadConfig, mainRepoPath } from './config';
 import { RepoWatcher } from './repoStatus';
+import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { SessionManager } from './sessions';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -109,8 +110,6 @@ function parseImages(value: unknown): ImageInput[] | null {
 }
 
 function registerIpc(mgr: SessionManager, repos: RepoWatcher[]): void {
-  // Only the configured repos: a path from the renderer never reaches git otherwise.
-  const repoAt = (path: unknown) => repos.find((r) => r.path === path);
   ipcMain.on('hub:ready', (e) => {
     e.sender.send('hub:snapshot', mgr.snapshot());
     for (const [id, items] of mgr.allItems()) e.sender.send('hub:items', id, items, true);
@@ -153,8 +152,29 @@ function registerIpc(mgr: SessionManager, repos: RepoWatcher[]): void {
   ipcMain.on('session:open', (_e, id: unknown) => {
     if (isStr(id)) mgr.open(id);
   });
-  ipcMain.on('repo:refresh', (_e, path: unknown) => void repoAt(path)?.fetch());
-  ipcMain.on('repo:pull', (_e, path: unknown) => void repoAt(path)?.pull());
+  // Only a checkout (main folder or worktree) listed by one of the configured repos: no other folder ever reaches git.
+  const checkout = (path: unknown) => {
+    const repo = repos.find((r) => r.tree(path));
+    if (!repo || !isStr(path)) throw new Error('Dossier inconnu du Hub');
+    return { repo, path };
+  };
+  ipcMain.handle('repo:graph', (_e, path: unknown, filter: unknown, limit: unknown) => {
+    const c = checkout(path);
+    if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number') throw new Error('Requête invalide');
+    return readGraph(c.path, filter, limit);
+  });
+  ipcMain.handle('repo:details', (_e, path: unknown, id: unknown) => {
+    const c = checkout(path);
+    if (!isStr(id)) throw new Error('Requête invalide');
+    return readDetails(c.path, id);
+  });
+  ipcMain.handle('repo:branches', (_e, path: unknown) => readBranches(checkout(path).path));
+  ipcMain.handle('repo:action', (_e, path: unknown, action: unknown) => {
+    const c = checkout(path);
+    const parsed = parseAction(action);
+    if (!parsed) throw new Error('Action invalide');
+    return c.repo.act(c.path, parsed);
+  });
   ipcMain.on('open-external', (_e, url: unknown) => {
     if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
   });

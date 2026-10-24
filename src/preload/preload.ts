@@ -15,8 +15,10 @@ const api: HubApi = {
     ipcRenderer.on('hub:event', (_e, id: string, kind: HubEventKind) => cb(id, kind));
   },
   ready: () => ipcRenderer.send('hub:ready'),
-  refreshRepo: (path) => ipcRenderer.send('repo:refresh', path),
-  pullRepo: (path) => ipcRenderer.send('repo:pull', path),
+  repoGraph: (path, filter, limit) => ipcRenderer.invoke('repo:graph', path, filter, limit),
+  repoDetails: (path, id) => ipcRenderer.invoke('repo:details', path, id),
+  repoBranches: (path) => ipcRenderer.invoke('repo:branches', path),
+  repoAction: (path, action) => ipcRenderer.invoke('repo:action', path, action),
   open: (id) => ipcRenderer.send('session:open', id),
   send: (id, text, images) => ipcRenderer.send('session:send', id, text, images),
   interrupt: (id) => ipcRenderer.send('session:interrupt', id),

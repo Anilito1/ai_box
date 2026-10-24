@@ -183,83 +183,206 @@ button {
   line-height: 1.6;
 }
 
-/* ---------- main repos (bottom of the sidebar): main folder + worktrees ---------- */
+/* ---------- source control (bottom of the sidebar), shaped like VS Code's SCM view and Source Control Graph ---------- */
 .side-repos {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 8px;
-  max-height: 40vh;
-  padding: 0 10px 10px;
-  overflow-y: auto;
+  min-height: 0;
 }
 .side-repos:empty {
   display: none;
 }
-.side-repo {
+.scm,
+.scm-hover {
+  /* VS Code's graph palette (dark theme): HEAD's branch, its upstream, the base, then the lanes. */
+  --graph-ref: #3794ff;
+  --graph-remote: #b180d7;
+  --graph-base: #ea5c00;
+  --graph-1: #ffb000;
+  --graph-2: #dc267f;
+  --graph-3: #994f00;
+  --graph-4: #40b0a6;
+  --graph-5: #b66dff;
+  --scm-add: #81b88b;
+  --scm-del: #c74e39;
+}
+.scm {
+  position: relative;
   display: flex;
-  flex: none;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px 8px 11px;
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--ok);
-  border-radius: 8px;
-  background: var(--raise);
-  cursor: pointer;
-  transition: background 0.12s;
+  height: 44vh;
+  min-height: 120px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
 }
-.side-repo:hover {
-  background: var(--hover);
+.scm.collapsed {
+  height: auto !important;
+  min-height: 0;
 }
-.side-repo.behind {
-  border-left-color: var(--warn);
+.scm.collapsed .scm-body,
+.scm.collapsed .scm-resize {
+  display: none;
 }
-.side-repo.local {
-  border-left-color: var(--accent);
+.scm-resize {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 5px;
+  cursor: ns-resize;
+  transition: background 0.15s 0.1s;
 }
-.side-repo.error {
-  border-left-color: var(--danger);
-}
-.repo-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-.repo-head .ico {
-  width: 13px;
-  height: 13px;
-  color: var(--text-3);
-}
-.side-repo .dot {
-  background: var(--ok);
-}
-.side-repo.behind .dot {
-  background: var(--warn);
-  animation: pulse 1.6s ease-in-out infinite;
-}
-.side-repo.local .dot {
+.scm-resize:hover,
+.scm-resize.dragging {
   background: var(--accent);
 }
-.side-repo.error .dot {
-  background: var(--danger);
+
+.scm-head {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 6px 0 4px;
 }
-.repo-name {
-  flex: 1 0 auto;
-  max-width: 60%;
+.scm.working .scm-head::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
+  background-size: 35% 100%;
+  animation: scm-progress 1.1s linear infinite;
+}
+@keyframes scm-progress {
+  from {
+    background-position: -50% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+.scm-chevron {
+  width: 20px;
+}
+.scm-chevron .ico {
+  transition: transform 0.15s;
+}
+.scm.collapsed .scm-chevron .ico {
+  transform: rotate(-90deg);
+}
+.scm-repo {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.scm-repo:hover {
+  background: var(--hover);
+}
+.scm-repo-name {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.repo-refresh {
-  width: 22px;
-  height: 20px;
-  margin: -2px -4px -2px 0;
+.scm-repo-tree {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.repo-refresh.spinning .ico {
+.scm-actions {
+  display: flex;
+  flex: none;
+  gap: 1px;
+}
+.scm .icon-btn {
+  width: 22px;
+}
+.scm .icon-btn:disabled,
+.scm-sync:disabled,
+.menu-row:disabled {
+  opacity: 0.4;
+  background: transparent;
+  cursor: default;
+}
+.scm .icon-btn.spinning {
+  color: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* branch · sync · state */
+.scm-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  min-width: 0;
+  padding: 0 8px 6px 8px;
+}
+.scm-branch,
+.scm-sync {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.scm-branch {
+  max-width: 60%;
+}
+.scm-branch span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.scm-branch:hover,
+.scm-sync:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.scm-dirty {
+  flex: none;
+  color: var(--warn);
+}
+.scm-sync {
+  flex: none;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.scm-sync.active {
+  color: var(--text);
+}
+.scm-sync.spinning .ico {
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin {
@@ -267,81 +390,597 @@ button {
     transform: rotate(360deg);
   }
 }
-.repo-trees {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.repo-tree {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 6px;
-  min-width: 0;
-  padding: 1px 0 1px 15px;
-}
-.repo-tree:not(.main) {
-  padding-left: 22px;
-}
-.repo-tree:not(.main)::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  margin: 0 1px 0 -12px;
-  border-bottom: 1px solid var(--line-strong);
-  border-left: 1px solid var(--line-strong);
-  transform: translateY(-2px);
-}
-.repo-tree-text {
-  display: flex;
-  flex: 1;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.repo-label {
-  flex: none;
-  max-width: 50%;
-  overflow: hidden;
-  color: var(--text-2);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-}
-.repo-branch-name {
+.scm-state {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--text-3);
-  font: 11px/17px var(--font-mono);
+  font-size: 10.5px;
+  text-align: right;
+  white-space: nowrap;
   text-overflow: ellipsis;
 }
-.repo-tree.main .repo-branch-name {
-  color: var(--text-2);
-  font-size: 11.5px;
+.scm-state.error {
+  color: var(--danger);
 }
-.repo-badges {
-  display: flex;
-  flex: none;
-  gap: 3px;
-}
-.repo-workers {
+.scm-workers {
   flex-basis: 100%;
   overflow: hidden;
+  padding-left: 6px;
   color: #8fa8f0;
   font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.repo-more {
-  padding-left: 22px;
+
+.scm-body {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* errors and operations left in progress */
+.scm-alert:empty {
+  display: none;
+}
+.scm-alert-box {
+  position: relative;
+  margin: 0 10px 8px;
+  padding: 7px 8px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+.scm-alert-box.error {
+  border-color: rgba(229, 115, 111, 0.35);
+  background: rgba(229, 115, 111, 0.08);
+}
+.scm-alert-box.warn {
+  border-color: rgba(226, 176, 79, 0.35);
+  background: rgba(226, 176, 79, 0.08);
+}
+.scm-alert-box > .icon-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 18px;
+}
+.scm-alert-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 16px;
+  line-height: 1.4;
+}
+.scm-alert-git {
+  color: var(--text-2);
+  font: 10.5px/1.45 var(--font-mono);
+  word-break: break-word;
+}
+.scm-fixes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.scm-fix {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--raise);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.scm-fix:hover {
+  background: var(--hover);
+}
+.scm-alert-detail summary {
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+.scm-alert-detail pre {
+  max-height: 140px;
+  margin: 4px 0 0;
+  padding: 6px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-2);
+  font: 10.5px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+/* commit box */
+.scm-commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+.scm-message {
+  width: 100%;
+  min-height: 28px;
+  max-height: 120px;
+  padding: 5px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  outline: none;
+  background: var(--chat);
+  color: var(--text);
+  font: 12px/1.45 var(--font-ui);
+  resize: none;
+  user-select: text;
+}
+.scm-message:placeholder-shown {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.scm-message:focus {
+  border-color: var(--accent);
+}
+.scm-message.invalid {
+  border-color: var(--danger);
+}
+.scm-commit-buttons {
+  display: flex;
+  gap: 1px;
+}
+.scm-primary {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  border: 0;
+  border-radius: 5px 0 0 5px;
+  background: var(--navy);
+  color: #fff;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.scm-commit-buttons:has(.scm-primary-more[hidden]) .scm-primary {
+  border-radius: 5px;
+}
+.scm-primary:hover:not(:disabled) {
+  background: var(--navy-hover);
+}
+.scm-primary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.scm-primary-more {
+  flex: none;
+  width: 26px;
+  border-radius: 0 5px 5px 0;
+}
+.scm-commit-hint {
+  margin-top: -2px;
   color: var(--text-3);
   font-size: 10.5px;
 }
-.repo-error {
-  color: #f0a9a6;
+.scm-commit-hint:empty {
+  display: none;
+}
+
+/* section headers (Changes, Graph) */
+.scm-section {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 6px 0 4px;
+  background: var(--panel);
+}
+.scm-section-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.scm-section-toggle .ico {
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.scm-section-toggle.open .ico {
+  transform: none;
+}
+.scm-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--line-strong);
+  color: var(--text-2);
+  font: 500 10.5px/16px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: center;
+}
+.scm-filter {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+.scm-filter:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.scm-empty {
+  padding: 3px 12px 6px 28px;
+  color: var(--text-3);
   font-size: 11.5px;
 }
-.chip {
+.scm-empty.error {
+  color: #f0a9a6;
+}
+
+/* changes */
+.scm-group,
+.scm-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 22px;
+}
+.scm-group {
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.scm-group-name {
+  flex: 1;
+}
+.scm-file {
+  padding-left: 30px;
+}
+.scm-group:hover,
+.scm-file:hover {
+  background: var(--hover);
+}
+.scm-file-label {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.scm-file-name {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scm-file-dir {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+.scm-file-dir.error {
+  color: #f0a9a6;
+}
+.scm .scm-row-action {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  visibility: hidden;
+}
+.scm-file:hover .scm-row-action,
+.scm-group:hover .scm-row-action {
+  visibility: visible;
+}
+.scm-letter {
+  flex: none;
+  width: 12px;
+  color: var(--text-2);
+  font: 600 11px var(--font-mono);
+  text-align: center;
+}
+/* VS Code's git decorations */
+.l-M,
+.l-T {
+  color: #e2c08d;
+}
+.l-A,
+.l-U,
+.l-R,
+.l-C {
+  color: #73c991;
+}
+.l-D {
+  color: #c74e39;
+}
+.l-conflict {
+  color: #e4676b;
+}
+
+/* graph */
+.scm-commit,
+.scm-commit-file,
+.scm-load-more {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding-right: 8px;
+}
+.scm-commit {
+  cursor: pointer;
+}
+.scm-commit:hover,
+.scm-commit-file:hover {
+  background: var(--hover);
+}
+.scm-commit.expanded {
+  background: var(--raise);
+}
+.scm-graph-cell {
+  display: flex;
+  flex: none;
+  height: 22px;
+  padding-left: 6px;
+}
+.scm-graph-cell.stretch {
+  align-self: stretch;
+  height: auto;
+}
+.scm-graph-cell.stretch svg {
+  height: 100% !important;
+}
+.scm-graph-cell.stretch path {
+  vector-effect: non-scaling-stroke;
+}
+/* Circles get a ring of the background, like VS Code's. */
+.scm-graph-cell circle {
+  stroke: var(--panel);
+}
+.scm-commit:hover .scm-graph-cell circle:first-of-type {
+  stroke: transparent;
+}
+.scm-commit:hover .scm-graph-cell circle:nth-of-type(2) {
+  stroke: var(--hover);
+}
+.scm-commit.HEAD .scm-graph-cell circle:last-child,
+.scm-commit.incoming-changes .scm-graph-cell circle:last-child,
+.scm-commit.outgoing-changes .scm-graph-cell circle:last-child {
+  fill: var(--panel);
+}
+.scm-commit.expanded .scm-graph-cell circle:last-child {
+  fill: var(--raise);
+}
+.scm-commit.HEAD:hover .scm-graph-cell circle:last-child,
+.scm-commit.incoming-changes:hover .scm-graph-cell circle:last-child,
+.scm-commit.outgoing-changes:hover .scm-graph-cell circle:last-child {
+  fill: var(--hover);
+}
+.scm-commit.expanded .scm-graph-cell path:last-of-type {
+  stroke-width: 3px;
+}
+.scm-commit-label {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.scm-subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scm-author {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+}
+.scm-commit.HEAD .scm-subject {
+  font-weight: 600;
+}
+.scm-badges {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 3px;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+}
+.scm-badge {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 10px;
+  background: var(--line-strong);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.scm-badge.colored {
+  color: var(--panel);
+}
+.scm-badge .badge-ico {
+  width: 11px;
+  height: 11px;
+  stroke-width: 1.7;
+}
+.scm-badge-name {
+  max-width: 96px;
+  padding-right: 2px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+.scm-badge-count {
+  padding-left: 2px;
+  font-weight: 600;
+}
+.scm-commit-file {
+  gap: 6px;
+}
+.scm-commit-file .scm-file-label {
+  margin-left: 12px;
+}
+.scm-commit-file > .scm-file-dir {
+  margin-left: 12px;
+}
+.scm-file-stats {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  color: var(--text-3);
+  font: 10.5px var(--font-mono);
+}
+.scm-file-stats .add,
+.scm-hover-stats .add {
+  color: var(--scm-add);
+}
+.scm-file-stats .del,
+.scm-hover-stats .del {
+  color: var(--scm-del);
+}
+.scm-commit-body {
+  display: flex;
+  min-height: 22px;
+  padding-right: 8px;
+}
+.scm-body-text {
+  min-width: 0;
+  margin: 3px 0 5px 16px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.scm-load-more {
+  color: var(--accent);
+  cursor: pointer;
+}
+.scm-load-more .scm-graph-cell {
+  mask-image: linear-gradient(black, transparent);
+}
+.scm-load-more span {
+  flex: 1;
+  text-align: center;
+}
+
+/* commit hover, to the right of the sidebar */
+.scm-hover {
+  position: fixed;
+  z-index: 20;
+  display: none;
+  width: 380px;
+  max-width: calc(100vw - 300px);
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: #17181c;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  user-select: text;
+}
+.scm-hover.open {
+  display: block;
+}
+.scm-hover-dim {
+  color: var(--text-3);
+}
+.scm-hover-message {
+  max-height: 260px;
+  margin: 7px 0;
+  overflow: auto;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.scm-hover-stats,
+.scm-hover-refs,
+.scm-hover-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.scm-hover-stats {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.scm-hover-refs {
+  gap: 4px;
+}
+.scm-hover-foot {
+  gap: 4px;
+  color: var(--text-2);
+}
+.scm-hover-hash {
+  margin-right: 2px;
+  font: 11.5px var(--font-mono);
+}
+
+/* repo and branch pickers */
+.scm-chips {
+  display: flex;
+  flex: none;
+  gap: 3px;
+  margin-left: auto;
+  align-self: center;
+}
+.scm-chip {
   padding: 0 6px;
   border-radius: 9px;
   background: var(--line-strong);
@@ -350,125 +989,38 @@ button {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.chip.ok {
-  background: rgba(111, 191, 139, 0.14);
-  color: var(--ok);
-}
-.chip.warn {
+.scm-chip.warn {
   background: rgba(226, 176, 79, 0.16);
   color: var(--warn);
 }
-.chip.accent {
+.scm-chip.accent {
   background: var(--accent-soft);
   color: #8fa8f0;
 }
-.chip.danger {
+.scm-chip.danger {
   background: var(--del);
   color: var(--danger);
 }
-.repo-hash {
-  flex: none;
-  color: var(--text-3);
-  font: 11px var(--font-mono);
-  line-height: 17px;
+.scm-branch-picker {
+  width: 300px;
 }
-.repo-subject {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.scm-branch-input {
+  width: 100%;
+  height: 26px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px var(--font-ui);
+  user-select: text;
 }
-.repo-foot {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 10.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.repo-foot:empty {
-  display: none;
-}
-.repo-foot.error {
-  color: var(--danger);
+.scm-branch-input:focus {
+  border-color: var(--accent);
 }
 
-/* repo details popover */
-.repo-pop-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 6px 8px 4px;
-  color: var(--text-2);
-  font-size: 12px;
-  white-space: nowrap;
-}
-.repo-pop-title span {
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-}
-.repo-pop-tree {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-  white-space: nowrap;
-}
-.repo-pop-branch {
-  min-width: 0;
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  text-overflow: ellipsis;
-}
-.repo-sub {
-  padding: 4px 8px 2px;
-  color: var(--text-3);
-  font-size: 11px;
-}
-.repo-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-.repo-row:hover {
-  background: var(--hover);
-}
-.repo-commit-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.repo-meta {
-  color: var(--text-3);
-  font-size: 11px;
-}
-.repo-code {
-  flex: none;
-  width: 18px;
-  color: var(--warn);
-  font: 11px/17px var(--font-mono);
-  white-space: pre;
-}
-.repo-code.danger {
-  color: var(--danger);
-}
-.repo-path {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-2);
-  font: 11.5px/17px var(--font-mono);
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 .menu-note.error {
   color: #f0a9a6;
 }

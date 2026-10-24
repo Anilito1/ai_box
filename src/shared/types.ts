@@ -107,36 +107,42 @@ export type HubEventKind =
   | 'tests_failed'
   | 'cost_milestone';
 
-export interface RepoCommit {
-  hash: string;
-  subject: string;
-  author: string;
-  at: number;
-}
-
 export interface RepoFile {
-  /** Porcelain XY code: index then worktree status, e.g. "M ", " M", "??". */
+  /** Porcelain XY code: index then worktree status, e.g. "M.", ".M", "??", "UU" for a conflict. */
   code: string;
   path: string;
+  /** Former path of a rename or copy, else empty. */
+  from: string;
 }
+
+/** Operation left in progress in a checkout (after a conflict), else empty. */
+export type RepoState = '' | 'merge' | 'rebase' | 'cherry-pick' | 'revert';
 
 /** One checkout of a repo: its main folder or a linked worktree. */
 export interface RepoTree {
   path: string;
   /** Worktree folder without the repo's own prefix ("voice-order"); empty for the main folder. */
   label: string;
+  /** Checked-out branch, empty when detached. */
   branch: string;
-  /** Ref compared against: the upstream (main folder) or the remote's default branch (worktrees); empty when none. */
-  base: string;
+  /** Full hash of HEAD, empty before the first commit. */
+  oid: string;
+  /** Tracking branch ("origin/main"), empty when none; ahead/behind are measured against it. */
+  upstream: string;
   ahead: number;
   behind: number;
+  state: RepoState;
+  /** Every change of the working tree (capped), staged and unstaged. */
+  files: RepoFile[];
   changes: number;
   conflicts: number;
-  files: RepoFile[];
-  head: RepoCommit | null;
-  incoming: RepoCommit[];
-  outgoing: RepoCommit[];
   error: string;
+}
+
+/** Action in flight on one checkout of a repo. */
+export interface RepoBusy {
+  path: string;
+  action: RepoActionKind;
 }
 
 /** Live git state of a main repo shown at the bottom of the sidebar, with all its worktrees. */
@@ -145,13 +151,123 @@ export interface RepoStatus {
   path: string;
   /** Main folder first, then the linked worktrees. */
   trees: RepoTree[];
+  /** Changes whenever a branch, remote branch or tag moves: the graph reloads then. */
+  refsKey: string;
+  /** Web page of the origin remote (GitHub, GitLab…), empty when unknown. */
+  webUrl: string;
   fetching: boolean;
   fetchedAt: number | null;
   fetchError: string;
-  pulling: boolean;
-  pullError: string;
+  busy: RepoBusy | null;
   error: string;
 }
+
+export type GitRefKind = 'head' | 'branch' | 'remote' | 'tag';
+
+/** A ref decorating a commit; `id` is the full ref name ("refs/remotes/origin/main"). */
+export interface GitRef {
+  id: string;
+  name: string;
+  kind: GitRefKind;
+}
+
+export interface GraphCommit {
+  id: string;
+  parents: string[];
+  author: string;
+  email: string;
+  /** Author date, ms. */
+  at: number;
+  subject: string;
+  /** Full message, subject included. */
+  message: string;
+  refs: GitRef[];
+}
+
+/** A ref the graph is drawn around, and the commit it points at. */
+export interface GraphRef {
+  id: string;
+  name: string;
+  revision: string;
+}
+
+/** Auto: the current branch, its upstream, the base branch and the branches of the repo's worktrees. All: every branch, remote branch and tag. */
+export type GraphFilter = 'auto' | 'all';
+
+export interface RepoGraph {
+  commits: GraphCommit[];
+  /** Older commits exist beyond the limit. */
+  more: boolean;
+  /** HEAD: its branch, or the commit itself when detached; null before the first commit. */
+  head: GraphRef | null;
+  upstream: GraphRef | null;
+  base: GraphRef | null;
+  /** Common ancestor of HEAD and its upstream, empty when either is missing. */
+  mergeBase: string;
+  /** Full names of the refs the log was asked for (they get a badge). */
+  refs: string[];
+}
+
+export interface CommitFile {
+  /** A, M, D, R, C, T… */
+  status: string;
+  path: string;
+  from: string;
+  /** Lines added and deleted; -1 for a binary file. */
+  added: number;
+  deleted: number;
+}
+
+/** Files changed by a commit (against its first parent), or by the incoming/outgoing changes as a whole. */
+export interface CommitDetails {
+  files: CommitFile[];
+  added: number;
+  deleted: number;
+}
+
+export interface RepoBranch {
+  /** Full ref name: "refs/heads/feat/x" or "refs/remotes/origin/feat/x". */
+  ref: string;
+  name: string;
+  remote: boolean;
+  current: boolean;
+  upstream: string;
+  /** Folder of the worktree that has it checked out, else empty. */
+  worktree: string;
+  /** Last commit date, ms. */
+  at: number;
+}
+
+export type RepoAction =
+  | { kind: 'fetch' }
+  | { kind: 'pull' }
+  | { kind: 'push' }
+  | { kind: 'sync' }
+  | { kind: 'publish' }
+  | { kind: 'commit'; message: string; all: boolean; push: boolean }
+  | { kind: 'stage'; paths: string[] }
+  | { kind: 'unstage'; paths: string[] }
+  | { kind: 'stage-all' }
+  | { kind: 'unstage-all' }
+  | { kind: 'checkout'; ref: string }
+  | { kind: 'branch'; name: string }
+  | { kind: 'abort' };
+export type RepoActionKind = RepoAction['kind'];
+
+/** Why git refused, so the panel can say it plainly and offer the way out. */
+export type RepoErrorKind =
+  | 'no-upstream'
+  | 'rejected'
+  | 'diverged'
+  | 'conflict'
+  | 'local-changes'
+  | 'nothing-to-commit'
+  | 'auth'
+  | 'busy'
+  | 'invalid'
+  | 'other';
+
+export type RepoActionResult = { ok: true } | { ok: false; kind: RepoErrorKind; message: string; detail: string };
 
 export interface HubSnapshot {
   sessions: SessionView[];
@@ -189,8 +305,12 @@ export interface HubApi {
   onRepo(cb: (status: RepoStatus) => void): void;
   onEvent(cb: (sessionId: string, kind: HubEventKind) => void): void;
   ready(): void;
-  refreshRepo(path: string): void;
-  pullRepo(path: string): void;
+  /** The repo calls take the folder of a checkout (main folder or worktree) of a main repo. */
+  repoGraph(path: string, filter: GraphFilter, limit: number): Promise<RepoGraph>;
+  /** `id`: a commit hash, or "incoming" / "outgoing" for the changes since the merge base with the upstream. */
+  repoDetails(path: string, id: string): Promise<CommitDetails>;
+  repoBranches(path: string): Promise<RepoBranch[]>;
+  repoAction(path: string, action: RepoAction): Promise<RepoActionResult>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
   send(id: string, text: string, images: ImageInput[]): void;
