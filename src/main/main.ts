@@ -160,7 +160,7 @@ function registerIpc(mgr: SessionManager, repos: RepoWatcher[]): void {
   };
   ipcMain.handle('repo:graph', (_e, path: unknown, filter: unknown, limit: unknown) => {
     const c = checkout(path);
-    if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number') throw new Error('Requête invalide');
+    if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error('Requête invalide');
     return readGraph(c.path, filter, limit);
   });
   ipcMain.handle('repo:details', (_e, path: unknown, id: unknown) => {

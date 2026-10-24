@@ -183,7 +183,7 @@ button {
   line-height: 1.6;
 }
 
-/* ---------- source control (bottom of the sidebar), shaped like VS Code's SCM view and Source Control Graph ---------- */
+/* ---------- source control (bottom of the sidebar): VS Code's SCM view and Source Control Graph, denser ---------- */
 .side-repos {
   display: flex;
   flex: none;
@@ -211,10 +211,10 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
-  height: 44vh;
   min-height: 120px;
   border-top: 1px solid var(--line);
   background: var(--panel);
+  font-size: 11.5px;
 }
 .scm.collapsed {
   height: auto !important;
@@ -238,15 +238,49 @@ button {
 .scm-resize.dragging {
   background: var(--accent);
 }
+.scm .ico {
+  width: 12px;
+  height: 12px;
+}
+.scm .ico.small {
+  width: 11px;
+  height: 11px;
+}
+.scm .icon-btn {
+  width: 20px;
+  height: 18px;
+  border-radius: 3px;
+  color: var(--text-3);
+}
+.scm .icon-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.scm .icon-btn .ico {
+  width: 12px;
+  height: 12px;
+}
+.scm .icon-btn:disabled,
+.scm-sync:disabled,
+.menu-row:disabled {
+  opacity: 0.4;
+  background: transparent;
+  cursor: default;
+}
+.scm .running {
+  color: var(--accent) !important;
+  opacity: 1 !important;
+  animation: pulse 1.2s ease-in-out infinite;
+}
 
+/* the header line, alone when folded */
 .scm-head {
   position: relative;
   display: flex;
   flex: none;
   align-items: center;
-  gap: 2px;
-  height: 32px;
-  padding: 0 6px 0 4px;
+  gap: 1px;
+  height: 24px;
+  padding: 0 4px 0 2px;
 }
 .scm.working .scm-head::after {
   content: '';
@@ -254,7 +288,7 @@ button {
   right: 0;
   bottom: 0;
   left: 0;
-  height: 2px;
+  height: 1px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat;
   background-size: 35% 100%;
   animation: scm-progress 1.1s linear infinite;
@@ -267,8 +301,8 @@ button {
     background-position: 150% 0;
   }
 }
-.scm-chevron {
-  width: 20px;
+.scm .scm-chevron {
+  width: 16px;
 }
 .scm-chevron .ico {
   transition: transform 0.15s;
@@ -276,113 +310,84 @@ button {
 .scm.collapsed .scm-chevron .ico {
   transform: rotate(-90deg);
 }
-.scm-repo {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  height: 22px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-.scm-repo:hover {
-  background: var(--hover);
-}
-.scm-repo-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.scm-repo-tree {
-  flex: 0 100 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.scm-actions {
-  display: flex;
-  flex: none;
-  gap: 1px;
-}
-.scm .icon-btn {
-  width: 22px;
-}
-.scm .icon-btn:disabled,
-.scm-sync:disabled,
-.menu-row:disabled {
-  opacity: 0.4;
-  background: transparent;
-  cursor: default;
-}
-.scm .icon-btn.spinning {
-  color: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-/* branch · sync · state */
-.scm-bar {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 4px;
-  min-width: 0;
-  padding: 0 8px 6px 8px;
-}
+.scm-repo,
 .scm-branch,
 .scm-sync {
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
-  height: 20px;
-  padding: 0 6px;
+  height: 18px;
+  padding: 0 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--text-2);
   font-size: 11.5px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.scm-branch {
-  max-width: 60%;
-}
-.scm-branch span {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
+.scm-repo:hover,
 .scm-branch:hover,
 .scm-sync:hover:not(:disabled) {
   background: var(--hover);
   color: var(--text);
 }
+.scm-repo {
+  flex: 0 1 auto;
+}
+.scm-repo-name {
+  min-width: 24px;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+.scm-repo-tree {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+}
+.scm-branch {
+  flex: 0 100 auto;
+  color: var(--text-3);
+}
+.scm-branch span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .scm-dirty {
   flex: none;
   color: var(--warn);
 }
+.scm-spacer {
+  flex: 1 1 0;
+}
+/* Remote actions show on hover, like VS Code's view title actions. */
+.scm-actions {
+  display: flex;
+  flex: none;
+  visibility: hidden;
+}
+.scm:hover .scm-actions,
+.scm-actions:has(.running) {
+  visibility: visible;
+}
 .scm-sync {
   flex: none;
+  gap: 3px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 .scm-sync.active {
   color: var(--text);
 }
-.scm-sync.spinning .ico {
+.scm-sync.error .ico {
+  color: var(--danger);
+}
+.scm-sync.running .ico {
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin {
@@ -390,33 +395,11 @@ button {
     transform: rotate(360deg);
   }
 }
-.scm-state {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-3);
-  font-size: 10.5px;
-  text-align: right;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.scm-state.error {
-  color: var(--danger);
-}
-.scm-workers {
-  flex-basis: 100%;
-  overflow: hidden;
-  padding-left: 6px;
-  color: #8fa8f0;
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 
 .scm-body {
   flex: 1;
   min-height: 0;
-  padding-bottom: 6px;
+  padding-bottom: 4px;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -427,11 +410,11 @@ button {
 }
 .scm-alert-box {
   position: relative;
-  margin: 0 10px 8px;
-  padding: 7px 8px;
+  margin: 2px 8px 6px;
+  padding: 5px 7px;
   border: 1px solid;
-  border-radius: 6px;
-  font-size: 11.5px;
+  border-radius: 5px;
+  font-size: 11px;
 }
 .scm-alert-box.error {
   border-color: rgba(229, 115, 111, 0.35);
@@ -443,82 +426,94 @@ button {
 }
 .scm-alert-box > .icon-btn {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 20px;
-  height: 18px;
+  top: 2px;
+  right: 2px;
 }
 .scm-alert-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   padding-right: 16px;
-  line-height: 1.4;
+  line-height: 1.35;
+}
+.scm-alert-text b {
+  font-weight: 600;
 }
 .scm-alert-git {
   color: var(--text-2);
-  font: 10.5px/1.45 var(--font-mono);
+  font: 10px/1.4 var(--font-mono);
   word-break: break-word;
 }
 .scm-fixes {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 7px;
+  gap: 4px;
+  margin-top: 5px;
 }
 .scm-fix {
   display: flex;
   align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
   border: 1px solid var(--line-strong);
-  border-radius: 5px;
+  border-radius: 3px;
   background: var(--raise);
-  font-size: 11.5px;
+  font-size: 11px;
   cursor: pointer;
 }
 .scm-fix:hover {
   background: var(--hover);
 }
 .scm-alert-detail summary {
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 10.5px;
   cursor: pointer;
 }
 .scm-alert-detail pre {
-  max-height: 140px;
-  margin: 4px 0 0;
-  padding: 6px;
+  max-height: 120px;
+  margin: 3px 0 0;
+  padding: 5px;
   overflow: auto;
-  border-radius: 4px;
+  border-radius: 3px;
   background: var(--bg);
   color: var(--text-2);
-  font: 10.5px/1.45 var(--font-mono);
+  font: 10px/1.4 var(--font-mono);
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
 }
 
-/* commit box */
+/* commit box: one line, check button inside its frame */
 .scm-commit-box {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0 10px 8px;
+  align-items: flex-start;
+  margin: 2px 8px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--chat);
+}
+.scm-commit-box[hidden] {
+  display: none;
+}
+.scm-commit-box:focus-within {
+  border-color: var(--accent);
+}
+.scm-commit-box.invalid {
+  border-color: var(--danger);
 }
 .scm-message {
-  width: 100%;
-  min-height: 28px;
-  max-height: 120px;
-  padding: 5px 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 5px;
+  flex: 1;
+  min-width: 0;
+  min-height: 20px;
+  max-height: 100px;
+  padding: 3px 2px 3px 6px;
+  border: 0;
   outline: none;
-  background: var(--chat);
+  background: transparent;
   color: var(--text);
-  font: 12px/1.45 var(--font-ui);
+  font: 11.5px/14px var(--font-ui);
   resize: none;
   user-select: text;
 }
@@ -527,54 +522,10 @@ button {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.scm-message:focus {
-  border-color: var(--accent);
-}
-.scm-message.invalid {
-  border-color: var(--danger);
-}
-.scm-commit-buttons {
-  display: flex;
-  gap: 1px;
-}
-.scm-primary {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 0;
-  height: 26px;
-  border: 0;
-  border-radius: 5px 0 0 5px;
-  background: var(--navy);
-  color: #fff;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.scm-commit-buttons:has(.scm-primary-more[hidden]) .scm-primary {
-  border-radius: 5px;
-}
-.scm-primary:hover:not(:disabled) {
-  background: var(--navy-hover);
-}
-.scm-primary:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.scm-primary-more {
+.scm .scm-commit-btn {
   flex: none;
-  width: 26px;
-  border-radius: 0 5px 5px 0;
-}
-.scm-commit-hint {
-  margin-top: -2px;
-  color: var(--text-3);
-  font-size: 10.5px;
-}
-.scm-commit-hint:empty {
-  display: none;
+  margin: 1px 1px 0 0;
+  color: var(--accent);
 }
 
 /* section headers (Changes, Graph) */
@@ -584,28 +535,33 @@ button {
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px 0 4px;
+  height: 20px;
+  padding: 0 4px 0 2px;
   background: var(--panel);
+}
+.scm-section[hidden] {
+  display: none;
 }
 .scm-section-toggle {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  height: 22px;
-  padding: 0 4px;
+  height: 18px;
+  padding: 0 2px;
   border: 0;
   background: transparent;
-  color: var(--text-2);
-  font-size: 10.5px;
+  color: var(--text-3);
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.09em;
+  letter-spacing: 0.08em;
   text-align: left;
   text-transform: uppercase;
   cursor: pointer;
+}
+.scm-section-toggle:hover {
+  color: var(--text-2);
 }
 .scm-section-toggle .ico {
   transform: rotate(-90deg);
@@ -615,12 +571,13 @@ button {
   transform: none;
 }
 .scm-count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
+  min-width: 14px;
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 7px;
   background: var(--line-strong);
   color: var(--text-2);
-  font: 500 10.5px/16px var(--font-ui);
+  font: 500 10px/14px var(--font-ui);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
   text-align: center;
@@ -629,14 +586,14 @@ button {
   display: flex;
   flex: none;
   align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px;
+  gap: 3px;
+  height: 18px;
+  padding: 0 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 10.5px;
   cursor: pointer;
 }
 .scm-filter:hover {
@@ -644,9 +601,9 @@ button {
   color: var(--text);
 }
 .scm-empty {
-  padding: 3px 12px 6px 28px;
+  padding: 2px 10px 4px 22px;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 .scm-empty.error {
   color: #f0a9a6;
@@ -657,20 +614,20 @@ button {
 .scm-file {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 8px 0 22px;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px 0 16px;
 }
 .scm-group {
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
 }
 .scm-group-name {
   flex: 1;
 }
 .scm-file {
-  padding-left: 30px;
+  padding-left: 24px;
 }
 .scm-group:hover,
 .scm-file:hover {
@@ -680,7 +637,7 @@ button {
   display: flex;
   flex: 1;
   align-items: baseline;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -695,7 +652,7 @@ button {
   min-width: 0;
   overflow: hidden;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: 10.5px;
   text-overflow: ellipsis;
 }
 .scm-file-dir.error {
@@ -703,8 +660,8 @@ button {
 }
 .scm .scm-row-action {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   visibility: hidden;
 }
 .scm-file:hover .scm-row-action,
@@ -713,9 +670,9 @@ button {
 }
 .scm-letter {
   flex: none;
-  width: 12px;
+  width: 10px;
   color: var(--text-2);
-  font: 600 11px var(--font-mono);
+  font: 600 10.5px var(--font-mono);
   text-align: center;
 }
 /* VS Code's git decorations */
@@ -736,14 +693,14 @@ button {
   color: #e4676b;
 }
 
-/* graph */
+/* graph: 18 px rows */
 .scm-commit,
 .scm-commit-file,
 .scm-load-more {
   display: flex;
   align-items: center;
-  height: 22px;
-  padding-right: 8px;
+  height: 18px;
+  padding-right: 6px;
 }
 .scm-commit {
   cursor: pointer;
@@ -758,8 +715,11 @@ button {
 .scm-graph-cell {
   display: flex;
   flex: none;
-  height: 22px;
-  padding-left: 6px;
+  height: 18px;
+  padding-left: 3px;
+}
+.scm-graph-cell path {
+  vector-effect: non-scaling-stroke;
 }
 .scm-graph-cell.stretch {
   align-self: stretch;
@@ -767,9 +727,6 @@ button {
 }
 .scm-graph-cell.stretch svg {
   height: 100% !important;
-}
-.scm-graph-cell.stretch path {
-  vector-effect: non-scaling-stroke;
 }
 /* Circles get a ring of the background, like VS Code's. */
 .scm-graph-cell circle {
@@ -801,9 +758,9 @@ button {
   display: flex;
   flex: 1;
   align-items: baseline;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
-  margin-left: 4px;
+  margin-left: 3px;
   overflow: hidden;
   white-space: nowrap;
 }
@@ -818,7 +775,7 @@ button {
   min-width: 0;
   overflow: hidden;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: 10.5px;
   text-overflow: ellipsis;
 }
 .scm-commit.HEAD .scm-subject {
@@ -827,9 +784,9 @@ button {
 .scm-badges {
   display: flex;
   flex: 0 1 auto;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
-  margin-left: 4px;
+  margin-left: 3px;
   overflow: hidden;
 }
 .scm-badge {
@@ -837,49 +794,47 @@ button {
   flex: none;
   align-items: center;
   gap: 2px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 10px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
   background: var(--line-strong);
   color: var(--text);
-  font-size: 11px;
-  line-height: 18px;
+  font-size: 10px;
+  line-height: 14px;
   white-space: nowrap;
 }
 .scm-badge.colored {
   color: var(--panel);
 }
 .scm-badge .badge-ico {
-  width: 11px;
-  height: 11px;
-  stroke-width: 1.7;
+  width: 9px;
+  height: 9px;
+  stroke-width: 1.8;
 }
 .scm-badge-name {
-  max-width: 96px;
-  padding-right: 2px;
+  max-width: 80px;
+  padding-right: 1px;
   overflow: hidden;
   font-weight: 600;
   text-overflow: ellipsis;
 }
 .scm-badge-count {
-  padding-left: 2px;
+  padding-left: 1px;
   font-weight: 600;
 }
 .scm-commit-file {
-  gap: 6px;
+  gap: 5px;
 }
-.scm-commit-file .scm-file-label {
-  margin-left: 12px;
-}
+.scm-commit-file .scm-file-label,
 .scm-commit-file > .scm-file-dir {
-  margin-left: 12px;
+  margin-left: 10px;
 }
 .scm-file-stats {
   display: flex;
   flex: none;
-  gap: 4px;
+  gap: 3px;
   color: var(--text-3);
-  font: 10.5px var(--font-mono);
+  font: 10px var(--font-mono);
 }
 .scm-file-stats .add,
 .scm-hover-stats .add {
@@ -891,21 +846,22 @@ button {
 }
 .scm-commit-body {
   display: flex;
-  min-height: 22px;
-  padding-right: 8px;
+  min-height: 18px;
+  padding-right: 6px;
 }
 .scm-body-text {
   min-width: 0;
-  margin: 3px 0 5px 16px;
+  margin: 2px 0 4px 13px;
   color: var(--text-2);
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
 }
 .scm-load-more {
   color: var(--accent);
+  font-size: 11px;
   cursor: pointer;
 }
 .scm-load-more .scm-graph-cell {
@@ -921,14 +877,14 @@ button {
   position: fixed;
   z-index: 20;
   display: none;
-  width: 380px;
+  width: 340px;
   max-width: calc(100vw - 300px);
-  padding: 9px 11px;
+  padding: 7px 9px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   background: #17181c;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  font-size: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  font-size: 11.5px;
   user-select: text;
 }
 .scm-hover.open {
@@ -938,10 +894,10 @@ button {
   color: var(--text-3);
 }
 .scm-hover-message {
-  max-height: 260px;
-  margin: 7px 0;
+  max-height: 240px;
+  margin: 5px 0;
   overflow: auto;
-  line-height: 1.45;
+  line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -951,28 +907,48 @@ button {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
-  margin-top: 6px;
-  padding-top: 6px;
+  gap: 3px 7px;
+  margin-top: 5px;
+  padding-top: 5px;
   border-top: 1px solid var(--line);
 }
 .scm-hover-stats {
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 .scm-hover-refs {
-  gap: 4px;
+  gap: 3px;
+}
+.scm-hover .scm-badge {
+  height: 16px;
+  padding: 0 4px;
+  font-size: 10.5px;
 }
 .scm-hover-foot {
-  gap: 4px;
+  gap: 3px;
   color: var(--text-2);
 }
 .scm-hover-hash {
   margin-right: 2px;
-  font: 11.5px var(--font-mono);
+  font: 11px var(--font-mono);
 }
 
 /* repo and branch pickers */
+.scm-pick-repo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.scm-pick-repo .icon-btn {
+  width: 18px;
+  height: 16px;
+  margin: -2px -4px -2px 0;
+  color: var(--text-3);
+}
+.scm-pick-repo .icon-btn .ico {
+  width: 10px;
+  height: 10px;
+}
 .scm-chips {
   display: flex;
   flex: none;
@@ -981,11 +957,11 @@ button {
   align-self: center;
 }
 .scm-chip {
-  padding: 0 6px;
-  border-radius: 9px;
+  padding: 0 5px;
+  border-radius: 7px;
   background: var(--line-strong);
   color: var(--text-2);
-  font: 500 10.5px/16px var(--font-ui);
+  font: 500 10px/14px var(--font-ui);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1002,15 +978,15 @@ button {
   color: var(--danger);
 }
 .scm-branch-picker {
-  width: 300px;
+  width: 280px;
 }
 .scm-branch-input {
   width: 100%;
-  height: 26px;
+  height: 24px;
   margin-bottom: 4px;
-  padding: 0 8px;
+  padding: 0 7px;
   border: 1px solid var(--line-strong);
-  border-radius: 5px;
+  border-radius: 4px;
   outline: none;
   background: var(--bg);
   color: var(--text);
