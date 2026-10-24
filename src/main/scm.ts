@@ -244,11 +244,12 @@ class ActionError extends Error {
   }
 }
 
+/** The panel shows the kind's sentence (or an ActionError's own one); git's words only go to its "Details" fold. */
 function classify(err: unknown): RepoActionResult {
   if (err instanceof ActionError) return { ok: false, kind: err.kind, message: err.message, detail: '' };
-  const message = err instanceof Error ? err.message : String(err);
-  const detail = err instanceof GitError ? err.stderr : '';
-  const text = `${message}\n${detail}`;
+  const raw = err instanceof Error ? err.message : String(err);
+  const stderr = err instanceof GitError ? err.stderr : '';
+  const text = `${raw}\n${stderr}`;
   const kind: RepoErrorKind = /has no upstream branch|no tracking information|no upstream configured/i.test(text)
     ? 'no-upstream'
     : /\[rejected\]|non-fast-forward|fetch first|Updates were rejected/i.test(text)
@@ -264,7 +265,10 @@ function classify(err: unknown): RepoActionResult {
               : /Authentication failed|could not read Username|Permission denied|terminal prompts disabled|returned error: 403/i.test(text)
                 ? 'auth'
                 : 'other';
-  return { ok: false, kind, message, detail: detail.slice(0, 4000) };
+  // A GitError without output carries the hub's own sentence (git not installed, too slow): that one is shown.
+  if (err instanceof GitError && !stderr) return { ok: false, kind, message: raw, detail: '' };
+  const detail = stderr.includes(raw.trim()) ? stderr : `${stderr}\n${raw}`;
+  return { ok: false, kind, message: '', detail: detail.trim().slice(0, 4000) };
 }
 
 // Untracked folders count as one entry (like `git status`): listing every file in them would cost each poll.

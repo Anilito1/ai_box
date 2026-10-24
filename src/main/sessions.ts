@@ -49,6 +49,7 @@ import {
   type TeamRole,
 } from '../shared/types';
 import { mainRepoPath, masterCwd, prepareRole, type HubConfig } from './config';
+import { assistantError, humanError } from './errors';
 import { lang, t } from './i18n';
 import {
   defaultMasterName,
@@ -381,7 +382,7 @@ export class SessionManager extends EventEmitter {
     try {
       paths = this.saveImages(images);
     } catch (err) {
-      this.notice(s, t('notice.imagesNotSaved', { error: errorText(err) }), 'error');
+      this.notice(s, t('notice.imagesNotSaved'), 'error', errorText(err));
     }
     const textForModel = [shown, ...paths.map(capturedLine)].filter(Boolean).join('\n');
     // The user took the worker over: its turn no longer answers the master, and it stays open.
@@ -471,7 +472,7 @@ export class SessionManager extends EventEmitter {
     s.query
       ?.setModel(model)
       .then(() => (s.query ? this.refreshContext(s, s.query) : undefined))
-      .catch((err: unknown) => this.notice(s, t('notice.modelRefused', { error: errorText(err) }), 'error'));
+      .catch((err: unknown) => this.notice(s, t('notice.modelRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -481,7 +482,7 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
-    s.query?.applyFlagSettings({ effortLevel: effort }).catch((err: unknown) => this.notice(s, t('notice.effortRefused', { error: errorText(err) }), 'error'));
+    s.query?.applyFlagSettings({ effortLevel: effort }).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -492,7 +493,7 @@ export class SessionManager extends EventEmitter {
     const bypasses = (m: Mode | null) => m === 'bypassPermissions';
     if (bypasses(mode) !== bypasses(this.hubMode())) this.notice(s, t('notice.modeMismatch'), 'info');
     s.mode = mode;
-    s.query?.setPermissionMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused', { error: errorText(err) }), 'error'));
+    s.query?.setPermissionMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -650,10 +651,10 @@ export class SessionManager extends EventEmitter {
     if (this.quitting) return;
     // The executable the SDK expects is missing: the fix is in the settings, not in the conversation.
     const noClaude = !this.opts.executable() || /Native CLI binary|pathToClaudeCodeExecutable|spawn \S*claude\S* ENOENT/i.test(failure);
-    s.error = noClaude ? t('error.noClaude') : oneLine(failure, 300);
+    s.error = noClaude ? t('error.noClaude') : humanError(failure);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
-    else this.notice(s, t('notice.stopped', { error: failure }), 'error');
+    else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: s.name, error: oneLine(failure, 400) }));
   }
 
@@ -764,7 +765,7 @@ export class SessionManager extends EventEmitter {
           s.owesReport = false;
         }
         if (blocks.some((b) => b.type === 'tool_use' && OUTGOING.test(String(b.name)))) this.event(s, 'message_out');
-        if (msg.error) this.notice(s, t('notice.error', { error: msg.error }), 'error');
+        if (msg.error) this.notice(s, assistantError(msg.error), 'error', msg.error);
         const u = msg.message.usage;
         const tokens = (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
         if (tokens > 0) this.setContext(s, tokens, s.metrics?.contextSize ?? 0);
@@ -1140,8 +1141,9 @@ export class SessionManager extends EventEmitter {
     }, 40);
   }
 
-  private notice(s: Session, text: string, tone: 'info' | 'error'): void {
-    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text, tone });
+  /** `detail`: the raw message behind it (an error), folded under "Details" in the conversation. */
+  private notice(s: Session, text: string, tone: 'info' | 'error', detail = ''): void {
+    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text, tone, ...(detail ? { detail } : {}) });
     this.changed();
   }
 

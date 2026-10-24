@@ -24,7 +24,6 @@ const isStr = (v: unknown, max: number, re?: RegExp): v is string => typeof v ==
 const isPath = (v: unknown): v is string => isStr(v, 1000) && isAbsolute(v) && !v.includes('\0');
 const isEffort = (v: unknown): v is Effort | '' => v === '' || EFFORTS.includes(v as Effort);
 const MODEL = /^[\w.:[\]-]*$/;
-const REGION = /^[a-z0-9-]*$/;
 
 function defaults(lang: Lang): HubConfig {
   const found = USUAL_ROOTS.map((r) => join(homedir(), r)).filter(isDir);
@@ -33,8 +32,6 @@ function defaults(lang: Lang): HubConfig {
     onboarded: false,
     claudePath: '',
     provider: 'claude-code',
-    bedrock: { region: '', profile: '' },
-    vertex: { region: '', projectId: '' },
     workspaces: found.length > 0 ? found.slice(0, 1) : [homedir()],
     mainRepos: [],
     master: { model: '', effort: '' },
@@ -70,19 +67,9 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   };
 
   take('language', raw.language, isLang, (v) => (cfg.language = v));
+  // An access no longer offered (Amazon Bedrock, Google Vertex AI) fails this check: the file keeps the default, Claude
+  // Code's own sign-in, and the next save drops its old fields.
   take('provider', raw.provider, (v): v is HubConfig['provider'] => PROVIDERS.includes(v as HubConfig['provider']), (v) => (cfg.provider = v));
-  take(
-    'bedrock',
-    raw.bedrock,
-    (v): v is HubConfig['bedrock'] => isStr(obj(v).region, 40, REGION) && isStr(obj(v).profile, 64, /^[\w.@-]*$/),
-    (v) => (cfg.bedrock = { region: v.region, profile: v.profile }),
-  );
-  take(
-    'vertex',
-    raw.vertex,
-    (v): v is HubConfig['vertex'] => isStr(obj(v).region, 40, REGION) && isStr(obj(v).projectId, 64, REGION),
-    (v) => (cfg.vertex = { region: v.region, projectId: v.projectId }),
-  );
   take('workspaces', raw.workspaces, paths(20), (v) => (cfg.workspaces = v.length > 0 ? v.map((p) => resolve(p)) : cfg.workspaces));
   take('mainRepos', raw.mainRepos, paths(12), (v) => (cfg.mainRepos = v.map((p) => resolve(p))));
   take('master', raw.master, modelEffort, (v) => (cfg.master = { model: v.model, effort: v.effort }));

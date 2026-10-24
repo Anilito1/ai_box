@@ -17,7 +17,7 @@ import {
   type RepoTree,
   type SessionView,
 } from '../shared/types';
-import { ago, copyButton, displayName, h, icon, ICONS, openMenu } from './dom';
+import { ago, copyButton, displayName, errorNote, h, icon, ICONS, openMenu, techDetails } from './dom';
 import { LANG, PLATFORM, t, tn, type Key } from './i18n';
 import {
   BASE_REF_COLOR,
@@ -475,7 +475,7 @@ export class RepoPanel {
     const busy = repo.busy?.path === tree.path ? repo.busy.action : this.pending;
     return [
       ownUpstream(tree.branch, tree.upstream) ? t('scm.syncHint', { behind: tree.behind, ahead: tree.ahead, upstream: tree.upstream }) : t('scm.publishHint'),
-      busy ? t(BUSY[busy]) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t('scm.fetchFailed', { error: repo.fetchError }) : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
+      busy ? t(BUSY[busy]) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t(/Authentication failed|could not read Username|Permission denied|terminal prompts disabled|\b403\b/i.test(repo.fetchError) ? 'scm.fetchAuth' : 'scm.fetchFailed') : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -511,17 +511,14 @@ export class RepoPanel {
         this.renderAlert();
       });
       const text = h('div', 'scm-alert-text');
-      text.append(h('b', '', t(ERRORS[a.kind])), h('span', 'scm-alert-git', a.message));
+      text.append(h('b', '', t(ERRORS[a.kind])));
+      if (a.message) text.append(h('span', '', a.message));
       box.append(close, text);
       const fixes = h('div', 'scm-fixes');
       if (a.kind === 'no-upstream') fixes.append(fix(t('scm.publish'), ICONS.publish, { kind: 'publish' }));
       if (a.kind === 'rejected') fixes.append(fix(t('scm.sync'), ICONS.sync, { kind: 'sync' }));
       if (fixes.childElementCount) box.append(fixes);
-      if (a.detail && a.detail !== a.message) {
-        const more = h('details', 'scm-alert-detail');
-        more.append(h('summary', '', t('scm.details')), h('pre', '', a.detail));
-        box.append(more);
-      }
+      if (a.detail) box.append(techDetails(a.detail));
       items.push(box);
     }
     this.alertBox.replaceChildren(...items);
@@ -694,7 +691,7 @@ export class RepoPanel {
       return;
     }
     if (this.graphError) {
-      this.graphList.replaceChildren(h('div', 'scm-empty error', this.graphError));
+      this.graphList.replaceChildren(errorNote('scm-empty', t('scm.graphFailed'), this.graphError));
       return;
     }
     if (!this.graph) {
@@ -783,7 +780,7 @@ export class RepoPanel {
     rows.push(files);
     void this.detailsOf(vm.historyItem.id).then(
       (d) => files.replaceChildren(...d.files.map((f) => this.commitFileRow(f, columns, lane))),
-      (err: unknown) => files.replaceChildren(this.placeholderRow(columns, lane, h('span', 'scm-file-dir error', remoteError(err)))),
+      () => files.replaceChildren(this.placeholderRow(columns, lane, h('span', 'scm-file-dir error', t('scm.filesFailed')))),
     );
     return rows;
   }
@@ -925,7 +922,7 @@ export class RepoPanel {
           window.dispatchEvent(new CustomEvent('hub:remove-repo', { detail: repo.path }));
         }));
         menu.append(h('div', 'menu-sep'), label);
-        if (repo.error) menu.append(h('div', 'menu-note error', repo.error));
+        if (repo.error) menu.append(errorNote('menu-note', t('scm.repoFailed'), repo.error));
         for (const tree of repo.trees) {
           const workers = this.workersIn(tree.path);
           const hint = [tree.branch || (tree.oid ? t('scm.detached', { oid: tree.oid.slice(0, 7) }) : t('scm.noCommit')), workers.length ? t('scm.workers', { names: workers.join(', ') }) : '']
@@ -1045,7 +1042,7 @@ export class RepoPanel {
           branches = list;
           renderList();
         },
-        (err: unknown) => list.replaceChildren(h('div', 'menu-note error', remoteError(err))),
+        (err: unknown) => list.replaceChildren(errorNote('menu-note', t('scm.branchesFailed'), remoteError(err))),
       );
       window.setTimeout(() => input.focus(), 0);
     });
@@ -1064,7 +1061,7 @@ export class RepoPanel {
     try {
       result = await this.hub.repoAction(path, action);
     } catch (err) {
-      result = { ok: false, kind: 'other', message: remoteError(err), detail: '' };
+      result = { ok: false, kind: 'other', message: '', detail: remoteError(err) };
     }
     this.pending = null;
     this.renderLocks();

@@ -688,11 +688,6 @@ kbd,
 .scm-alert-text b {
   font-weight: 600;
 }
-.scm-alert-git {
-  color: var(--text-2);
-  font: 10px/1.4 var(--font-mono);
-  word-break: break-word;
-}
 .scm-fixes {
   display: flex;
   flex-wrap: wrap;
@@ -717,25 +712,6 @@ kbd,
 }
 .scm-fix:active {
   transform: scale(0.97);
-}
-.scm-alert-detail summary {
-  margin-top: var(--sp-1);
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-  cursor: pointer;
-}
-.scm-alert-detail pre {
-  max-height: 120px;
-  margin: var(--sp-1) 0 0;
-  padding: 6px;
-  overflow: auto;
-  border-radius: var(--r-xs);
-  background: var(--code-bg);
-  color: var(--text-2);
-  font: 10px/1.4 var(--font-mono);
-  white-space: pre-wrap;
-  word-break: break-word;
-  user-select: text;
 }
 
 /* commit box: one line, check button inside its frame */
@@ -3640,15 +3616,6 @@ kbd,
 .setup-status-detail {
   color: var(--text-2);
 }
-.setup-status-path {
-  flex-basis: 100%;
-  overflow: hidden;
-  color: var(--text-3);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .setup-status-problem {
   flex-basis: 100%;
   color: var(--warn);
@@ -3824,8 +3791,7 @@ kbd,
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4076,6 +4042,56 @@ kbd,
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+/* ---------- technical details behind an error (dom.ts techDetails): folded, copyable, never in the sentence ---------- */
+.tech-details {
+  position: relative;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+.tech-details summary {
+  width: fit-content;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.tech-details summary:hover {
+  color: var(--text-2);
+}
+.tech-details[open] > pre {
+  animation: reveal var(--dur-3) var(--ease-out);
+}
+.tech-details pre {
+  max-height: 160px;
+  margin: var(--sp-1) 0 0;
+  padding: 6px 32px 6px var(--sp-2);
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--code-bg);
+  color: var(--text-2);
+  font: 10.5px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.tech-details .tech-copy {
+  position: absolute;
+  top: 22px;
+  right: var(--sp-1);
+}
+.tech-details:not([open]) .tech-copy {
+  display: none;
+}
+.notice:has(.tech-details) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: min(420px, 100%);
+  border-radius: var(--r-md);
+}
+.notice .tech-details {
+  align-self: stretch;
 }
 
 /* ---------- failures ---------- */

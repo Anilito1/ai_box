@@ -3,6 +3,7 @@ import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_
 import {
   APP_NAME,
   EFFORTS,
+  PROVIDERS,
   type AgentFile,
   type ClaudeStatus,
   type Effort,
@@ -18,7 +19,7 @@ import {
   type SettingsView,
   type TeamRole,
 } from '../shared/types';
-import { copyButton, h, icon, ICONS } from './dom';
+import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 
 type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
@@ -31,7 +32,6 @@ const STEPS: Section[] = ['general', 'claude', 'github', 'workspace', 'repos', '
 // The team is never part of the first run: it starts empty, nothing imposed.
 const SECTIONS: Section[] = [...STEPS, 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
-const PROVIDER_OPTIONS: Provider[] = ['claude-code', 'api-key', 'bedrock', 'vertex'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
 /** Survives the reload a language change triggers, so the setup reopens where it was. */
@@ -60,6 +60,12 @@ function stepReached(): Section {
   } catch {
     return 'general';
   }
+}
+
+/** Folder names as a list shows them: the last part, with its parent when two would read the same. */
+function folderNames(paths: string[]): string[] {
+  const short = paths.map(folderName);
+  return paths.map((p, i) => (short.filter((s) => s === short[i]).length > 1 ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : short[i]));
 }
 
 const INSTALL = {
@@ -108,7 +114,8 @@ export class SetupView {
   private confirmDelete = '';
   /** Subagent files offered for import: null = list closed, [] = loading or none. */
   private agents: AgentFile[] | null = null;
-  private note: { text: string; tone: 'ok' | 'error' } | null = null;
+  /** `detail`: the raw words behind an error, folded under "Details". */
+  private note: { text: string; tone: 'ok' | 'error'; detail?: string } | null = null;
   private busy = false;
 
   constructor(
@@ -222,7 +229,7 @@ export class SetupView {
     const content = h('div', 'setup-content');
     this.sectionBody(content, v);
     body.append(content);
-    if (this.note) body.append(h('div', `setup-note ${this.note.tone}`, this.note.text));
+    if (this.note) body.append(this.note.tone === 'error' ? errorNote('setup-note', this.note.text, this.note.detail) : h('div', 'setup-note ok', this.note.text));
 
     const foot = h('div', 'setup-foot');
     if (this.mode === 'onboarding') {
@@ -271,15 +278,14 @@ export class SetupView {
     if (!(await this.flush(false))) return;
     if (!this.claude) await this.checkClaude();
     const c = this.claude;
-    if (!c?.executable) {
+    if (!c?.found) {
       this.section = 'claude';
       this.note = { text: t('setup.finish.noClaude'), tone: 'error' };
       return this.render();
     }
     const s = this.view?.settings;
-    const external = s?.provider === 'bedrock' || s?.provider === 'vertex';
     const noKey = s?.provider === 'api-key' && !this.view?.apiKeySet;
-    if (!this.startAnyway && (noKey || (!external && c.account?.ready !== true))) {
+    if (!this.startAnyway && (noKey || c.account?.ready !== true)) {
       this.startAnyway = true;
       this.note = { text: t('setup.finish.noAccess'), tone: 'error' };
       return this.render();
@@ -367,8 +373,8 @@ export class SetupView {
     return row;
   }
 
-  private flash(text: string, tone: 'ok' | 'error'): void {
-    this.note = { text, tone };
+  private flash(text: string, tone: 'ok' | 'error', detail = ''): void {
+    this.note = { text, tone, detail };
   }
 
   private async run<T>(task: () => Promise<T>): Promise<T> {
@@ -408,9 +414,15 @@ export class SetupView {
       cancelled: 'setup.err.cancelled',
     };
     if (known[code]) return t(known[code]);
-    if (/^http-\d+$/.test(code)) return t('setup.err.http', { status: code.slice(5) });
-    // A code nobody explained (an API's error name) is not shown as is; a sentence (git's own message) is.
-    return /^[\w.-]+$/.test(code) ? t('setup.err.unexpected') : code;
+    if (/^http-\d+$/.test(code)) return t('setup.err.http');
+    // A code nobody explained (an API's error name) or a raw message (git's own) is never shown as is.
+    return t('setup.err.unexpected');
+  }
+
+  /** What an error's "Details" fold holds: the raw words or the HTTP status behind the sentence, if any. */
+  private rawOf(code: string): string {
+    if (/^http-\d+$/.test(code)) return `HTTP ${code.slice(5)}`;
+    return code && !/^[\w.-]+$/.test(code) ? code : '';
   }
 
   // ---------- sections ----------
@@ -449,22 +461,22 @@ export class SetupView {
 
     const status = h('div', 'setup-status');
     const c = this.claude;
+    // Says whether Claude Code is connected, and with what: never where it is installed nor how it answered.
     if (this.checkingClaude || !c) {
       status.append(h('span', 'setup-spin'), h('span', '', t('setup.claude.checking')));
-    } else if (!c.executable) {
+    } else if (!c.found) {
       status.classList.add('error');
-      status.append(h('b', '', t('setup.claude.notFound')));
-    } else if (s.provider === 'bedrock' || s.provider === 'vertex') {
-      status.append(icon(ICONS.check), h('b', '', t('setup.claude.external')), h('span', 'setup-status-path', c.executable));
+      status.append(icon(ICONS.shield), h('b', '', t('setup.claude.notFound')));
     } else if (s.provider === 'api-key' && !v.apiKeySet) {
       // Without a key Claude Code would fall back to its own sign-in: the choice is not complete yet.
       status.classList.add('warn');
-      status.append(icon(ICONS.shield), h('b', '', t('setup.claude.needKey')), h('span', 'setup-status-path', c.executable));
+      status.append(icon(ICONS.shield), h('b', '', t('setup.claude.needKey')));
     } else {
-      const ready = c.account?.ready === true;
+      const a = c.account;
+      const ready = a?.ready === true;
       status.classList.add(ready ? 'ok' : 'warn');
-      const who = c.account
-        ? [c.account.email, c.account.plan, c.account.provider !== 'firstParty' ? c.account.provider : '', c.account.source].filter(Boolean).join(' · ')
+      const who = a
+        ? [a.email, a.plan, a.provider !== 'firstParty' ? t('setup.claude.cloud') : '', a.source && !a.email ? t('setup.claude.viaKey') : ''].filter(Boolean).join(' · ')
         : c.error === 'timeout'
           ? t('setup.claude.timeout')
           : c.error
@@ -472,13 +484,12 @@ export class SetupView {
             : '';
       status.append(icon(ready ? ICONS.check : ICONS.shield), h('b', '', ready ? t('setup.claude.ready') : t('setup.claude.noAccess')));
       if (who) status.append(h('span', 'setup-status-detail', who));
-      status.append(h('span', 'setup-status-path', c.executable));
     }
     status.append(this.button(t('setup.check'), 'btn ghost small', () => void this.checkClaude(), this.checkingClaude));
     el.append(status);
 
     const options = h('div', 'setup-choices');
-    for (const p of PROVIDER_OPTIONS) {
+    for (const p of PROVIDERS) {
       options.append(this.choice('provider', s.provider === p, t(`setup.provider.${p}` as Key), t(`setup.provider.${p}.hint` as Key), () => void this.pickProvider(p)));
     }
     el.append(options);
@@ -498,34 +509,12 @@ export class SetupView {
       }
       f.append(row, this.link(t('setup.apiKey.console'), 'https://console.anthropic.com/settings/keys'));
       el.append(f);
-    } else if (s.provider === 'bedrock' || s.provider === 'vertex') {
-      const bedrock = s.provider === 'bedrock';
-      const f = this.field(t(bedrock ? 'setup.bedrock' : 'setup.vertex'), t(bedrock ? 'setup.bedrock.hint' : 'setup.vertex.hint'));
-      // What was typed but not saved yet survives a redraw (the Claude check redraws when it ends).
-      const b = { ...s.bedrock, ...this.pending.bedrock };
-      const x = { ...s.vertex, ...this.pending.vertex };
-      const region = this.input(bedrock ? b.region : x.region, bedrock ? 'us-east-1' : 'us-east5');
-      const other = this.input(bedrock ? b.profile : x.projectId, bedrock ? t('setup.bedrock.profile') : t('setup.vertex.project'));
-      const stage = () =>
-        this.stage(
-          bedrock
-            ? { bedrock: { region: region.value.trim(), profile: other.value.trim() } }
-            : { vertex: { region: region.value.trim(), projectId: other.value.trim() } },
-        );
-      for (const input of [region, other]) {
-        input.addEventListener('input', stage);
-        input.addEventListener('change', () => void this.flush(true));
-      }
-      const row = h('div', 'setup-row');
-      row.append(region, other);
-      f.append(row);
-      el.append(f);
     }
 
-    if (c && (!c.executable || (s.provider === 'claude-code' && !c.account?.ready))) {
+    if (c && (!c.found || (s.provider === 'claude-code' && !c.account?.ready))) {
       const guide = h('div', 'setup-guide');
-      guide.append(h('div', 'setup-label', c.executable ? t('setup.claude.signIn') : t('setup.claude.install')));
-      if (!c.executable) {
+      guide.append(h('div', 'setup-label', c.found ? t('setup.claude.signIn') : t('setup.claude.install')));
+      if (!c.found) {
         guide.append(this.command(v.platform === 'win32' ? INSTALL.win32 : INSTALL.other));
         guide.append(h('div', 'setup-hint', t('setup.claude.thenSignIn')));
       } else {
@@ -557,7 +546,7 @@ export class SetupView {
     const r = await this.run(() => this.hub.setApiKey(key === null ? null : key.trim()));
     this.view = r;
     if (r.ok) this.keyDraft = '';
-    this.flash(r.ok ? t(key === null ? 'setup.apiKey.removed' : 'setup.apiKey.ok') : this.errorText(r.error, 'key'), r.ok ? 'ok' : 'error');
+    this.flash(r.ok ? t(key === null ? 'setup.apiKey.removed' : 'setup.apiKey.ok') : this.errorText(r.error, 'key'), r.ok ? 'ok' : 'error', r.ok ? '' : this.rawOf(r.error));
     if (r.ok) await this.checkClaude();
     else this.render();
   }
@@ -679,7 +668,7 @@ export class SetupView {
   private async startDevice(): Promise<void> {
     const r = await this.run(() => this.hub.githubDeviceStart());
     if (!r.ok) {
-      this.flash(this.errorText(r.error), 'error');
+      this.flash(this.errorText(r.error), 'error', this.rawOf(r.error));
       this.render();
       return;
     }
@@ -693,7 +682,7 @@ export class SetupView {
     this.view = done;
     this.ghRepos = null;
     this.githubHealth = null;
-    this.flash(done.ok ? t('setup.github.ok', { login: done.settings.github.login }) : this.errorText(done.error), done.ok ? 'ok' : 'error');
+    this.flash(done.ok ? t('setup.github.ok', { login: done.settings.github.login }) : this.errorText(done.error), done.ok ? 'ok' : 'error', done.ok ? '' : this.rawOf(done.error));
     this.render();
   }
 
@@ -702,7 +691,7 @@ export class SetupView {
     this.view = r;
     this.ghRepos = null;
     this.githubHealth = null;
-    this.flash(r.ok ? t('setup.github.ok', { login: r.settings.github.login }) : this.errorText(r.error, context), r.ok ? 'ok' : 'error');
+    this.flash(r.ok ? t('setup.github.ok', { login: r.settings.github.login }) : this.errorText(r.error, context), r.ok ? 'ok' : 'error', r.ok ? '' : this.rawOf(r.error));
     this.render();
   }
 
@@ -718,9 +707,12 @@ export class SetupView {
     this.head(el, t('setup.workspace.title'), t('setup.workspace.lead'));
     const f = this.field(t('setup.workspace.folders'), t('setup.workspace.folders.hint'));
     const list = h('div', 'setup-folders');
+    const names = folderNames(s.workspaces);
     s.workspaces.forEach((dir, i) => {
       const row = h('div', 'setup-folder');
-      row.append(h('span', 'setup-folder-path', dir));
+      const name = h('span', 'setup-folder-path', names[i]);
+      name.title = dir;
+      row.append(name);
       if (i === 0) row.append(h('span', 'setup-pill', t('setup.workspace.masterHere')));
       else row.append(this.button(t('setup.workspace.makeFirst'), 'btn ghost small', () => void this.setFolders([dir, ...s.workspaces.filter((d) => d !== dir)])));
       if (s.workspaces.length > 1) {
@@ -765,7 +757,7 @@ export class SetupView {
       this.ghRepos = [];
       void this.hub.githubRepos().then((r) => {
         this.ghRepos = r.repos;
-        if (!r.ok) this.flash(this.errorText(r.error), 'error');
+        if (!r.ok) this.flash(this.errorText(r.error), 'error', this.rawOf(r.error));
         this.render();
       });
     }
@@ -774,8 +766,8 @@ export class SetupView {
     const pinned = new Set(s.mainRepos);
     const local = new Map<string, Row>();
     // Pinned repos stay listed even when they sit outside the working folders.
-    for (const p of s.mainRepos) local.set(p, { name: p.split(/[\\/]/).pop() ?? p, path: p, slug: '', detail: p, private: false, pushedAt: 0 });
-    for (const r of this.found ?? []) local.set(r.path, { name: r.name, path: r.path, slug: slugOf(r.remote), detail: r.remote || r.path, private: false, pushedAt: 0 });
+    for (const p of s.mainRepos) local.set(p, { name: folderName(p), path: p, slug: '', detail: this.scanned ? t('setup.repos.outside') : '', private: false, pushedAt: 0 });
+    for (const r of this.found ?? []) local.set(r.path, { name: r.name, path: r.path, slug: slugOf(r.remote), detail: slugOf(r.remote) || r.remote || t('setup.repos.localOnly'), private: false, pushedAt: 0 });
     const bySlug = new Map([...local.values()].filter((r) => r.slug).map((r) => [r.slug, r]));
     const remoteOnly: Row[] = [];
     for (const g of this.ghRepos ?? []) {
@@ -808,7 +800,7 @@ export class SetupView {
     });
     fill();
     el.append(box);
-    el.append(h('p', 'setup-fine', connected ? t('setup.repos.cloneInto', { dir: s.workspaces[0] ?? '' }) : t('setup.repos.connect')));
+    el.append(h('p', 'setup-fine', connected ? t('setup.repos.cloneInto', { dir: folderName(s.workspaces[0] ?? '') }) : t('setup.repos.connect')));
   }
 
   private repoRow(r: Row, pinned: Set<string>, s: HubSettings): HTMLElement {
@@ -848,7 +840,7 @@ export class SetupView {
     // The clone goes to <working folder>/<repo name>: the message names that folder.
     const folder = slug.split('/')[1];
     const failure = r.error === 'exists' ? t('setup.err.exists', { folder }) : r.error === 'exists-other' ? t('setup.err.existsOther', { folder }) : this.errorText(r.error);
-    this.flash(r.ok ? t('setup.repos.cloned', { slug }) : failure, r.ok ? 'ok' : 'error');
+    this.flash(r.ok ? t('setup.repos.cloned', { slug }) : failure, r.ok ? 'ok' : 'error', r.ok ? '' : this.rawOf(r.error));
     this.found = null;
     this.render();
   }
@@ -1078,7 +1070,7 @@ export class SetupView {
       const text = h('span', 'setup-repo-text');
       const title = h('span', 'setup-repo-title');
       title.append(h('b', '', file.role.name), h('span', 'setup-tag', file.scope === 'user' ? t('team.agents.user') : file.scope));
-      text.append(title, h('span', '', file.role.description || file.path));
+      text.append(title, h('span', '', file.role.description || folderName(file.path)));
       if (file.ignored.length > 0) text.append(h('span', 'team-ignored', t('team.agents.ignored', { list: file.ignored.join(', ') })));
       row.append(text, this.button(t('team.agents.use'), 'btn ghost small', () => this.edit({ ...file.role, id: '' })));
       box.append(row);
@@ -1282,12 +1274,15 @@ export class SetupView {
       changed();
       this.render();
     };
+    const names = folderNames(d.folders);
     d.folders.forEach((dir, i) => {
       const row = h('div', 'setup-folder');
-      row.append(h('span', 'setup-folder-path', dir));
+      const name = h('span', 'setup-folder-path', names[i]);
+      name.title = dir;
+      row.append(name);
       if (i === 0) row.append(h('span', 'setup-pill', t('team.folders.main')));
       else row.append(this.button(t('team.folders.makeMain'), 'btn ghost small', () => set([dir, ...d.folders.filter((x) => x !== dir)])));
-      const remove = this.iconButton(t('team.folders.remove', { path: dir }), ICONS.remove, () => set(d.folders.filter((x) => x !== dir)));
+      const remove = this.iconButton(t('team.folders.remove', { path: names[i] }), ICONS.remove, () => set(d.folders.filter((x) => x !== dir)));
       row.append(remove);
       list.append(row);
     });

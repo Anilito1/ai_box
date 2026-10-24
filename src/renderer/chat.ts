@@ -14,7 +14,7 @@ import {
 } from '../shared/types';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
-import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel } from './dom';
+import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -671,6 +671,7 @@ export class ChatView {
           open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'claude' })));
           el.append(open);
         }
+        if (item.detail) el.append(techDetails(item.detail));
         return el;
       }
     }

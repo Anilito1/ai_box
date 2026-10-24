@@ -285,6 +285,7 @@ export type RepoErrorKind =
   | 'invalid'
   | 'other';
 
+/** A refused git action: the kind's sentence, a more precise one in `message` when the hub has it, git's words in `detail`. */
 export type RepoActionResult = { ok: true } | { ok: false; kind: RepoErrorKind; message: string; detail: string };
 
 export interface HubSnapshot {
@@ -310,7 +311,17 @@ export type ChatItem =
       canAlways: boolean;
       state: 'pending' | 'allowed' | 'denied' | 'expired';
     }
-  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'error'; /** A button that opens Settings › Claude. */ action?: 'claude-settings' };
+  | {
+      kind: 'notice';
+      id: string;
+      /** A short sentence for the user. */
+      text: string;
+      tone: 'info' | 'error';
+      /** A button that opens Settings › Claude. */
+      action?: 'claude-settings';
+      /** The raw message behind an error, shown folded under "Details". */
+      detail?: string;
+    };
 
 export interface PermissionDecision {
   behavior: 'allow' | 'always' | 'deny';
@@ -318,8 +329,8 @@ export interface PermissionDecision {
 }
 
 /** Where sessions get their Claude access. `claude-code`: whatever Claude Code itself is set up with (its own sign-in). */
-export type Provider = 'claude-code' | 'api-key' | 'bedrock' | 'vertex';
-export const PROVIDERS: Provider[] = ['claude-code', 'api-key', 'bedrock', 'vertex'];
+export type Provider = 'claude-code' | 'api-key';
+export const PROVIDERS: Provider[] = ['claude-code', 'api-key'];
 /** `oauth`: device flow sign-in; `token`: personal access token; `gh`: the GitHub CLI's own sign-in. */
 export type GithubSource = 'none' | 'oauth' | 'token' | 'gh';
 
@@ -330,8 +341,6 @@ export interface HubSettings {
   /** Claude Code executable; empty = the binary bundled with the Agent SDK, else `claude` found on the PATH. */
   claudePath: string;
   provider: Provider;
-  bedrock: { region: string; profile: string };
-  vertex: { region: string; projectId: string };
   /** Folders scanned by `list_repos`; the master runs in the first one. */
   workspaces: string[];
   /** Repos the user mainly works on (absolute paths): known to the master, git state shown in the sidebar. */
@@ -388,10 +397,8 @@ export interface AgentFile {
 }
 
 export interface ClaudeStatus {
-  /** Executable the sessions will run, or empty when none is found. */
-  executable: string;
-  /** Claude Code found on the PATH (or its default install folder). */
-  installed: string;
+  /** A Claude Code the sessions can run was found (its path stays in the main process). */
+  found: boolean;
   /** What Claude Code reports about its credentials once started with the hub's settings; null when it could not start. */
   account: { ready: boolean; provider: string; email: string; plan: string; source: string } | null;
   error: string;

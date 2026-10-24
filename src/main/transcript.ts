@@ -23,12 +23,17 @@ export function toolLabel(name: string): string {
   return mcp ? `${mcp[1]} · ${mcp[2]}` : name;
 }
 
+/** A file as a step shows it: its folder and name, not the whole path (the step's detail keeps it). */
+const shortPath = (p: string) => p.split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   if (name === 'TodoWrite' && Array.isArray(input.todos)) return t('todos', { n: input.todos.length });
   if (name === 'SendMessage') return `→ ${str(input.to)}`;
   const keys = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'name', 'to', 'path', 'prompt'];
-  const value = keys.map((k) => input[k]).find((v): v is string => typeof v === 'string' && v.length > 0) ?? '';
-  return value.replace(/\s+/g, ' ').slice(0, 180);
+  const key = keys.find((k) => typeof input[k] === 'string' && (input[k] as string).length > 0);
+  if (!key) return '';
+  const value = input[key] as string;
+  return (['file_path', 'notebook_path', 'path'].includes(key) ? shortPath(value) : value).replace(/\s+/g, ' ').slice(0, 180);
 }
 
 /** Human-readable detail of a tool call; edits become +/- line diffs. */

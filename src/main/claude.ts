@@ -10,7 +10,8 @@ import { errorCode, httpCode } from './errors';
 
 const require = createRequire(import.meta.url);
 const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';
-const PROVIDER_FLAGS = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+/** Cloud switches a user may have in their own environment: with an API key chosen, the key must win over them. */
+const CLOUD_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
 
 /** The Claude Code binary npm installed with the Agent SDK (absent from a packaged build, which never ships it). */
 function bundledExecutable(): string {
@@ -52,31 +53,8 @@ export async function claudeExecutable(cfg: HubConfig, installed?: string): Prom
  * own configuration and sign-in, which the hub never reads.
  */
 export function claudeEnv(cfg: HubConfig, apiKey: string): { set: Record<string, string>; unset: string[] } {
-  const others = (keep: string) => PROVIDER_FLAGS.filter((f) => f !== keep);
-  switch (cfg.provider) {
-    case 'api-key':
-      return { set: apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}, unset: [...PROVIDER_FLAGS, 'ANTHROPIC_AUTH_TOKEN'] };
-    case 'bedrock':
-      return {
-        set: {
-          CLAUDE_CODE_USE_BEDROCK: '1',
-          ...(cfg.bedrock.region ? { AWS_REGION: cfg.bedrock.region } : {}),
-          ...(cfg.bedrock.profile ? { AWS_PROFILE: cfg.bedrock.profile } : {}),
-        },
-        unset: others('CLAUDE_CODE_USE_BEDROCK'),
-      };
-    case 'vertex':
-      return {
-        set: {
-          CLAUDE_CODE_USE_VERTEX: '1',
-          ...(cfg.vertex.region ? { CLOUD_ML_REGION: cfg.vertex.region } : {}),
-          ...(cfg.vertex.projectId ? { ANTHROPIC_VERTEX_PROJECT_ID: cfg.vertex.projectId } : {}),
-        },
-        unset: others('CLAUDE_CODE_USE_VERTEX'),
-      };
-    default:
-      return { set: {}, unset: [] };
-  }
+  if (cfg.provider !== 'api-key') return { set: {}, unset: [] };
+  return { set: apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}, unset: [...CLOUD_SWITCHES, 'ANTHROPIC_AUTH_TOKEN'] };
 }
 
 /** Checks an Anthropic API key with a free call (the model list): null when accepted, else an error code. */
@@ -96,16 +74,15 @@ export async function checkApiKey(key: string): Promise<string | null> {
  * Starts Claude Code once, with no prompt (nothing is sent to the API) and nothing saved, and asks it which
  * credentials it would use. The hub only reads this summary: the sign-in itself stays inside Claude Code.
  */
-export async function claudeStatus(cfg: HubConfig, env: Record<string, string>): Promise<ClaudeStatus> {
-  const installed = await installedExecutable();
-  const executable = await claudeExecutable(cfg, installed);
-  const status: ClaudeStatus = { executable, installed, account: null, error: '' };
-  if (!executable) return status;
-  // A cloud provider authenticates with its own credentials, which Claude Code only tries on the first request (and
-  // its start can take a minute while it looks for them): nothing useful to read here.
-  if (cfg.provider === 'bedrock' || cfg.provider === 'vertex') {
-    status.account = { ready: true, provider: cfg.provider, email: '', plan: '', source: '' };
-    return status;
+export async function claudeStatus(cfg: HubConfig, env: Record<string, string>): Promise<{ executable: string; status: ClaudeStatus }> {
+  const executable = await claudeExecutable(cfg);
+  const status: ClaudeStatus = { found: executable !== '', account: null, error: '' };
+  if (!executable) return { executable, status };
+  // Claude Code set up for a cloud provider in the user's environment checks its credentials on the first request
+  // only, and its start can take a minute looking for them: nothing to ask it here.
+  if (cfg.provider === 'claude-code' && CLOUD_SWITCHES.some((k) => env[k] || process.env[k])) {
+    status.account = { ready: true, provider: 'cloud', email: '', plan: '', source: '' };
+    return { executable, status };
   }
   let close = () => undefined as void;
   const prompt: AsyncIterable<SDKUserMessage> = {
@@ -136,5 +113,5 @@ export async function claudeStatus(cfg: HubConfig, env: Record<string, string>):
     close();
     q.close();
   }
-  return status;
+  return { executable, status };
 }

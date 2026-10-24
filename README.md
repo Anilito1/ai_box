@@ -24,8 +24,7 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 - [Node.js](https://nodejs.org) 22.12 or later and [git](https://git-scm.com).
 - Access to Claude, one of:
   - **Claude Code signed in** on this computer (run `claude` once and sign in), or
-  - an **Anthropic API key** from the [Claude Console](https://console.anthropic.com/settings/keys), or
-  - **Amazon Bedrock** or **Google Vertex AI** credentials.
+  - an **Anthropic API key** from the [Claude Console](https://console.anthropic.com/settings/keys).
 - Optional: a GitHub account, and the [GitHub CLI](https://cli.github.com).
 
 ## Install and run from source
@@ -75,8 +74,6 @@ So the hub offers:
 |---|---|
 | **Claude Code's own sign-in** | Nothing: it runs Claude Code, which uses whatever you set up in it (`claude` → `/login`, Anthropic's own flow, or your environment). The hub never reads those credentials. |
 | **Anthropic API key** | Checks the key with Anthropic, stores it encrypted, passes it to the sessions as `ANTHROPIC_API_KEY`. Billed to your Console account. |
-| **Amazon Bedrock** | Sets `CLAUDE_CODE_USE_BEDROCK=1` (+ `AWS_REGION`, `AWS_PROFILE` if given); your AWS credentials do the rest. |
-| **Google Vertex AI** | Sets `CLAUDE_CODE_USE_VERTEX=1` (+ `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`); gcloud credentials do the rest. |
 
 Running several sessions at once uses your plan or your API budget faster: keep an eye on the cost and limits shown in the status bar.
 
@@ -120,7 +117,7 @@ Claude Hub gives AI agents your computer. Read this before using it on anything 
 - **Permission modes.** The default is **Claude Code's own default** (auto mode where your account has it, otherwise it asks). **Ask** shows every approval in the conversation. Approvals and MCP confirmations of a worker appear in its conversation; the master cannot grant them for you.
 - **⚠ "Allow everything" (bypass) removes every approval**: sessions run any command, commit, push, deploy or SQL, and MCP servers' confirmations (before a `DROP` or `DELETE`, for instance) are accepted automatically. Use it only on a machine, accounts and repos you can afford to lose, and keep backups. It is never on unless you turn it on, after an explicit confirmation.
 - **The window is locked down**: sandboxed renderer with context isolation, strict Content-Security-Policy, sanitized Markdown, no navigation or pop-ups, and every message from the window to the hub is checked to come from its own page. Secrets never reach the window.
-- **What leaves your computer**: the sessions talk to Anthropic (or your cloud provider) like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds. No telemetry.
+- **What leaves your computer**: the sessions talk to Anthropic like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds. No telemetry.
 
 Found a vulnerability? Please open a private security advisory on the repository rather than a public issue.
 

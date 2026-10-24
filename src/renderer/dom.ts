@@ -88,6 +88,26 @@ export function copyButton(text: () => string, label = t('copy')): HTMLButtonEle
   return btn;
 }
 
+/** The raw words behind an error (git's, the system's), folded under "Details" with a copy button: never in the sentence shown. */
+export function techDetails(raw: string): HTMLDetailsElement {
+  const box = h('details', 'tech-details');
+  const copy = copyButton(() => raw, t('details.copy'));
+  copy.classList.add('tech-copy');
+  box.append(h('summary', '', t('details')), h('pre', '', raw), copy);
+  return box;
+}
+
+/** A short error sentence for the user, with its technical detail folded under it when there is one. */
+export function errorNote(cls: string, text: string, raw = ''): HTMLDivElement {
+  const note = h('div', `${cls} error`);
+  note.append(h('span', '', text));
+  if (raw) note.append(techDetails(raw));
+  return note;
+}
+
+/** A folder as the interface names it: its last part (the full path stays in a tooltip). */
+export const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
 /** Full-size view of an image; closes on click or Escape. */
 export function openLightbox(src: string): void {
   const overlay = h('div', 'lightbox');

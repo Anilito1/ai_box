@@ -386,8 +386,8 @@ class Hub {
     });
     handle('team:agents', () => agentFiles(this.cfg));
     handle('claude:check', async () => {
-      const status = await claudeStatus(this.cfg, mgr.environment());
-      this.executable = status.executable;
+      const { executable, status } = await claudeStatus(this.cfg, mgr.environment());
+      this.executable = executable;
       return status;
     });
     handle('github:gh-login', () => ghLogin());
@@ -560,7 +560,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(start)
     .catch((err: unknown) => {
-      dialog.showErrorBox(APP_NAME, errorText(err));
+      dialog.showMessageBoxSync({ type: 'error', title: APP_NAME, message: t('startup.failed', { app: APP_NAME }), detail: errorText(err) });
       app.quit();
     });
 }
