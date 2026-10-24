@@ -255,9 +255,9 @@ function classify(err: unknown): RepoActionResult {
       ? 'rejected'
       : /divergent branches|Not possible to fast-forward/i.test(text)
         ? 'diverged'
-        : /CONFLICT|Automatic merge failed|unmerged files|fix conflicts|you need to resolve/i.test(text)
+        : /CONFLICT|Automatic merge failed|unmerged files|fix conflicts|you need to resolve|could not apply|Resolve all conflicts/i.test(text)
           ? 'conflict'
-          : /would be overwritten|commit your changes or stash them/i.test(text)
+          : /would be overwritten|commit your changes or stash them|You have unstaged changes|cannot rebase/i.test(text)
             ? 'local-changes'
             : /nothing to commit|no changes added to commit|nothing added to commit/i.test(text)
               ? 'nothing-to-commit'
@@ -339,12 +339,41 @@ async function checkedPaths(path: string, requested: string[]): Promise<string[]
   return [...new Set(paths.flatMap((p) => [p, known.get(p) ?? ''].filter(Boolean)))];
 }
 
+const config = async (path: string, key: string) => (await git(path, ['config', '--get', key]).catch(() => '')).trim();
+
+/** Remote a command of this checkout talks to: its branch's, else origin, else the only one. */
+async function remoteFor(path: string, branch: string): Promise<string> {
+  const remotes = (await git(path, ['remote'])).split('\n').map((r) => r.trim()).filter((r) => r && !r.startsWith('-'));
+  const tracked = branch ? await config(path, `branch.${branch}.remote`) : '';
+  return remotes.includes(tracked) ? tracked : remotes.includes('origin') ? 'origin' : remotes.length === 1 ? remotes[0] : '';
+}
+
+/** URL git will contact for a remote, insteadOf applied: the hub's sign-in is offered to it alone. */
+const urlOf = async (path: string, remote: string, push: boolean) =>
+  (await git(path, ['remote', 'get-url', ...(push ? ['--push'] : []), remote]).catch(() => '')).trim();
+
+/** `git fetch` of the checkout's remote, with the hub's sign-in and none of the repo's hooks; false when it has no remote. */
+export async function fetchRemote(path: string, { interactive = false, quiet = false, timeout = NETWORK_MS } = {}): Promise<boolean> {
+  const branch = (await git(path, ['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
+  const remote = await remoteFor(path, branch);
+  if (!remote) return false;
+  const auth = await urlOf(path, remote, false);
+  await git(path, ['fetch', ...(quiet ? ['--quiet', '--no-tags'] : []), remote], { timeout, interactive, auth, hooks: false });
+  return true;
+}
+
+/** Fetched first, with the sign-in and no hook; then merged (or rebased, when configured) locally, hooks included. */
 async function pull(path: string): Promise<void> {
   const tr = await tracking(path);
   if (!tr.upstream) throw new ActionError('no-upstream', t('scm.noUpstream', { branch: tr.branch || 'HEAD' }));
-  // Merge unless the user configured a rebase: git refuses divergent branches when nothing is configured.
-  const configured = (await git(path, ['config', '--get', 'pull.rebase']).catch(() => '')).trim();
-  await git(path, ['pull', '--no-edit', ...(configured ? [] : ['--no-rebase'])], { timeout: NETWORK_MS, interactive: true });
+  if ((await config(path, `branch.${tr.branch}.remote`)) !== '.') await fetchRemote(path, { interactive: true });
+  const rebase = (await config(path, `branch.${tr.branch}.rebase`)) || (await config(path, 'pull.rebase'));
+  if (rebase && rebase !== 'false') {
+    await git(path, ['rebase', ...(/^(merges|m)$/.test(rebase) ? ['--rebase-merges'] : []), '@{upstream}'], { timeout: COMMIT_MS });
+    return;
+  }
+  const ff = await config(path, 'pull.ff');
+  await git(path, ['merge', '--no-edit', ...(ff === 'only' ? ['--ff-only'] : ff === 'false' ? ['--no-ff'] : []), '@{upstream}'], { timeout: COMMIT_MS });
 }
 
 /** Push and Sync need the branch's own remote branch: a worktree branch created from origin/main tracks it instead. */
@@ -356,18 +385,18 @@ function noOwnUpstream(tr: { branch: string; upstream: string }): void {
 }
 
 async function push(path: string): Promise<void> {
-  noOwnUpstream(await tracking(path));
-  await git(path, ['push'], { timeout: NETWORK_MS, interactive: true });
+  const tr = await tracking(path);
+  noOwnUpstream(tr);
+  const remote = await remoteFor(path, tr.branch);
+  await git(path, ['push'], { timeout: NETWORK_MS, interactive: true, auth: remote ? await urlOf(path, remote, true) : undefined });
 }
 
 async function publish(path: string): Promise<void> {
   const tr = await tracking(path);
   if (!tr.branch) throw new ActionError('invalid', t('scm.detachedPublish'));
-  const remotes = (await git(path, ['remote'])).split('\n').map((r) => r.trim()).filter(Boolean);
-  const tracked = tr.upstream.split('/')[0];
-  const remote = remotes.includes(tracked) ? tracked : remotes.includes('origin') ? 'origin' : remotes[0];
-  if (!remote || remote.startsWith('-')) throw new ActionError('invalid', t('scm.noRemote'));
-  await git(path, ['push', '-u', remote, `HEAD:refs/heads/${tr.branch}`], { timeout: NETWORK_MS, interactive: true });
+  const remote = await remoteFor(path, tr.branch);
+  if (!remote) throw new ActionError('invalid', t('scm.noRemote'));
+  await git(path, ['push', '-u', remote, `HEAD:refs/heads/${tr.branch}`], { timeout: NETWORK_MS, interactive: true, auth: await urlOf(path, remote, true) });
 }
 
 /** VS Code's smart commit: the index as it is, or every change when nothing is staged (read here, never from the panel). */
@@ -417,7 +446,8 @@ async function abort(path: string): Promise<void> {
 async function perform(path: string, action: RepoAction): Promise<void> {
   switch (action.kind) {
     case 'fetch':
-      return void (await git(path, ['fetch'], { timeout: NETWORK_MS, interactive: true }));
+      if (!(await fetchRemote(path, { interactive: true }))) throw new ActionError('invalid', t('scm.noRemote'));
+      return;
     case 'pull':
       return pull(path);
     case 'push':

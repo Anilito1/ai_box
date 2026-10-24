@@ -313,21 +313,16 @@ hub.onItems((id, items, reset) => {
 hub.onEvent((id, kind) => clawdEvent(id, kind));
 reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
-// The git panel's own buttons to follow another repo or stop following one. Cancelling the event tells the panel
-// the hub handles it.
 // A notice that points to a section of the settings (Claude Code missing, for one).
 window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;
   void setup.open('settings', section === 'claude' ? 'claude' : 'general');
 });
-window.addEventListener('hub:add-repo', (e) => {
-  e.preventDefault();
-  void setup.open('settings', 'repos');
-});
+// The git panel's own buttons to follow another repo or stop following one.
+window.addEventListener('hub:add-repo', () => void setup.open('settings', 'repos'));
 window.addEventListener('hub:remove-repo', (e) => {
   const path = (e as CustomEvent<unknown>).detail;
   if (typeof path !== 'string') return;
-  e.preventDefault();
   void hub.getSettings().then((v) => hub.saveSettings({ mainRepos: v.settings.mainRepos.filter((p) => p !== path) }));
 });
 // The repos the settings follow: the panel forgets the others.

@@ -5,7 +5,7 @@ import { basename, resolve } from 'node:path';
 import type { RepoAction, RepoActionResult, RepoStatus, RepoTree } from '../shared/types';
 import { errorMessage, git } from './git';
 import { t } from './i18n';
-import { parseStatus, repoState, runAction, STATUS_ARGS } from './scm';
+import { fetchRemote, parseStatus, repoState, runAction, STATUS_ARGS } from './scm';
 
 const POLL_MS = 8_000;
 const FETCH_MS = 60_000;
@@ -58,8 +58,10 @@ export class RepoWatcher extends EventEmitter {
     );
   }
 
+  /** A read still running when the repo stops being followed must not bring it back in the panel. */
   stop(): void {
     for (const t of this.timers) clearInterval(t);
+    this.removeAllListeners();
   }
 
   /** Checkout of this repo at exactly `path` (as listed in the status), else undefined. */
@@ -74,7 +76,8 @@ export class RepoWatcher extends EventEmitter {
       if (!existsSync(this.path)) return;
       this.update({ fetching: true });
       try {
-        await git(this.path, ['fetch', '--quiet', '--no-tags'], { timeout: 45_000 });
+        // With the hub's sign-in, never a hook of the repo: nothing a session wrote runs every minute.
+        await fetchRemote(this.path, { quiet: true, timeout: 45_000 });
         this.update({ fetching: false, fetchedAt: Date.now(), fetchError: '' });
       } catch (err) {
         this.update({ fetching: false, fetchError: errorMessage(err) });

@@ -18,7 +18,7 @@ import {
   type SessionView,
 } from '../shared/types';
 import { ago, copyButton, displayName, h, icon, ICONS, openMenu } from './dom';
-import { LANG } from './i18n';
+import { LANG, PLATFORM, t, tn, type Key } from './i18n';
 import {
   BASE_REF_COLOR,
   cssColor,
@@ -44,211 +44,8 @@ const DEFAULT_HEIGHT = 260;
 const ROW = 18;
 const SCALE = ROW / SWIMLANE_HEIGHT;
 
-const FR = {
-  pickRepo: 'Changer de dépôt',
-  auto: 'Auto',
-  autoHint: 'Suit le worker ouvert, sinon le premier dépôt',
-  mainFolder: 'dossier principal',
-  addRepo: 'Ajouter un dépôt…',
-  removeRepo: 'Retirer du panneau',
-  reposInSettings: 'La liste des dépôts suivis n’est pas modifiable dans cette version.',
-  detached: (oid: string) => `détachée ${oid}`,
-  noCommit: 'aucun commit',
-  unreadable: 'illisible',
-  fetch: 'Fetch',
-  pull: 'Pull',
-  push: 'Push',
-  more: "Plus d'actions",
-  collapse: 'Replier',
-  expand: 'Déplier',
-  resize: 'Glisser pour redimensionner',
-  sync: 'Synchroniser',
-  syncHint: (behind: number, ahead: number, upstream: string) => `Synchroniser avec ${upstream} : ${behind}↓ à récupérer, ${ahead}↑ à pousser`,
-  publish: 'Publier la branche',
-  publishHint: 'Publier la branche : la pousser vers le remote et la suivre',
-  switchBranch: 'Changer de branche',
-  newBranch: 'Créer une branche…',
-  branchFilter: 'Filtrer, ou nom de la nouvelle branche',
-  createBranch: (name: string) => `Créer « ${name} » depuis HEAD`,
-  localBranches: 'Branches',
-  remoteBranches: 'Branches distantes',
-  inWorktree: (folder: string) => `ouverte dans ${folder}`,
-  current: 'branche courante',
-  loading: 'Chargement…',
-  abort: { merge: 'Annuler le merge', rebase: 'Annuler le rebase', 'cherry-pick': 'Annuler le cherry-pick', revert: 'Annuler le revert' },
-  state: {
-    merge: 'Merge en cours : résous les conflits, indexe-les puis committe.',
-    rebase: 'Rebase en cours : résous les conflits ou annule-le.',
-    'cherry-pick': 'Cherry-pick en cours : résous les conflits ou annule-le.',
-    revert: 'Revert en cours : résous les conflits ou annule-le.',
-  },
-  commitPlaceholder: (branch: string, all: boolean) => (all ? `Message (Ctrl+Entrée : commit tout sur ${branch})` : `Message (Ctrl+Entrée : commit sur ${branch})`),
-  commit: (branch: string, all: boolean) => (all ? `Commit de tous les changements sur ${branch} (Ctrl+Entrée)` : `Commit sur ${branch} (Ctrl+Entrée)`),
-  commitPush: 'Commit & Push',
-  emptyMessage: 'Écris un message de commit',
-  changes: 'Changements',
-  conflicts: 'Conflits',
-  staged: 'Indexés',
-  unstaged: 'Modifications',
-  stage: 'Indexer',
-  unstage: 'Retirer de l’index',
-  stageAll: 'Tout indexer',
-  unstageAll: 'Tout retirer de l’index',
-  truncated: (shown: number, total: number) => `${shown} sur ${total} affichés`,
-  graph: 'Graphe',
-  filterTitle: 'Branches affichées',
-  filters: { auto: 'Auto', all: 'Toutes' } as Record<GraphFilter, string>,
-  filterHints: {
-    auto: 'Branche courante, upstream, base et branches des worktrees',
-    all: 'Toutes les branches locales et distantes, et les tags',
-  } as Record<GraphFilter, string>,
-  loadMore: 'Charger plus…',
-  noHistory: 'Aucun commit',
-  incoming: 'Changements entrants',
-  outgoing: 'Changements sortants',
-  files: (n: number) => (n > 1 ? `${n} fichiers modifiés` : `${n} fichier modifié`),
-  insertions: (n: number) => (n > 1 ? `${n} insertions(+)` : `${n} insertion(+)`),
-  deletions: (n: number) => (n > 1 ? `${n} suppressions(-)` : `${n} suppression(-)`),
-  binary: 'binaire',
-  copyHash: 'Copier le hash',
-  openWeb: 'Ouvrir sur le web',
-  fetchedAgo: (when: string) => `Remote vérifié ${when}`,
-  fetchFailed: (error: string) => `Fetch en échec : ${error}`,
-  workers: (names: string) => `↳ ${names}`,
-  busy: {
-    fetch: 'Fetch…',
-    pull: 'Pull…',
-    push: 'Push…',
-    sync: 'Synchronisation…',
-    publish: 'Publication…',
-    commit: 'Commit…',
-    stage: 'Indexation…',
-    unstage: 'Retrait de l’index…',
-    'stage-all': 'Indexation…',
-    'unstage-all': 'Retrait de l’index…',
-    checkout: 'Changement de branche…',
-    branch: 'Création de la branche…',
-    abort: 'Annulation…',
-  } as Record<RepoActionKind, string>,
-  errors: {
-    'no-upstream': 'Cette branche n’a pas encore sa propre branche distante.',
-    rejected: 'Push refusé : le remote a des commits que tu n’as pas encore. Synchronise puis repousse.',
-    diverged: 'La branche et son upstream ont divergé : git refuse de les fusionner avec ta configuration de pull.',
-    conflict: 'Conflits : résous-les dans les fichiers, indexe-les puis committe — ou annule.',
-    'local-changes': 'Des modifications locales seraient écrasées : committe-les d’abord.',
-    'nothing-to-commit': 'Rien à committer.',
-    auth: 'Authentification refusée par le remote : vérifie ta connexion GitHub (Réglages › GitHub).',
-    busy: 'Une autre action git tourne déjà sur ce dépôt.',
-    invalid: 'Action impossible.',
-    other: 'Git a refusé l’opération.',
-  } as Record<RepoErrorKind, string>,
-  details: 'Détails',
-  dismiss: 'Fermer',
-};
-
-const EN: typeof FR = {
-  pickRepo: 'Switch repository',
-  auto: 'Auto',
-  autoHint: 'Follows the open worker, otherwise the first repository',
-  mainFolder: 'main folder',
-  addRepo: 'Add a repository…',
-  removeRepo: 'Remove from the panel',
-  reposInSettings: 'The followed repositories cannot be changed in this version.',
-  detached: (oid: string) => `detached ${oid}`,
-  noCommit: 'no commit',
-  unreadable: 'unreadable',
-  fetch: 'Fetch',
-  pull: 'Pull',
-  push: 'Push',
-  more: 'More actions',
-  collapse: 'Collapse',
-  expand: 'Expand',
-  resize: 'Drag to resize',
-  sync: 'Sync',
-  syncHint: (behind: number, ahead: number, upstream: string) => `Sync with ${upstream}: ${behind}↓ to pull, ${ahead}↑ to push`,
-  publish: 'Publish branch',
-  publishHint: 'Publish the branch: push it to the remote and track it',
-  switchBranch: 'Switch branch',
-  newBranch: 'Create a branch…',
-  branchFilter: 'Filter, or name of the new branch',
-  createBranch: (name: string) => `Create "${name}" from HEAD`,
-  localBranches: 'Branches',
-  remoteBranches: 'Remote branches',
-  inWorktree: (folder: string) => `open in ${folder}`,
-  current: 'current branch',
-  loading: 'Loading…',
-  abort: { merge: 'Abort merge', rebase: 'Abort rebase', 'cherry-pick': 'Abort cherry-pick', revert: 'Abort revert' },
-  state: {
-    merge: 'Merge in progress: resolve the conflicts, stage them, then commit.',
-    rebase: 'Rebase in progress: resolve the conflicts or abort it.',
-    'cherry-pick': 'Cherry-pick in progress: resolve the conflicts or abort it.',
-    revert: 'Revert in progress: resolve the conflicts or abort it.',
-  },
-  commitPlaceholder: (branch: string, all: boolean) => (all ? `Message (Ctrl+Enter: commit all on ${branch})` : `Message (Ctrl+Enter: commit on ${branch})`),
-  commit: (branch: string, all: boolean) => (all ? `Commit all changes on ${branch} (Ctrl+Enter)` : `Commit on ${branch} (Ctrl+Enter)`),
-  commitPush: 'Commit & Push',
-  emptyMessage: 'Write a commit message',
-  changes: 'Changes',
-  conflicts: 'Conflicts',
-  staged: 'Staged',
-  unstaged: 'Changes',
-  stage: 'Stage',
-  unstage: 'Unstage',
-  stageAll: 'Stage all',
-  unstageAll: 'Unstage all',
-  truncated: (shown: number, total: number) => `${shown} of ${total} shown`,
-  graph: 'Graph',
-  filterTitle: 'Branches shown',
-  filters: { auto: 'Auto', all: 'All' } as Record<GraphFilter, string>,
-  filterHints: {
-    auto: 'Current branch, upstream, base and the worktrees’ branches',
-    all: 'Every local and remote branch, and the tags',
-  } as Record<GraphFilter, string>,
-  loadMore: 'Load more…',
-  noHistory: 'No commit',
-  incoming: 'Incoming changes',
-  outgoing: 'Outgoing changes',
-  files: (n: number) => (n > 1 ? `${n} files changed` : `${n} file changed`),
-  insertions: (n: number) => (n > 1 ? `${n} insertions(+)` : `${n} insertion(+)`),
-  deletions: (n: number) => (n > 1 ? `${n} deletions(-)` : `${n} deletion(-)`),
-  binary: 'binary',
-  copyHash: 'Copy hash',
-  openWeb: 'Open on the web',
-  fetchedAgo: (when: string) => `Remote checked ${when}`,
-  fetchFailed: (error: string) => `Fetch failed: ${error}`,
-  workers: (names: string) => `↳ ${names}`,
-  busy: {
-    fetch: 'Fetching…',
-    pull: 'Pulling…',
-    push: 'Pushing…',
-    sync: 'Syncing…',
-    publish: 'Publishing…',
-    commit: 'Committing…',
-    stage: 'Staging…',
-    unstage: 'Unstaging…',
-    'stage-all': 'Staging…',
-    'unstage-all': 'Unstaging…',
-    checkout: 'Switching branch…',
-    branch: 'Creating the branch…',
-    abort: 'Aborting…',
-  } as Record<RepoActionKind, string>,
-  errors: {
-    'no-upstream': 'This branch has no remote branch of its own yet.',
-    rejected: 'Push rejected: the remote has commits you do not have yet. Sync, then push again.',
-    diverged: 'The branch and its upstream have diverged: git refuses to merge them with your pull configuration.',
-    conflict: 'Conflicts: resolve them in the files, stage them, then commit — or abort.',
-    'local-changes': 'Local changes would be overwritten: commit them first.',
-    'nothing-to-commit': 'Nothing to commit.',
-    auth: 'The remote refused authentication: check your GitHub connection (Settings › GitHub).',
-    busy: 'Another git action is already running in this repository.',
-    invalid: 'Not possible.',
-    other: 'Git refused the operation.',
-  } as Record<RepoErrorKind, string>,
-  details: 'Details',
-  dismiss: 'Close',
-};
-
-const L = LANG === 'fr' ? FR : EN;
+// Commit shortcut as the platform names it.
+const SHORTCUT = t(PLATFORM === 'darwin' ? 'scm.shortcutMac' : 'scm.shortcut');
 
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REF_ICONS: Record<GitRefKind, string> = { head: ICONS.target, branch: ICONS.branch, remote: ICONS.cloud, tag: ICONS.tag };
@@ -376,6 +173,8 @@ export class RepoPanel {
   private choice = stored('scmCheckout') ?? 'auto';
   private filter: GraphFilter = stored('scmFilter') === 'all' ? 'all' : 'auto';
   private collapsed = stored('scmCollapsed') !== '0';
+  /** Height chosen by dragging, kept while a smaller window squeezes the panel. */
+  private preferred = DEFAULT_HEIGHT;
   private sections = { changes: stored('scmChangesOpen') !== '0', graph: stored('scmGraphOpen') !== '0' };
 
   // State of the checkout shown.
@@ -410,7 +209,7 @@ export class RepoPanel {
 
   constructor(private readonly hub: HubApi) {
     const resize = h('div', 'scm-resize');
-    resize.title = L.resize;
+    resize.title = t('scm.resize');
     this.setupResize(resize);
     this.head.addEventListener('dblclick', (e) => {
       if (e.target === this.head) this.setCollapsed(!this.collapsed);
@@ -447,13 +246,18 @@ export class RepoPanel {
     );
 
     const height = Number(stored('scmHeight'));
-    this.root.style.height = `${height >= MIN_HEIGHT ? height : DEFAULT_HEIGHT}px`;
+    this.preferred = height >= MIN_HEIGHT ? height : DEFAULT_HEIGHT;
+    this.root.style.height = `${this.preferred}px`;
     this.root.classList.toggle('collapsed', this.collapsed);
+    window.addEventListener('resize', () => this.fitHeight());
   }
 
   update(status: RepoStatus): void {
+    const first = this.statuses.size === 0;
     this.statuses.set(status.path, status);
     this.render();
+    // Once in the page: the stored height may not fit this window.
+    if (first) requestAnimationFrame(() => this.fitHeight());
   }
 
   /** Workers shown next to the checkout they work in. */
@@ -552,6 +356,7 @@ export class RepoPanel {
     this.collapsed = collapsed;
     store('scmCollapsed', collapsed ? '1' : '0');
     this.root.classList.toggle('collapsed', collapsed);
+    this.fitHeight();
     this.renderedKeys.head = '';
     this.hideHover(true);
     this.render();
@@ -564,21 +369,21 @@ export class RepoPanel {
     if (key === this.renderedKeys.head) return;
     this.renderedKeys.head = key;
 
-    const chevron = iconButton(ICONS.chevron, this.collapsed ? L.expand : L.collapse, () => this.setCollapsed(!this.collapsed), 'icon-btn scm-chevron');
+    const chevron = iconButton(ICONS.chevron, this.collapsed ? t('scm.expand') : t('scm.collapse'), () => this.setCollapsed(!this.collapsed), 'icon-btn scm-chevron');
 
     const repoBtn = h('button', 'scm-repo');
     repoBtn.append(h('span', 'scm-repo-name', repo.name));
     if (tree.label) repoBtn.append(h('span', 'scm-repo-tree', tree.label));
-    repoBtn.title = `${tree.path}\n${L.pickRepo}`;
+    repoBtn.title = `${tree.path}\n${t('scm.pickRepo')}`;
     repoBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this.openRepoPicker(repoBtn);
     });
 
     const branch = h('button', 'scm-branch');
-    branch.append(icon(ICONS.branch, 'ico small'), h('span', '', tree.error ? L.unreadable : tree.branch || (tree.oid ? L.detached(tree.oid.slice(0, 7)) : L.noCommit)));
+    branch.append(icon(ICONS.branch, 'ico small'), h('span', '', tree.error ? t('scm.unreadable') : tree.branch || (tree.oid ? t('scm.detached', { oid: tree.oid.slice(0, 7) }) : t('scm.noCommit'))));
     if (tree.changes > 0) branch.append(h('span', 'scm-dirty', '*'));
-    branch.title = L.switchBranch;
+    branch.title = t('scm.switchBranch');
     branch.addEventListener('click', (e) => {
       e.stopPropagation();
       this.openBranchPicker(branch);
@@ -591,7 +396,7 @@ export class RepoPanel {
       return btn;
     };
     const actions = h('div', 'scm-actions');
-    actions.append(remote('fetch', ICONS.fetch, L.fetch), remote('pull', ICONS.pull, L.pull), remote('push', ICONS.push, L.push));
+    actions.append(remote('fetch', ICONS.fetch, t('scm.fetch')), remote('pull', ICONS.pull, t('scm.pull')), remote('push', ICONS.push, t('scm.push')));
 
     const items: HTMLElement[] = [chevron, repoBtn, branch, h('span', 'scm-spacer'), actions];
     if (tree.branch) {
@@ -613,7 +418,7 @@ export class RepoPanel {
       });
       items.push(sync);
     }
-    const more = iconButton(ICONS.more, L.more, () => this.openMoreMenu(more));
+    const more = iconButton(ICONS.more, t('scm.more'), () => this.openMoreMenu(more));
     items.push(more);
     this.head.replaceChildren(...items);
   }
@@ -625,8 +430,8 @@ export class RepoPanel {
     const { repo, tree } = c;
     const busy = repo.busy?.path === tree.path ? repo.busy.action : this.pending;
     return [
-      ownUpstream(tree.branch, tree.upstream) ? L.syncHint(tree.behind, tree.ahead, tree.upstream) : L.publishHint,
-      busy ? L.busy[busy] : repo.fetching ? L.busy.fetch : repo.fetchError ? L.fetchFailed(repo.fetchError) : repo.fetchedAt ? L.fetchedAgo(ago(repo.fetchedAt)) : '',
+      ownUpstream(tree.branch, tree.upstream) ? t('scm.syncHint', { behind: tree.behind, ahead: tree.ahead, upstream: tree.upstream }) : t('scm.publishHint'),
+      busy ? t(`scm.busy.${busy}` as Key) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t('scm.fetchFailed', { error: repo.fetchError }) : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -649,28 +454,28 @@ export class RepoPanel {
     };
     if (state) {
       const box = h('div', 'scm-alert-box warn');
-      box.append(h('div', 'scm-alert-text', L.state[state]));
+      box.append(h('div', 'scm-alert-text', t(`scm.state.${state}` as Key)));
       const fixes = h('div', 'scm-fixes');
-      fixes.append(fix(L.abort[state], ICONS.undo, { kind: 'abort' }));
+      fixes.append(fix(t(`scm.abort.${state}` as Key), ICONS.undo, { kind: 'abort' }));
       box.append(fixes);
       items.push(box);
     }
     if (a) {
       const box = h('div', 'scm-alert-box error');
-      const close = iconButton(ICONS.remove, L.dismiss, () => {
+      const close = iconButton(ICONS.remove, t('scm.dismiss'), () => {
         this.alert = null;
         this.renderAlert();
       });
       const text = h('div', 'scm-alert-text');
-      text.append(h('b', '', L.errors[a.kind]), h('span', 'scm-alert-git', a.message));
+      text.append(h('b', '', t(`scm.error.${a.kind}` as Key)), h('span', 'scm-alert-git', a.message));
       box.append(close, text);
       const fixes = h('div', 'scm-fixes');
-      if (a.kind === 'no-upstream') fixes.append(fix(L.publish, ICONS.publish, { kind: 'publish' }));
-      if (a.kind === 'rejected') fixes.append(fix(L.sync, ICONS.sync, { kind: 'sync' }));
+      if (a.kind === 'no-upstream') fixes.append(fix(t('scm.publish'), ICONS.publish, { kind: 'publish' }));
+      if (a.kind === 'rejected') fixes.append(fix(t('scm.sync'), ICONS.sync, { kind: 'sync' }));
       if (fixes.childElementCount) box.append(fixes);
       if (a.detail && a.detail !== a.message) {
         const more = h('details', 'scm-alert-detail');
-        more.append(h('summary', '', L.details), h('pre', '', a.detail));
+        more.append(h('summary', '', t('scm.details')), h('pre', '', a.detail));
         box.append(more);
       }
       items.push(box);
@@ -701,8 +506,8 @@ export class RepoPanel {
     const all = staged.length === 0;
     const branch = tree.branch || 'HEAD';
     this.commitBox.hidden = tree.changes === 0 && !tree.state;
-    this.message.placeholder = L.commitPlaceholder(branch, all);
-    this.commitBtn.title = L.commit(branch, all);
+    this.message.placeholder = t(all ? 'scm.placeholderAll' : 'scm.placeholder', { branch, key: SHORTCUT });
+    this.commitBtn.title = t(all ? 'scm.commitAll' : 'scm.commit', { branch, key: SHORTCUT });
     this.commitBtn.disabled = !!repo.busy || !!this.pending || tree.changes === 0 || conflicts.length > 0 || !!tree.error;
     this.commitBtn.classList.toggle('running', this.pending === 'commit');
   }
@@ -714,7 +519,7 @@ export class RepoPanel {
     if (!text) {
       this.message.focus();
       this.commitBox.classList.add('invalid');
-      this.message.placeholder = L.emptyMessage;
+      this.message.placeholder = t('scm.emptyMessage');
       window.setTimeout(() => this.commitBox.classList.remove('invalid'), 1200);
       return;
     }
@@ -738,23 +543,23 @@ export class RepoPanel {
     const { conflicts, staged, unstaged } = splitChanges(tree.files);
 
     this.changesHead.hidden = tree.changes === 0;
-    this.changesHead.replaceChildren(this.sectionTitle('changes', L.changes, tree.changes));
+    this.changesHead.replaceChildren(this.sectionTitle('changes', t('scm.changes'), tree.changes));
     const rows: HTMLElement[] = [];
     if (this.sections.changes && tree.changes > 0) {
       const group = (label: string, list: Change[], action: 'stage' | 'unstage') => {
         if (list.length === 0) return;
         const head = h('div', 'scm-group');
         head.append(h('span', 'scm-group-name', label));
-        if (action === 'stage') head.append(iconButton(ICONS.plus, L.stageAll, () => void this.run({ kind: 'stage-all' }), 'icon-btn scm-row-action'));
-        else head.append(iconButton(ICONS.minus, L.unstageAll, () => void this.run({ kind: 'unstage-all' }), 'icon-btn scm-row-action'));
+        if (action === 'stage') head.append(iconButton(ICONS.plus, t('scm.stageAll'), () => void this.run({ kind: 'stage-all' }), 'icon-btn scm-row-action'));
+        else head.append(iconButton(ICONS.minus, t('scm.unstageAll'), () => void this.run({ kind: 'unstage-all' }), 'icon-btn scm-row-action'));
         head.append(h('span', 'scm-count', String(list.length)));
         rows.push(head);
         for (const change of list) rows.push(this.changeRow(change, action));
       };
-      group(L.conflicts, conflicts, 'stage');
-      group(L.staged, staged, 'unstage');
-      group(L.unstaged, unstaged, 'stage');
-      if (tree.changes > tree.files.length) rows.push(h('div', 'scm-empty', L.truncated(tree.files.length, tree.changes)));
+      group(t('scm.conflicts'), conflicts, 'stage');
+      group(t('scm.staged'), staged, 'unstage');
+      group(t('scm.unstaged'), unstaged, 'stage');
+      if (tree.changes > tree.files.length) rows.push(h('div', 'scm-empty', t('scm.truncated', { shown: tree.files.length, total: tree.changes })));
     }
     this.changesList.replaceChildren(...rows);
   }
@@ -765,8 +570,8 @@ export class RepoPanel {
     const label = h('span', 'scm-file-label');
     label.append(h('span', 'scm-file-name', name), h('span', 'scm-file-dir', dir));
     row.append(label);
-    if (action === 'stage') row.append(iconButton(ICONS.plus, L.stage, () => void this.run({ kind: 'stage', paths: [change.path] }), 'icon-btn scm-row-action'));
-    else row.append(iconButton(ICONS.minus, L.unstage, () => void this.run({ kind: 'unstage', paths: [change.path] }), 'icon-btn scm-row-action'));
+    if (action === 'stage') row.append(iconButton(ICONS.plus, t('scm.stage'), () => void this.run({ kind: 'stage', paths: [change.path] }), 'icon-btn scm-row-action'));
+    else row.append(iconButton(ICONS.minus, t('scm.unstage'), () => void this.run({ kind: 'unstage', paths: [change.path] }), 'icon-btn scm-row-action'));
     row.append(h('span', `scm-letter l-${change.letter === '!' ? 'conflict' : change.letter}`, change.letter));
     row.title = change.file.from ? `${change.file.from} → ${change.path}` : change.path;
     return row;
@@ -838,7 +643,7 @@ export class RepoPanel {
   private renderGraph(): void {
     // The hovered row is about to be replaced: it will never fire its mouseleave.
     this.hideHover(true);
-    this.graphHead.replaceChildren(this.sectionTitle('graph', L.graph, null), this.filterButton());
+    this.graphHead.replaceChildren(this.sectionTitle('graph', t('scm.graph'), null), this.filterButton());
     this.loadMoreObserver.disconnect();
     if (!this.sections.graph) {
       this.graphList.replaceChildren();
@@ -849,11 +654,11 @@ export class RepoPanel {
       return;
     }
     if (!this.graph) {
-      this.graphList.replaceChildren(h('div', 'scm-empty', L.loading));
+      this.graphList.replaceChildren(h('div', 'scm-empty', t('scm.loading')));
       return;
     }
     if (this.viewModels.length === 0) {
-      this.graphList.replaceChildren(h('div', 'scm-empty', L.noHistory));
+      this.graphList.replaceChildren(h('div', 'scm-empty', t('scm.noHistory')));
       return;
     }
     const rows: HTMLElement[] = [];
@@ -869,16 +674,16 @@ export class RepoPanel {
 
   private filterButton(): HTMLElement {
     const btn = h('button', 'scm-filter');
-    btn.append(icon(ICONS.filter, 'ico small'), h('span', '', L.filters[this.filter]));
-    btn.title = `${L.filterTitle} : ${L.filterHints[this.filter]}`;
+    btn.append(icon(ICONS.filter, 'ico small'), h('span', '', t(`scm.filter.${this.filter}` as Key)));
+    btn.title = t('scm.filterTooltip', { title: t('scm.filterTitle'), hint: t(`scm.filterHint.${this.filter}` as Key) });
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       openMenu(btn, (menu, close) => {
-        menu.append(h('div', 'menu-label', L.filterTitle));
+        menu.append(h('div', 'menu-label', t('scm.filterTitle')));
         for (const f of ['auto', 'all'] as GraphFilter[]) {
           const row = h('button', 'menu-row');
           const text = h('span', 'menu-text');
-          text.append(h('span', 'menu-title', L.filters[f]), h('span', 'menu-hint', L.filterHints[f]));
+          text.append(h('span', 'menu-title', t(`scm.filter.${f}` as Key)), h('span', 'menu-hint', t(`scm.filterHint.${f}` as Key)));
           row.append(icon(f === this.filter ? ICONS.check : ''), text);
           row.addEventListener('click', () => {
             close();
@@ -903,7 +708,7 @@ export class RepoPanel {
     const graph = h('div', 'scm-graph-cell');
     graph.append(fit(renderGraph(vm)));
     const label = h('div', 'scm-commit-label');
-    const subject = virtual ? (vm.kind === 'incoming-changes' ? L.incoming : L.outgoing) : item.subject;
+    const subject = virtual ? (vm.kind === 'incoming-changes' ? t('scm.incoming') : t('scm.outgoing')) : item.subject;
     label.append(h('span', 'scm-subject', subject), h('span', 'scm-author', item.author ?? ''));
     const refs = h('div', 'scm-badges');
     refs.append(...badges(item.references ?? []));
@@ -930,7 +735,7 @@ export class RepoPanel {
       rows.push(row);
     }
     const files = h('div', 'scm-commit-files');
-    files.append(this.placeholderRow(columns, lane, h('span', 'scm-file-dir', L.loading)));
+    files.append(this.placeholderRow(columns, lane, h('span', 'scm-file-dir', t('scm.loading'))));
     rows.push(files);
     void this.detailsOf(vm.historyItem.id).then(
       (d) => files.replaceChildren(...d.files.map((f) => this.commitFileRow(f, columns, lane))),
@@ -960,7 +765,7 @@ export class RepoPanel {
     label.append(h('span', 'scm-file-name', name), h('span', 'scm-file-dir', dir));
     const row = this.placeholderRow(columns, lane, label);
     const stats = h('span', 'scm-file-stats');
-    if (f.added < 0) stats.textContent = L.binary;
+    if (f.added < 0) stats.textContent = t('scm.binary');
     else stats.append(h('span', 'add', `+${f.added}`), h('span', 'del', `−${f.deleted}`));
     row.append(stats, h('span', `scm-letter l-${f.status}`, f.status));
     row.title = f.from ? `${f.from} → ${f.path}` : f.path;
@@ -971,7 +776,7 @@ export class RepoPanel {
     const row = h('div', 'scm-load-more');
     const cell = h('div', 'scm-graph-cell');
     cell.append(fit(renderGraphPlaceholder(this.viewModels.at(-1)?.outputSwimlanes ?? [])));
-    row.append(cell, h('span', '', L.loadMore));
+    row.append(cell, h('span', '', t('scm.loadMore')));
     row.addEventListener('click', () => this.loadMore());
     return row;
   }
@@ -1018,14 +823,14 @@ export class RepoPanel {
     const who = h('div', 'scm-hover-who');
     who.append(h('b', '', item.author ?? ''));
     if (item.email) who.append(h('span', 'scm-hover-dim', ` <${item.email}>`));
-    if (item.at) who.append(h('span', 'scm-hover-dim', `, ${ago(item.at)} (${new Date(item.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })})`));
-    card.append(who, h('div', 'scm-hover-message', virtual ? (vm.kind === 'incoming-changes' ? L.incoming : L.outgoing) : item.message));
+    if (item.at) who.append(h('span', 'scm-hover-dim', `, ${t('scm.when', { ago: ago(item.at), date: new Date(item.at).toLocaleString(LANG, { dateStyle: 'medium', timeStyle: 'short' }) })}`));
+    card.append(who, h('div', 'scm-hover-message', virtual ? (vm.kind === 'incoming-changes' ? t('scm.incoming') : t('scm.outgoing')) : item.message));
 
     const stats = h('div', 'scm-hover-stats');
     card.append(stats);
     void this.detailsOf(item.id).then(
       // Insertions and deletions colored like VS Code's hover.
-      (d) => stats.replaceChildren(h('span', '', L.files(d.files.length)), h('span', 'add', L.insertions(d.added)), h('span', 'del', L.deletions(d.deleted))),
+      (d) => stats.replaceChildren(h('span', '', tn('scm.files', d.files.length)), h('span', 'add', tn('scm.insertions', d.added)), h('span', 'del', tn('scm.deletions', d.deleted))),
       () => stats.remove(),
     );
 
@@ -1038,9 +843,9 @@ export class RepoPanel {
 
     if (!virtual) {
       const foot = h('div', 'scm-hover-foot');
-      foot.append(icon(ICONS.target, 'ico small'), h('span', 'scm-hover-hash', item.id.slice(0, 8)), copyButton(() => item.id, L.copyHash));
+      foot.append(icon(ICONS.target, 'ico small'), h('span', 'scm-hover-hash', item.id.slice(0, 8)), copyButton(() => item.id, t('scm.copyHash')));
       const web = this.current()?.repo.webUrl;
-      if (web) foot.append(iconButton(ICONS.external, L.openWeb, () => this.hub.openExternal(`${web}/commit/${item.id}`)));
+      if (web) foot.append(iconButton(ICONS.external, t('scm.openWeb'), () => this.hub.openExternal(`${web}/commit/${item.id}`)));
       card.append(foot);
     }
 
@@ -1067,47 +872,40 @@ export class RepoPanel {
         });
         return btn;
       };
-      menu.append(row(L.auto, L.autoHint, this.choice === 'auto', () => this.choose('auto')));
+      menu.append(row(t('scm.auto'), t('scm.autoHint'), this.choice === 'auto', () => this.choose('auto')));
       for (const repo of this.statuses.values()) {
         const label = h('div', 'menu-label scm-pick-repo');
         label.append(h('span', '', repo.name));
-        label.append(iconButton(ICONS.remove, L.removeRepo, () => {
+        label.append(iconButton(ICONS.remove, t('scm.removeRepo'), () => {
           close();
-          this.askSettings(new CustomEvent('hub:remove-repo', { detail: repo.path, cancelable: true }));
+          window.dispatchEvent(new CustomEvent('hub:remove-repo', { detail: repo.path }));
         }));
         menu.append(h('div', 'menu-sep'), label);
         if (repo.error) menu.append(h('div', 'menu-note error', repo.error));
         for (const tree of repo.trees) {
           const workers = this.workersIn(tree.path);
-          const hint = [tree.branch || (tree.oid ? L.detached(tree.oid.slice(0, 7)) : L.noCommit), workers.length ? L.workers(workers.join(', ')) : '']
+          const hint = [tree.branch || (tree.oid ? t('scm.detached', { oid: tree.oid.slice(0, 7) }) : t('scm.noCommit')), workers.length ? t('scm.workers', { names: workers.join(', ') }) : '']
             .filter(Boolean)
             .join('  ');
           const chips = h('span', 'scm-chips');
-          if (tree.error) chips.append(h('span', 'scm-chip danger', L.unreadable));
+          if (tree.error) chips.append(h('span', 'scm-chip danger', t('scm.unreadable')));
           if (tree.conflicts) chips.append(h('span', 'scm-chip danger', `!${tree.conflicts}`));
           if (tree.behind) chips.append(h('span', 'scm-chip warn', `${tree.behind}↓`));
           if (tree.ahead) chips.append(h('span', 'scm-chip accent', `${tree.ahead}↑`));
           if (tree.changes - tree.conflicts > 0) chips.append(h('span', 'scm-chip', `●${tree.changes - tree.conflicts}`));
-          const item = row(tree.label || L.mainFolder, hint, this.choice === tree.path, () => this.choose(tree.path), [chips]);
+          const item = row(tree.label || t('scm.mainFolder'), hint, this.choice === tree.path, () => this.choose(tree.path), [chips]);
           item.title = tree.path;
           menu.append(item);
         }
       }
       const add = h('button', 'menu-row');
-      add.append(icon(ICONS.plus), h('span', 'menu-title', L.addRepo));
+      add.append(icon(ICONS.plus), h('span', 'menu-title', t('scm.addRepo')));
       add.addEventListener('click', () => {
         close();
-        this.askSettings(new CustomEvent('hub:add-repo', { cancelable: true }));
+        window.dispatchEvent(new CustomEvent('hub:add-repo'));
       });
       menu.append(h('div', 'menu-sep'), add);
     });
-  }
-
-  /** The followed repos belong to the settings: the app handles the request and cancels the event, else the panel says so. */
-  private askSettings(event: CustomEvent): void {
-    if (!window.dispatchEvent(event)) return;
-    const c = this.current();
-    if (c) this.showAlert({ path: c.tree.path, kind: 'invalid', message: L.reposInSettings, detail: '' });
   }
 
   private openMoreMenu(anchor: HTMLElement): void {
@@ -1127,18 +925,18 @@ export class RepoPanel {
       };
       const { conflicts } = splitChanges(tree.files);
       menu.append(
-        row(L.fetch, ICONS.fetch, () => void this.run({ kind: 'fetch' })),
-        row(L.pull, ICONS.pull, () => void this.run({ kind: 'pull' }), !tree.upstream),
-        row(L.push, ICONS.push, () => void this.run({ kind: 'push' }), !tree.branch),
-        row(L.sync, ICONS.sync, () => void this.run({ kind: 'sync' }), !tree.upstream),
-        row(L.publish, ICONS.publish, () => void this.run({ kind: 'publish' }), !tree.branch),
+        row(t('scm.fetch'), ICONS.fetch, () => void this.run({ kind: 'fetch' })),
+        row(t('scm.pull'), ICONS.pull, () => void this.run({ kind: 'pull' }), !tree.upstream),
+        row(t('scm.push'), ICONS.push, () => void this.run({ kind: 'push' }), !tree.branch),
+        row(t('scm.sync'), ICONS.sync, () => void this.run({ kind: 'sync' }), !tree.upstream),
+        row(t('scm.publish'), ICONS.publish, () => void this.run({ kind: 'publish' }), !tree.branch),
         h('div', 'menu-sep'),
-        row(L.commitPush, ICONS.check, () => this.commit(true), tree.changes === 0 || conflicts.length > 0 || !this.message.value.trim()),
+        row(t('scm.commitPush'), ICONS.check, () => this.commit(true), tree.changes === 0 || conflicts.length > 0 || !this.message.value.trim()),
         h('div', 'menu-sep'),
-        row(L.switchBranch, ICONS.branch, () => this.openBranchPicker(anchor)),
-        row(L.newBranch, ICONS.plus, () => this.openBranchPicker(anchor)),
+        row(t('scm.switchBranch'), ICONS.branch, () => this.openBranchPicker(anchor)),
+        row(t('scm.newBranch'), ICONS.plus, () => this.openBranchPicker(anchor)),
       );
-      if (tree.state) menu.append(h('div', 'menu-sep'), row(L.abort[tree.state], ICONS.undo, () => void this.run({ kind: 'abort' })));
+      if (tree.state) menu.append(h('div', 'menu-sep'), row(t(`scm.abort.${tree.state}` as Key), ICONS.undo, () => void this.run({ kind: 'abort' })));
     });
   }
 
@@ -1149,10 +947,10 @@ export class RepoPanel {
     const path = c.tree.path;
     openMenu(anchor, (menu, close) => {
       const input = h('input', 'scm-branch-input');
-      input.placeholder = L.branchFilter;
+      input.placeholder = t('scm.branchFilter');
       input.spellcheck = false;
       const list = h('div', 'scm-branch-list');
-      list.append(h('div', 'menu-note', L.loading));
+      list.append(h('div', 'menu-note', t('scm.loading')));
       const picker = h('div', 'scm-branch-picker');
       picker.append(input, list);
       menu.append(picker);
@@ -1167,19 +965,19 @@ export class RepoPanel {
         const rows: HTMLElement[] = [];
         if (q && !branches.some((b) => !b.remote && b.name === q)) {
           const create = h('button', 'menu-row');
-          create.append(icon(ICONS.plus), h('span', 'menu-title', L.createBranch(q)));
+          create.append(icon(ICONS.plus), h('span', 'menu-title', t('scm.createBranch', { name: q })));
           create.addEventListener('click', () => go({ kind: 'branch', name: q }));
           rows.push(create);
         }
         for (const remote of [false, true]) {
           const group = match.filter((b) => b.remote === remote);
           if (group.length === 0) continue;
-          rows.push(h('div', 'menu-label', remote ? L.remoteBranches : L.localBranches));
+          rows.push(h('div', 'menu-label', remote ? t('scm.remoteBranches') : t('scm.localBranches')));
           for (const b of group.slice(0, 80)) {
             const btn = h('button', 'menu-row');
             const text = h('span', 'menu-text');
             text.append(h('span', 'menu-title', b.name));
-            const hint = b.current ? L.current : b.worktree && !within(b.worktree, path) ? L.inWorktree(baseName(b.worktree)) : b.at ? ago(b.at) : '';
+            const hint = b.current ? t('scm.current') : b.worktree && !within(b.worktree, path) ? t('scm.inWorktree', { folder: baseName(b.worktree) }) : b.at ? ago(b.at) : '';
             if (hint) text.append(h('span', 'menu-hint', hint));
             btn.append(icon(b.current ? ICONS.check : b.remote ? ICONS.cloud : ICONS.branch), text);
             btn.disabled = b.current;
@@ -1236,6 +1034,20 @@ export class RepoPanel {
     this.render();
   }
 
+  /** Room up to the workers' section, which always keeps its minimum height. */
+  private maxHeight(): number {
+    const workers = this.root.closest('.sidebar')?.querySelector<HTMLElement>('.side-workers');
+    if (!workers) return Infinity;
+    const keep = parseFloat(getComputedStyle(workers).minHeight) || 0;
+    return this.root.getBoundingClientRect().bottom - workers.getBoundingClientRect().top - keep;
+  }
+
+  /** The height the user chose, within the room the window leaves: it comes back when the window grows again. */
+  private fitHeight(): void {
+    if (this.collapsed) return;
+    this.root.style.height = `${Math.round(Math.max(MIN_HEIGHT, Math.min(this.preferred, this.maxHeight())))}px`;
+  }
+
   private setupResize(handle: HTMLElement): void {
     handle.addEventListener('pointerdown', (e) => {
       if (this.collapsed) return;
@@ -1243,17 +1055,16 @@ export class RepoPanel {
       handle.classList.add('dragging');
       const start = e.clientY;
       const from = this.root.getBoundingClientRect().height;
-      const sidebar = this.root.parentElement?.parentElement?.getBoundingClientRect().height ?? window.innerHeight;
       const move = (ev: PointerEvent) => {
-        const height = Math.min(sidebar - 140, Math.max(MIN_HEIGHT, from + start - ev.clientY));
-        this.root.style.height = `${Math.round(height)}px`;
+        this.preferred = Math.round(Math.max(MIN_HEIGHT, Math.min(this.maxHeight(), from + start - ev.clientY)));
+        this.fitHeight();
       };
       const up = () => {
         handle.classList.remove('dragging');
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
         handle.removeEventListener('pointercancel', up);
-        store('scmHeight', String(Math.round(this.root.getBoundingClientRect().height)));
+        store('scmHeight', String(this.preferred));
       };
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', up);

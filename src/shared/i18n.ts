@@ -20,6 +20,8 @@ export const fill = (text: string, params: Params = {}): string => {
  */
 export function translator<K extends string>(dicts: Record<Lang, Record<K, string>>, lang: () => Lang) {
   const t = (key: K, params?: Params) => fill(dicts[lang()][key] ?? dicts.en[key] ?? key, params);
-  const tn = (key: string, n: number, params: Params = {}) => t(`${key}_${n === 1 ? 'one' : 'other'}` as K, { n, ...params });
+  // The language's own rule: 0 takes the singular in French, the plural in English.
+  const tn = (key: string, n: number, params: Params = {}) =>
+    t(`${key}_${new Intl.PluralRules(lang()).select(n) === 'one' ? 'one' : 'other'}` as K, { n, ...params });
   return { t, tn };
 }

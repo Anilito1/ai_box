@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import type { GithubDevice, GithubRepo } from '../shared/types';
 import type { HubConfig } from './config';
 import { CodedError, httpCode } from './errors';
-import { git, GitError } from './git';
+import { git, GitError, type GitSignIn } from './git';
 
 /**
  * Client ID of the GitHub OAuth App this build signs in with (device flow: a public client, no secret involved).
@@ -164,13 +164,25 @@ export async function githubRepos(source: HubConfig['github']['source'], token: 
 /** `git clone` of github.com/owner/name into `root`/name, with the hub's sign-in and never a prompt. */
 export async function cloneRepo(slug: string, root: string, dest: string): Promise<void> {
   try {
-    await git(root, ['clone', '--quiet', '--', `https://github.com/${slug}.git`, dest], { timeout: 10 * 60_000 });
+    const url = `https://github.com/${slug}.git`;
+    await git(root, ['clone', '--quiet', '--', url, dest], { timeout: 10 * 60_000, auth: url, hooks: false });
   } catch (err) {
     const output = err instanceof GitError ? err.stderr : '';
     if (/could not resolve host|failed to connect|timed out|connection (?:refused|reset)/i.test(output)) throw new CodedError('network');
     if (/authentication failed|could not read username|repository not found|returned error: 40[134]/i.test(output)) throw new CodedError('clone-denied');
     throw err;
   }
+}
+
+/**
+ * The sign-in for the hub's own git commands (git panel, background fetch, clone): git.ts hands it to one command
+ * at a time and keeps a token out of every environment, so no hook of a repo can read it.
+ */
+export function githubSignIn(cfg: HubConfig, token: string, gh: string): GitSignIn {
+  const prefix = 'https://github.com';
+  const { source } = cfg.github;
+  if (source === 'gh') return gh && !gh.includes("'") ? { prefix, helper: `!'${gh}' auth git-credential` } : null;
+  return (source === 'oauth' || source === 'token') && token ? { prefix, token } : null;
 }
 
 /**

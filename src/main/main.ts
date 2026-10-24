@@ -36,7 +36,7 @@ import {
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
 import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { errorCode } from './errors';
-import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, SLUG } from './github';
+import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
 import { setGitSignIn } from './git';
 import { RepoWatcher } from './repoStatus';
@@ -212,7 +212,7 @@ class Hub {
   }
 
   async init(): Promise<void> {
-    setGitSignIn(() => this.gitEnv());
+    setGitSignIn(() => githubSignIn(this.cfg, this.secrets.get('githubToken'), this.gh));
     [this.executable, this.gh] = await Promise.all([
       claudeExecutable(this.cfg),
       this.cfg.github.source === 'gh' ? ghPath() : '',
@@ -223,13 +223,8 @@ class Hub {
   /** Claude access chosen in the settings, plus the GitHub sign-in when the user shares it with the sessions. */
   sessionEnv(): { set: Record<string, string>; unset: string[] } {
     const claude = claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
-    const github = this.cfg.github.shareWithSessions ? this.gitEnv() : {};
+    const github = this.cfg.github.shareWithSessions ? githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh) : {};
     return { set: { ...claude.set, ...github }, unset: claude.unset };
-  }
-
-  /** What the hub's own git commands (the git panel) need to reach GitHub with the hub's sign-in. */
-  gitEnv(): Record<string, string> {
-    return githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh);
   }
 
   view(): SettingsView {
@@ -254,11 +249,20 @@ class Hub {
     this.mgr.startMaster();
   }
 
+  /** Watchers of the followed repos: a repo still followed keeps its own (no new fetch, its checkouts stay known). */
   setWatchers(): void {
-    for (const repo of repoWatchers) repo.stop();
-    repoWatchers = this.cfg.mainRepos.map((r) => new RepoWatcher(mainRepoPath(this.cfg, r)));
-    send('hub:repos', repoWatchers.map((r) => r.path));
-    for (const repo of repoWatchers) {
+    const paths = this.cfg.mainRepos.map((r) => mainRepoPath(this.cfg, r));
+    for (const repo of repoWatchers) if (!paths.includes(repo.path)) repo.stop();
+    const added: RepoWatcher[] = [];
+    repoWatchers = paths.map((path) => {
+      const kept = repoWatchers.find((r) => r.path === path);
+      if (kept) return kept;
+      const repo = new RepoWatcher(path);
+      added.push(repo);
+      return repo;
+    });
+    send('hub:repos', paths);
+    for (const repo of added) {
       repo.on('changed', (status) => send('hub:repo', status));
       repo.start();
     }
