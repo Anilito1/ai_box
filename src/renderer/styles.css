@@ -2252,6 +2252,11 @@ button {
   height: 7px;
   box-shadow: 0 0 0 2px var(--panel);
 }
+/* The mascot already shows the activity: its badge keeps the colour without pulsing (an endless animation keeps the
+   compositor drawing 60 frames a second). */
+.avatar-badge.dot {
+  animation: none;
+}
 
 /* Stopped: grey and asleep. Awaiting a permission: fidgets. */
 .avatar.off .clawd {
@@ -2634,9 +2639,17 @@ button {
     transform: translateX(6%) rotate(4deg);
   }
 }
+/* Reduced motion: no looping animation anywhere (pulses, spinners, shimmer, the SVG mascot); each one ends on its
+   final frame at once. The 3D mascots show still frames (clawd/stage.ts). */
 @media (prefers-reduced-motion: reduce) {
   .clawd * {
     animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

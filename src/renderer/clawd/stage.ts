@@ -19,16 +19,29 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import glb from '../../../assets/clawd.glb';
-import { CALM, CLIPS, type Clip, type Hat, type Mind, type Pose } from './state';
+import { CALM, CLIPS, FIDGETS, REST, type Clip, type Hat, type Mind, type Pose } from './state';
 
 // One WebGL context for every mascot (Chromium caps a page near 16): each view is rendered in turn into the shared
-// offscreen canvas, then copied into its own 2D canvas. Scrolling, clipping and hiding stay with the DOM.
+// offscreen canvas, then handed to its own canvas as an ImageBitmap, a GPU copy (drawImage into a small 2D canvas
+// would read the pixels back to the CPU). Scrolling, clipping and hiding stay with the DOM.
+//
+// Every frame put on a canvas costs the same whatever draws it, so frames are only drawn while something moves:
+// - at work, 24 fps for the large mascot of the open conversation (the rig's own rate), 16 for the sidebar cards,
+//   12 for calm loops (waiting on a background task, the master conducting) or with the hub in the background;
+// - at rest, a still pose, livened now and then by a blink or a fidget at 12 fps (never with the hub in the
+//   background);
+// - a closed session is drawn once; a hidden or minimized hub draws nothing.
 
 const BASE_FADE_S = 0.25;
 const SHOT_FADE_S = 0.1;
 const OVERLAY_FADE_S = 0.3;
-const FPS = 30;
-const CALM_FPS = 15;
+const LARGE_FPS = 24;
+const CARD_FPS = 16;
+const SLOW_FPS = 12;
+/** Timers fire a little late: a frame this close to due is drawn now. */
+const TIMER_SLACK_MS = 4;
+/** A resting view still checks its mind this often (drowsiness, a fidget due), without drawing. */
+const REST_CHECK_MS = 1000;
 const HAT_BONES: Record<Hat, string> = {
   crown: 'prop_crown',
   pumpkin: 'prop_hat_pumpkin',
@@ -38,6 +51,8 @@ const HAT_BONES: Record<Hat, string> = {
 };
 /** Frame of a loop shown on a still Clawd: a moment that reads well (a Z in the air, stars around the head). */
 const STILL_AT: Partial<Record<Clip, number>> = { sleep_loop: 1.4, ko_loop: 0.3 };
+/** The sweat drop on a still Clawd, halfway down its temple. */
+const SWEAT_STILL_AT = 0.6;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 class Stage {
@@ -47,7 +62,10 @@ class Stage {
   readonly rig: Object3D;
   readonly camera: PerspectiveCamera;
   reduced = reducedMotion.matches;
-  private raf = 0;
+  /** The hub window is in the background: no fidgets nor blinks, work at the slow pace. */
+  quiet = !document.hasFocus();
+  private timer = 0;
+  private timerAt = Infinity;
   private lost = false;
 
   constructor(
@@ -77,7 +95,7 @@ class Stage {
 
     renderer.domElement.addEventListener('webglcontextlost', () => {
       this.lost = true;
-      cancelAnimationFrame(this.raf);
+      this.stop();
       loading = Promise.resolve(null); // Mascots created from now on go straight to the SVG.
       for (const view of [...this.views]) view.onLost();
     });
@@ -85,18 +103,26 @@ class Stage {
       this.reduced = reducedMotion.matches;
       this.wake();
     });
+    const focus = (focused: boolean) => () => {
+      this.quiet = !focused;
+      this.wake();
+    };
+    window.addEventListener('focus', focus(true));
+    window.addEventListener('blur', focus(false));
+    document.addEventListener('visibilitychange', () => (document.hidden ? this.stop() : this.wake()));
   }
 
-  attach(canvas: HTMLCanvasElement, mind: Mind, color: string, onLost: () => void): StageView {
-    const view = new StageView(this, canvas, mind, color, onLost);
+  /** `large`: the mascot atop an open conversation, animated at the full rate. */
+  attach(canvas: HTMLCanvasElement, mind: Mind, color: string, large: boolean, onLost: () => void): StageView {
+    const view = new StageView(this, canvas, mind, color, large ? LARGE_FPS : CARD_FPS, onLost);
     this.views.add(view);
     this.wake();
     return view;
   }
 
-  /** Runs frames while a visible view moves; a change (snapshot, event, resize) calls it again. */
+  /** Something changed (snapshot, event, resize, focus): look at every view now. */
   wake(): void {
-    if (!this.raf && !this.lost) this.raf = requestAnimationFrame(this.frame);
+    this.schedule(0);
   }
 
   /** The shared canvas only grows, so switching between view sizes never reallocates it. */
@@ -105,12 +131,30 @@ class Stage {
     if (canvas.width < width || canvas.height < height) this.renderer.setSize(Math.max(canvas.width, width), Math.max(canvas.height, height), false);
   }
 
-  private readonly frame = (t: number): void => {
-    this.raf = 0;
+  /** At most one timer, at the earliest time a view needs to run. */
+  private schedule(delay: number): void {
+    if (this.lost || document.hidden) return;
+    const at = performance.now() + delay;
+    if (this.timer && this.timerAt <= at) return;
+    window.clearTimeout(this.timer);
+    this.timerAt = at;
+    this.timer = window.setTimeout(this.tick, delay);
+  }
+
+  private stop(): void {
+    window.clearTimeout(this.timer);
+    this.timer = 0;
+    this.timerAt = Infinity;
+  }
+
+  private readonly tick = (): void => {
+    this.timer = 0;
+    this.timerAt = Infinity;
     const now = Date.now();
-    let again = false;
-    for (const view of this.views) if (view.frame(now, t)) again = true;
-    if (again) this.wake();
+    const t = performance.now();
+    let next = Infinity;
+    for (const view of this.views) next = Math.min(next, view.frame(now, t));
+    if (next !== Infinity) this.schedule(Math.max(0, next - performance.now()));
   };
 }
 
@@ -120,7 +164,7 @@ export type { Stage };
 export class StageView {
   private readonly root: Object3D;
   private readonly mixer: AnimationMixer;
-  private readonly ctx: CanvasRenderingContext2D;
+  private readonly ctx: ImageBitmapRenderingContext;
   private readonly actions = new Map<Clip, AnimationAction>();
   private readonly bones = new Map<string, Object3D>();
   private skeleton: Skeleton | null = null;
@@ -129,25 +173,33 @@ export class StageView {
   private readonly resize: ResizeObserver;
   private current: AnimationAction | null = null;
   private serial = -1;
-  private sweating = false;
+  private sweat: 'off' | 'moving' | 'still' = 'off';
   private blinked = 0;
   private hat: Hat | null = null;
   private blueprint = false;
   private visible = false;
+  private disposed = false;
+  /** The canvas needs a frame even at rest: first draw, new size, a hat changed. */
+  private dirty = true;
   /** Key of the still frame on the canvas; empty while animating. */
   private drawn = '';
+  /** Frames are drawn until then even at rest: a crossfade or a blink is finishing. */
+  private settleUntil = 0;
   private nextAt = 0;
   private last = 0;
+  /** Latest frame sent: a bitmap that resolves after a newer one is dropped. */
+  private sent = 0;
 
   constructor(
     private readonly stage: Stage,
     private readonly canvas: HTMLCanvasElement,
     private readonly mind: Mind,
     color: string,
+    private readonly fps: number,
     readonly onLost: () => void,
   ) {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('2D canvas unavailable');
+    const ctx = canvas.getContext('bitmaprenderer');
+    if (!ctx) throw new Error('bitmaprenderer canvas unavailable');
     this.ctx = ctx;
     this.root = clone(stage.rig);
     this.root.visible = false;
@@ -179,6 +231,7 @@ export class StageView {
       canvas.width = width;
       canvas.height = height;
       this.drawn = '';
+      this.dirty = true;
       stage.wake();
     });
     this.resize.observe(canvas, { box: 'device-pixel-content-box' });
@@ -189,6 +242,7 @@ export class StageView {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.visibility.disconnect();
     this.resize.disconnect();
     this.mixer.stopAllAction();
@@ -199,11 +253,12 @@ export class StageView {
     this.stage.views.delete(this);
   }
 
-  /** Advances and draws this view if due; true while it needs more frames. */
-  frame(now: number, t: number): boolean {
-    if (!this.visible || this.canvas.width === 0 || this.canvas.height === 0) return false;
-    const pose = this.mind.pose(now);
-    this.dress(pose);
+  /** Advances and draws this view if due; returns when it next needs to run (performance clock), Infinity if never. */
+  frame(now: number, t: number): number {
+    if (!this.visible || this.canvas.width === 0 || this.canvas.height === 0) return Infinity;
+    const quiet = this.stage.quiet;
+    const pose = this.mind.pose(now, quiet);
+    if (this.dress(pose)) this.dirty = true;
     // Closed, or reduced motion: one frame per change, of the base loop.
     if (pose.still || this.stage.reduced) {
       const clip = pose.still ? pose.clip : pose.base;
@@ -213,29 +268,44 @@ export class StageView {
         this.draw();
         this.drawn = key;
       }
-      return false;
+      return Infinity;
     }
     this.drawn = '';
+    if (this.dirty) {
+      this.dirty = false;
+      this.settle(t, 0);
+      this.nextAt = 0;
+    }
+    // A Clawd at rest holds a still pose; one-shots, blinks and work loops move.
+    const resting = REST.has(pose.clip);
     if (pose.serial !== this.serial) {
       this.serial = pose.serial;
-      this.start(pose);
+      this.start(pose, resting, t);
     }
-    this.overlay(pose.sweat);
-    const blinks = this.mind.blinks(now);
+    this.overlay(pose.sweat, resting, t);
+    const blinks = this.mind.blinks(now, quiet);
     if (blinks !== this.blinked) {
       this.blinked = blinks;
       // Not clamped: once over it lets go of the eyes, or it would flatten the next expression.
       this.play(this.action('eyes_blink'), 1, false);
+      this.settle(t, CLIPS.eyes_blink.duration / this.mind.speed);
     }
-    if (t < this.nextAt) return true;
-    // A few ms early, so a 60 Hz display does not skip every other frame.
-    this.nextAt = t + 1000 / (CALM.has(pose.clip) ? CALM_FPS : FPS) - 4;
+    if (resting && t >= this.settleUntil) {
+      this.last = 0; // The next move starts from here, not from a long dt.
+      return t + Math.max(0, Math.min(REST_CHECK_MS, this.mind.nextChange(now) - now));
+    }
+    if (t < this.nextAt - TIMER_SLACK_MS) return this.nextAt;
+    // On a grid shared by every view (12 fps is every other 24 fps frame), so the timer wakes once for all. Blinks
+    // and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the full rate.
+    const slow = quiet || CALM.has(pose.clip) || REST.has(pose.clip) || FIDGETS.has(pose.clip);
+    const step = 1000 / (slow ? SLOW_FPS : this.fps);
+    this.nextAt = (Math.floor(t / step) + 1) * step;
     const dt = this.last ? Math.min(0.1, (t - this.last) / 1000) : 0;
     this.last = t;
     this.mixer.update(dt);
     this.release();
     this.draw();
-    return true;
+    return this.nextAt;
   }
 
   private action(clip: Clip): AnimationAction {
@@ -249,15 +319,27 @@ export class StageView {
     return action;
   }
 
-  /** From the base loop to a one-shot (or back), crossfaded; loops start at the worker's own phase. */
-  private start(pose: Pose): void {
+  /** Keeps drawing for `seconds` (plus a frame), so a move at rest ends on screen. */
+  private settle(t: number, seconds: number): void {
+    this.settleUntil = Math.max(this.settleUntil, t + seconds * 1000 + 1000 / SLOW_FPS);
+  }
+
+  /** From the base loop to a one-shot (or back), crossfaded; loops start at the worker's own phase, rest poses hold. */
+  private start(pose: Pose, resting: boolean, t: number): void {
     const next = this.action(pose.clip);
     const once = pose.reps !== Infinity;
     const prev = this.current;
     this.play(next, pose.reps);
-    if (!once) next.time = this.mind.phase * next.getClip().duration;
-    if (prev && prev !== next) prev.crossFadeTo(next, once ? SHOT_FADE_S : BASE_FADE_S, false);
+    if (resting) {
+      next.time = STILL_AT[pose.clip] ?? 0;
+      next.paused = true;
+    } else if (!once) {
+      next.time = this.mind.phase * next.getClip().duration;
+    }
+    const fade = once ? SHOT_FADE_S : BASE_FADE_S;
+    if (prev && prev !== next) prev.crossFadeTo(next, fade, false);
     this.current = next;
+    this.settle(t, fade);
   }
 
   /** By default a one-shot holds its last frame until the base takes over. */
@@ -269,21 +351,28 @@ export class StageView {
     action.play();
   }
 
-  /** The sweat drop runs over whatever plays. */
-  private overlay(on: boolean): void {
-    if (on === this.sweating) return;
-    this.sweating = on;
+  /** The sweat drop runs over whatever plays; on a Clawd at rest it stays put on its temple. */
+  private overlay(on: boolean, resting: boolean, t: number): void {
+    const want = !on ? 'off' : resting ? 'still' : 'moving';
+    if (want === this.sweat) return;
     const sweat = this.action('sweat_overlay');
-    if (on) {
-      this.play(sweat, Infinity);
-      sweat.fadeIn(OVERLAY_FADE_S);
-    } else {
+    if (want === 'off') {
       sweat.fadeOut(OVERLAY_FADE_S);
+    } else {
+      if (this.sweat === 'off') {
+        this.play(sweat, Infinity);
+        sweat.fadeIn(OVERLAY_FADE_S);
+      }
+      sweat.paused = want === 'still';
+      if (want === 'still') sweat.time = SWEAT_STILL_AT;
     }
+    this.sweat = want;
+    this.settle(t, OVERLAY_FADE_S);
   }
 
-  /** Hats and the blueprint are static props: their bones are only scaled in or out. */
-  private dress(pose: Pose): void {
+  /** Hats and the blueprint are static props: their bones are only scaled in or out. True when one changed. */
+  private dress(pose: Pose): boolean {
+    const changed = pose.hat !== this.hat || pose.blueprint !== this.blueprint;
     if (pose.hat !== this.hat) {
       if (this.hat) this.bones.get(HAT_BONES[this.hat])?.scale.setScalar(0);
       if (pose.hat) this.bones.get(HAT_BONES[pose.hat])?.scale.setScalar(1);
@@ -293,12 +382,13 @@ export class StageView {
       this.bones.get('prop_blueprint')?.scale.setScalar(pose.blueprint ? 1 : 0);
       this.blueprint = pose.blueprint;
     }
+    return changed;
   }
 
   /** Freezes the pose on one frame of `clip`; the next animated pose crossfades from it. */
   private pin(clip: Clip): void {
     this.mixer.stopAllAction();
-    this.sweating = false;
+    this.sweat = 'off';
     const action = this.action(clip);
     action.reset();
     action.time = STILL_AT[clip] ?? 0;
@@ -328,9 +418,14 @@ export class StageView {
     this.root.visible = true;
     renderer.render(scene, camera);
     this.root.visible = false;
-    // The viewport sits at the bottom-left of the shared canvas; 2D coordinates start at the top.
-    this.ctx.clearRect(0, 0, width, height);
-    this.ctx.drawImage(renderer.domElement, 0, renderer.domElement.height - height, width, height, 0, 0, width, height);
+    // The viewport sits at the bottom-left of the shared canvas; bitmap coordinates start at the top. The snapshot
+    // is taken now, before the next view draws over the shared canvas.
+    const source = renderer.domElement;
+    const frame = ++this.sent;
+    void createImageBitmap(source, 0, source.height - height, width, height).then((bitmap) => {
+      if (this.disposed || frame !== this.sent) bitmap.close();
+      else this.ctx.transferFromImageBitmap(bitmap);
+    });
   }
 }
 

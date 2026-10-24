@@ -8,6 +8,7 @@ const FRAME_MS = 120;
 const VERB_MS = 3200;
 const VERBS = t('work.verbs').split(',');
 
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const active = new Set<WorkingLine>();
 let ticker: number | null = null;
 
@@ -96,7 +97,9 @@ export class WorkingLine {
   }
 
   tick(now: number): void {
-    setText(this.glyph, this.mode === 'waiting' ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
+    // Reduced motion: a still starburst, verbs swap without sliding in.
+    const still = this.mode === 'waiting' || reducedMotion.matches;
+    setText(this.glyph, still ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
     const verb =
       this.mode === 'waiting'
         ? t('work.waiting')
@@ -105,7 +108,8 @@ export class WorkingLine {
           : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
-      this.verb.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' });
+      if (!reducedMotion.matches)
+        this.verb.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' });
     }
     const n = this.background.length;
     const parts =

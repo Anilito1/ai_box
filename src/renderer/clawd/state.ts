@@ -55,8 +55,12 @@ export type Hat = 'crown' | 'pumpkin' | 'santa' | 'party' | 'nightcap';
 /** Hub events, plus what happens in the UI itself: a click on the mascot, every worker done at once. */
 export type MindEvent = HubEventKind | 'poke' | 'party';
 
-/** Slow loops: drawn at 15 fps instead of 30. */
-export const CALM = new Set<Clip>(['idle_breathe', 'idle_drowsy', 'sleep_loop', 'ko_loop', 'wait_coffee']);
+/** Resting loops: held as a still pose, only blinks and fidgets move it. */
+export const REST = new Set<Clip>(['idle_breathe', 'idle_drowsy', 'sleep_loop', 'ko_loop']);
+/** Slow loops that keep moving at half pace: waiting on a background task, the master conducting. */
+export const CALM = new Set<Clip>(['wait_coffee', 'master_conduct']);
+/** Everyday fidgets of a resting Clawd, drawn at the slow pace too. */
+export const FIDGETS = new Set<Clip>(['idle_look_around', 'idle_hop', 'idle_stretch']);
 /** Lying down: entered through fall_asleep / crash_ko, left through wake_up. */
 const DOWN = new Set<Clip>(['sleep_loop', 'ko_loop']);
 /** Poses that leave the left arm free for the blueprint of a session in plan mode. */
@@ -74,8 +78,9 @@ const CELEBRATE_MIN_MS = 8_000;
 const COOLDOWN_MS = 4_000;
 /** A new session shown this soon after its creation is being born, not resumed. */
 const NEWBORN_MS = 15_000;
-const FIDGET_MS = [8_000, 20_000] as const;
-const BLINK_MS = [2_000, 6_000] as const;
+// Every frame drawn costs CPU and GPU: a resting Clawd fidgets every 20-45 s and blinks every 4-9 s.
+const FIDGET_MS = [20_000, 45_000] as const;
+const BLINK_MS = [4_000, 9_000] as const;
 const DOUBLE_BLINK_MS = 350;
 const FRENZY_POKES = 4;
 const FRENZY_MS = 2_000;
@@ -282,7 +287,8 @@ export class Mind {
     if (this.play(reaction.clip, reaction.prio, reaction.reps ?? 1, now)) this.lastPlayed.set(reaction.clip, now);
   }
 
-  pose(now: number): Pose {
+  /** `quiet`: the hub is in the background, the Clawd does not fidget. */
+  pose(now: number, quiet = false): Pose {
     const sig = this.sig;
     if (!sig) throw new Error('Mind.pose before update');
     if (this.shot && now >= this.shot.until) {
@@ -292,7 +298,10 @@ export class Mind {
     const want = baseClip(sig, now, this.crashed);
     // Lying down and getting up go through at once; anything else waits for the dwell.
     if (want !== this.base && (now - this.baseSince >= MIN_DWELL_MS || DOWN.has(want) !== DOWN.has(this.base))) this.rebase(want, now);
-    if (!this.shot && this.base === 'idle_breathe' && now >= this.nextFidget) this.fidget(now);
+    if (!this.shot && this.base === 'idle_breathe' && now >= this.nextFidget) {
+      if (quiet) this.nextFidget = now + this.between(FIDGET_MS);
+      else this.fidget(now);
+    }
     const clip = this.shot?.clip ?? this.base;
     const busyFor = sig.status === 'busy' && sig.busySince !== null ? now - sig.busySince : 0;
     const strained = (sig.contextPct ?? 0) >= SWEAT_CONTEXT_PCT || busyFor > SWEAT_TURN_MS;
@@ -310,14 +319,20 @@ export class Mind {
   }
 
   /**
-   * Blinks so far: every 2-6 s, sometimes twice, never over an expression. A view blinks when the count moves,
-   * so every view of the session blinks together.
+   * Blinks so far: every 2-6 s, sometimes twice, never over an expression nor while `quiet`. A view blinks when
+   * the count moves, so every view of the session blinks together.
    */
-  blinks(now: number): number {
+  blinks(now: number, quiet = false): number {
     if (now < this.nextBlink) return this.blinkCount;
     this.nextBlink = now + (this.random() < 0.2 ? DOUBLE_BLINK_MS : this.between(BLINK_MS));
-    if (!CLIPS[this.shot?.clip ?? this.base].expr) this.blinkCount++;
+    if (!quiet && !CLIPS[this.shot?.clip ?? this.base].expr) this.blinkCount++;
     return this.blinkCount;
+  }
+
+  /** Earliest time the pose may change by itself (blink, fidget, end of a one-shot): a still view sleeps until then. */
+  nextChange(now: number): number {
+    const fidget = !this.shot && this.base === 'idle_breathe' ? this.nextFidget : Infinity;
+    return Math.max(now, Math.min(this.nextBlink, fidget, this.shot?.until ?? Infinity));
   }
 
   private rebase(want: Clip, now: number): void {

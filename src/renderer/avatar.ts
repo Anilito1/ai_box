@@ -118,8 +118,11 @@ export class Avatar {
   private session: SessionView | null = null;
   private lastClick = 0;
 
+  private readonly large: boolean;
+
   /** `card`: sidebar size, with a status badge. `stage`: the large one atop an open conversation. */
   constructor(size: 'card' | 'stage') {
+    this.large = size === 'stage';
     this.root.classList.add(`avatar-${size}`);
     this.root.append(this.canvas);
     if (size === 'card') {
@@ -157,7 +160,7 @@ export class Avatar {
     this.canvas.hidden = false;
     void clawdStage().then((stage) => {
       if (this.session?.id !== s.id) return; // Switched to another session meanwhile.
-      if (stage) this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), () => this.fallback());
+      if (stage) this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), this.large, () => this.fallback());
       else this.fallback();
     });
   }
