@@ -14,7 +14,7 @@ import {
 } from '../shared/types';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
-import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
+import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -278,10 +278,10 @@ export class ChatView {
   private renderChrome(): void {
     const s = this.session;
     if (!s) return;
-    this.head.dot.className = `dot s-${s.status}`;
+    this.head.dot.className = statusDot(s);
     this.head.name.textContent = displayName(s);
-    this.head.status.textContent = s.status === 'exited' && s.error ? t('status.failed') : t(`status.${s.status}`);
-    this.head.status.classList.toggle('error', s.status === 'exited' && !!s.error);
+    this.head.status.textContent = statusLabel(s);
+    this.head.status.classList.toggle('error', failed(s));
     this.head.mission.textContent = s.role === 'worker' ? oneLine(s.mission) : '';
     this.head.mission.title = s.mission;
     this.head.cwd.textContent = s.cwd.split(/[\\/]/).filter(Boolean).pop() ?? s.cwd;

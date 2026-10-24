@@ -816,7 +816,9 @@ export class SetupView {
     const r = await this.run(() => this.hub.cloneRepo(slug, root));
     this.cloning = '';
     this.view = r;
-    const failure = r.error === 'exists' ? t('setup.err.exists', { slug }) : r.error === 'exists-other' ? t('setup.err.existsOther', { slug }) : this.errorText(r.error);
+    // The clone goes to <working folder>/<repo name>: the message names that folder.
+    const folder = slug.split('/')[1];
+    const failure = r.error === 'exists' ? t('setup.err.exists', { folder }) : r.error === 'exists-other' ? t('setup.err.existsOther', { folder }) : this.errorText(r.error);
     this.flash(r.ok ? t('setup.repos.cloned', { slug }) : failure, r.ok ? 'ok' : 'error');
     this.found = null;
     this.render();

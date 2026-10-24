@@ -3,6 +3,13 @@ import { t } from './i18n';
 
 export const displayName = (s: SessionView) => (s.role === 'master' ? t('master') : s.name.replace(/^hub-/, ''));
 
+/** Closed on an error (its last start or run failed), not closed on purpose. */
+export const failed = (s: SessionView) => s.status === 'exited' && s.error !== '';
+/** The state's word, with "stopped on an error" for a failed session. */
+export const statusLabel = (s: SessionView) => (failed(s) ? t('status.failed') : t(`status.${s.status}`));
+/** Class of its status dot. */
+export const statusDot = (s: SessionView) => `dot s-${failed(s) ? 'failed' : s.status}`;
+
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   if (cls) el.className = cls;

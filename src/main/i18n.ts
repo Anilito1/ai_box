@@ -259,7 +259,7 @@ const fr: Record<Key, string> = {
   'scm.badBranch': 'Nom de branche invalide',
   'scm.badBranchNamed': 'Nom de branche invalide : {name}',
   'scm.nothingToAbort': 'Aucune opération en cours à annuler',
-  'scm.busy': 'Une autre action git est en cours sur ce dépôt',
+  'scm.busy': 'Une autre action git est en cours sur ce repo',
   'todos': '{n} tâches',
 };
 

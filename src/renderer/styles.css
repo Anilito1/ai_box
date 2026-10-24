@@ -8,7 +8,8 @@
   --line-strong: #2b2e35;
   --text: #e6e7ea;
   --text-2: #a4a8b0;
-  --text-3: #6a6f78;
+  /* Discreet but readable: 5.4:1 on the sidebar, 5:1 on hovered rows (WCAG AA for small text). */
+  --text-3: #868b94;
   /* Navy, sampled from the logo gradient (#5a7de8 → #1b3380). */
   --accent: #5a7de8;
   --accent-soft: rgba(90, 125, 232, 0.13);
@@ -3260,7 +3261,9 @@ input[type='radio']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* Secondary text of the dialogs at 4.5:1 or more against their backgrounds. */
-.setup {
-  --text-3: #8b9099;
+.dot.s-failed {
+  background: var(--danger);
+}
+.sb-failed {
+  color: var(--danger);
 }

@@ -1,7 +1,7 @@
 import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
-import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
+import { displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
@@ -125,7 +125,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
   if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: oneLine(s.background[0]) }), cls: 'live' };
-  if (isClosed(s) && s.error) return { text: t('card.failed', { error: s.error }), cls: 'error' };
+  if (failed(s)) return { text: t('card.failed', { error: s.error }), cls: 'error' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
   if (s.mission) return { text: oneLine(s.mission), cls: '' };
   return { text: s.role === 'master' ? t('master.yourConversation') : t(`status.${s.status}`), cls: '' };
@@ -200,7 +200,7 @@ function renderStatusbar(rate: RateLimits | null): void {
   const left: HTMLElement[] = [];
   if (master) {
     const item = h('div', 'sb-item');
-    item.append(h('span', `dot s-${master.status}`), h('span', '', t('sb.master', { status: t(`status.${master.status}`) })));
+    item.append(h('span', statusDot(master)), h('span', failed(master) ? 'sb-failed' : '', t('sb.master', { status: statusLabel(master) })));
     left.push(item);
   }
   left.push(h('span', 'sb-sep'), sbItem(t('sb.active'), String(workers.length)));
