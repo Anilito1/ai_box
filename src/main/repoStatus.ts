@@ -2,55 +2,14 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
-import type { RepoAction, RepoActionResult, RepoFile, RepoStatus, RepoTree } from '../shared/types';
+import type { RepoAction, RepoActionResult, RepoStatus, RepoTree } from '../shared/types';
 import { errorMessage, git } from './git';
-import { repoState, runAction } from './scm';
+import { parseStatus, repoState, runAction, STATUS_ARGS } from './scm';
 
 const POLL_MS = 8_000;
 const FETCH_MS = 60_000;
-const MAX_FILES = 1000;
 
 const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
-
-interface Porcelain {
-  oid: string;
-  branch: string;
-  upstream: string;
-  ab: [number, number] | null;
-  files: RepoFile[];
-  total: number;
-  conflicts: number;
-}
-
-/**
- * `git status --porcelain=v2 --branch -z`: entries end with NUL, so paths are never quoted; a rename entry is
- * followed by its former path. A path is everything after the fixed fields of its entry type.
- */
-function parseStatus(out: string): Porcelain {
-  const st: Porcelain = { oid: '', branch: '', upstream: '', ab: null, files: [], total: 0, conflicts: 0 };
-  const add = (file: RepoFile) => {
-    st.total++;
-    if (st.files.length < MAX_FILES) st.files.push(file);
-  };
-  const parts = out.split('\0');
-  for (let i = 0; i < parts.length; i++) {
-    const line = parts[i];
-    const rest = (fields: number) => line.split(' ').slice(fields).join(' ');
-    if (line.startsWith('# branch.oid ')) st.oid = line.slice(13);
-    else if (line.startsWith('# branch.head ')) st.branch = line.slice(14);
-    else if (line.startsWith('# branch.upstream ')) st.upstream = line.slice(18);
-    else if (line.startsWith('# branch.ab ')) {
-      const m = /\+(\d+) -(\d+)/.exec(line);
-      if (m) st.ab = [Number(m[1]), Number(m[2])];
-    } else if (line.startsWith('1 ')) add({ code: line.slice(2, 4), path: rest(8), from: '' });
-    else if (line.startsWith('2 ')) add({ code: line.slice(2, 4), path: rest(9), from: parts[++i] ?? '' });
-    else if (line.startsWith('u ')) {
-      st.conflicts++;
-      add({ code: line.slice(2, 4), path: rest(10), from: '' });
-    } else if (line.startsWith('? ')) add({ code: '??', path: line.slice(2), from: '' });
-  }
-  return st;
-}
 
 /** Folders of `git worktree list --porcelain -z` (NUL-separated, so no path is ever quoted), main folder included. */
 const parseWorktrees = (out: string) =>
@@ -195,7 +154,7 @@ export class RepoWatcher extends EventEmitter {
     };
     try {
       const st = parseStatus(
-        await git(path, ['-c', 'core.quotePath=false', 'status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all']),
+        await git(path, STATUS_ARGS),
       );
       // No ahead/behind line: the upstream is gone.
       const upstream = st.ab ? st.upstream : '';

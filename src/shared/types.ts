@@ -115,6 +115,9 @@ export interface RepoFile {
   from: string;
 }
 
+/** `upstream` ("origin/feat/x") is the branch's own remote branch, not another one it tracks (a worktree made from origin/main). */
+export const ownUpstream = (branch: string, upstream: string) => !!branch && !!upstream && upstream.slice(upstream.indexOf('/') + 1) === branch;
+
 /** Operation left in progress in a checkout (after a conflict), else empty. */
 export type RepoState = '' | 'merge' | 'rebase' | 'cherry-pick' | 'revert';
 
@@ -244,7 +247,7 @@ export type RepoAction =
   | { kind: 'push' }
   | { kind: 'sync' }
   | { kind: 'publish' }
-  | { kind: 'commit'; message: string; all: boolean; push: boolean }
+  | { kind: 'commit'; message: string }
   | { kind: 'stage'; paths: string[] }
   | { kind: 'unstage'; paths: string[] }
   | { kind: 'stage-all' }

@@ -1,20 +1,21 @@
-import type {
-  CommitDetails,
-  CommitFile,
-  GitRefKind,
-  GraphFilter,
-  HubApi,
-  RepoAction,
-  RepoActionKind,
-  RepoActionResult,
-  RepoBranch,
-  RepoErrorKind,
-  RepoFile,
-  RepoGraph,
-  RepoState,
-  RepoStatus,
-  RepoTree,
-  SessionView,
+import {
+  ownUpstream,
+  type CommitDetails,
+  type CommitFile,
+  type GitRefKind,
+  type GraphFilter,
+  type HubApi,
+  type RepoAction,
+  type RepoActionKind,
+  type RepoActionResult,
+  type RepoBranch,
+  type RepoErrorKind,
+  type RepoFile,
+  type RepoGraph,
+  type RepoState,
+  type RepoStatus,
+  type RepoTree,
+  type SessionView,
 } from '../shared/types';
 import { ago, copyButton, displayName, h, icon, ICONS, openMenu } from './dom';
 import {
@@ -49,7 +50,7 @@ const L = {
   mainFolder: 'dossier principal',
   addRepo: 'Ajouter un dépôt…',
   removeRepo: 'Retirer du panneau',
-  reposInSettings: 'La liste des dépôts suivis se règle dans les Réglages du Hub.',
+  reposInSettings: 'La liste des dépôts suivis n’est pas modifiable dans cette version.',
   detached: (oid: string) => `détachée ${oid}`,
   noCommit: 'aucun commit',
   unreadable: 'illisible',
@@ -216,8 +217,9 @@ function splitChanges(files: RepoFile[]): { conflicts: Change[]; staged: Change[
   return { conflicts, staged, unstaged };
 }
 
+/** Name and folder of a path; an untracked folder ("dir/") keeps its slash. */
 function fileLabel(path: string): [string, string] {
-  const i = path.lastIndexOf('/');
+  const i = path.replace(/\/$/, '').lastIndexOf('/');
   return i === -1 ? [path, ''] : [path.slice(i + 1), path.slice(0, i)];
 }
 
@@ -284,7 +286,7 @@ export class RepoPanel {
   private drafts = new Map<string, string>();
   private alert: Alert | null = null;
   private pending: RepoActionKind | null = null;
-  private renderedKeys = { head: '', changes: '' };
+  private renderedKeys = { head: '', changes: '', alert: '' };
 
   private readonly head = h('div', 'scm-head');
   private readonly alertBox = h('div', 'scm-alert');
@@ -346,13 +348,6 @@ export class RepoPanel {
 
   update(status: RepoStatus): void {
     this.statuses.set(status.path, status);
-    this.render();
-  }
-
-  /** The followed repos changed: forget the ones gone. */
-  setRepos(paths: string[]): void {
-    const keep = new Set(paths.map(norm));
-    for (const path of this.statuses.keys()) if (!keep.has(norm(path))) this.statuses.delete(path);
     this.render();
   }
 
@@ -433,7 +428,7 @@ export class RepoPanel {
     this.graphError = '';
     this.limit = PAGE;
     this.expanded.clear();
-    this.renderedKeys = { head: '', changes: '' };
+    this.renderedKeys = { head: '', changes: '', alert: '' };
     if (this.alert?.path !== path) this.alert = null;
     this.message.value = this.drafts.get(path) ?? '';
     this.fitMessage();
@@ -453,7 +448,7 @@ export class RepoPanel {
   /** One line: fold, repo, branch, then the remote actions (shown on hover), sync and more. */
   private renderHead(repo: RepoStatus, tree: RepoTree, busy: RepoActionKind | null): void {
     const locked = !!repo.busy || !!this.pending;
-    const key = JSON.stringify([repo.name, tree.path, tree.label, tree.branch, tree.oid, tree.error, tree.changes > 0, tree.upstream, tree.ahead, tree.behind, busy, locked, this.collapsed]);
+    const key = JSON.stringify([repo.name, tree.path, tree.label, tree.branch, tree.oid, tree.error, tree.changes > 0, tree.upstream, tree.ahead, tree.behind, !!repo.fetchError, busy, locked, this.collapsed]);
     if (key === this.renderedKeys.head) return;
     this.renderedKeys.head = key;
 
@@ -487,10 +482,11 @@ export class RepoPanel {
     actions.append(remote('fetch', ICONS.fetch, L.fetch), remote('pull', ICONS.pull, L.pull), remote('push', ICONS.push, L.push));
 
     const items: HTMLElement[] = [chevron, repoBtn, branch, h('span', 'scm-spacer'), actions];
-    if (tree.upstream || tree.branch) {
+    if (tree.branch) {
       // VS Code's status bar item: sync counts, or publish when the branch has no remote of its own.
+      const own = ownUpstream(tree.branch, tree.upstream);
       const sync = h('button', 'scm-sync');
-      if (tree.upstream) {
+      if (own) {
         sync.append(icon(ICONS.sync, 'ico small'));
         if (tree.ahead + tree.behind > 0) sync.append(h('span', '', `${tree.behind}↓${tree.ahead}↑`));
         sync.classList.toggle('active', tree.ahead + tree.behind > 0);
@@ -501,7 +497,7 @@ export class RepoPanel {
       sync.addEventListener('mouseenter', () => (sync.title = this.syncTitle()));
       sync.addEventListener('click', (e) => {
         e.stopPropagation();
-        void this.run({ kind: tree.upstream ? 'sync' : 'publish' });
+        void this.run({ kind: own ? 'sync' : 'publish' });
       });
       items.push(sync);
     }
@@ -517,17 +513,22 @@ export class RepoPanel {
     const { repo, tree } = c;
     const busy = repo.busy?.path === tree.path ? repo.busy.action : this.pending;
     return [
-      tree.upstream ? L.syncHint(tree.behind, tree.ahead, tree.upstream) : L.publishHint,
+      ownUpstream(tree.branch, tree.upstream) ? L.syncHint(tree.behind, tree.ahead, tree.upstream) : L.publishHint,
       busy ? L.busy[busy] : repo.fetching ? L.busy.fetch : repo.fetchError ? L.fetchFailed(repo.fetchError) : repo.fetchedAt ? L.fetchedAgo(ago(repo.fetchedAt)) : '',
     ]
       .filter(Boolean)
       .join('\n');
   }
 
+  /** Rebuilt only when what it says changes: an open « Détails » survives the status polls. */
   private renderAlert(): void {
     const c = this.current();
-    const items: HTMLElement[] = [];
     const state: RepoState = c?.tree.state ?? '';
+    const a = this.alert && c && this.alert.path === c.tree.path && !(state && this.alert.kind === 'conflict') ? this.alert : null;
+    const key = JSON.stringify([state, a]);
+    if (key === this.renderedKeys.alert) return;
+    this.renderedKeys.alert = key;
+    const items: HTMLElement[] = [];
     const fix = (label: string, path: string, action: RepoAction) => {
       const btn = h('button', 'scm-fix');
       btn.append(icon(path, 'ico small'), h('span', '', label));
@@ -542,8 +543,7 @@ export class RepoPanel {
       box.append(fixes);
       items.push(box);
     }
-    const a = this.alert;
-    if (a && c && a.path === c.tree.path && !(state && a.kind === 'conflict')) {
+    if (a) {
       const box = h('div', 'scm-alert-box error');
       const close = iconButton(ICONS.remove, L.dismiss, () => {
         this.alert = null;
@@ -564,8 +564,13 @@ export class RepoPanel {
       items.push(box);
     }
     this.alertBox.replaceChildren(...items);
-    // A message appears while folded: unfold so it is seen.
-    if (items.length > 0 && this.collapsed && a) this.setCollapsed(false);
+  }
+
+  /** A new error is shown at once, unfolding the panel if needed. */
+  private showAlert(alert: Alert): void {
+    this.alert = alert;
+    if (this.collapsed) this.setCollapsed(false);
+    else this.renderAlert();
   }
 
   // ---------- commit box & changes ----------
@@ -602,14 +607,15 @@ export class RepoPanel {
       return;
     }
     const path = c.tree.path;
-    const all = splitChanges(c.tree.files).staged.length === 0;
-    void this.run({ kind: 'commit', message: text, all, push }).then((ok) => {
+    void this.run({ kind: 'commit', message: text }).then((ok) => {
       if (!ok) return;
       this.drafts.delete(path);
       if (this.shownPath === path) {
         this.message.value = '';
         this.fitMessage();
       }
+      // Pushed apart: a refused push never hides that the commit is made.
+      if (push) void this.run({ kind: 'push' });
     });
   }
 
@@ -989,9 +995,7 @@ export class RepoPanel {
   private askSettings(event: CustomEvent): void {
     if (!window.dispatchEvent(event)) return;
     const c = this.current();
-    if (!c) return;
-    this.alert = { path: c.tree.path, kind: 'invalid', message: L.reposInSettings, detail: '' };
-    this.renderAlert();
+    if (c) this.showAlert({ path: c.tree.path, kind: 'invalid', message: L.reposInSettings, detail: '' });
   }
 
   private openMoreMenu(anchor: HTMLElement): void {
@@ -1109,14 +1113,14 @@ export class RepoPanel {
       result = { ok: false, kind: 'other', message: remoteError(err), detail: '' };
     }
     this.pending = null;
-    if (!result.ok) this.alert = { path, kind: result.kind, message: result.message, detail: result.detail };
     this.renderLocks();
+    if (!result.ok) this.showAlert({ path, kind: result.kind, message: result.message, detail: result.detail });
     return result.ok;
   }
 
   /** Re-renders what depends on an action being in flight. */
   private renderLocks(): void {
-    this.renderedKeys = { head: '', changes: '' };
+    this.renderedKeys = { head: '', changes: '', alert: '' };
     this.render();
   }
 

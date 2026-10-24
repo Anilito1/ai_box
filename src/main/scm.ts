@@ -1,25 +1,27 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type {
-  CommitDetails,
-  CommitFile,
-  GitRef,
-  GraphCommit,
-  GraphFilter,
-  GraphRef,
-  RepoAction,
-  RepoActionResult,
-  RepoBranch,
-  RepoErrorKind,
-  RepoGraph,
-  RepoState,
+import {
+  ownUpstream,
+  type CommitDetails,
+  type CommitFile,
+  type GitRef,
+  type GraphCommit,
+  type GraphFilter,
+  type GraphRef,
+  type RepoAction,
+  type RepoActionResult,
+  type RepoBranch,
+  type RepoErrorKind,
+  type RepoFile,
+  type RepoGraph,
+  type RepoState,
 } from '../shared/types';
 import { git, GitError } from './git';
 
 const NETWORK_MS = 120_000;
 const COMMIT_MS = 120_000;
 const MAX_LIMIT = 2000;
-const MAX_FILES = 2000;
+const MAX_COMMIT_FILES = 2000;
 const MAX_MESSAGE = 20_000;
 const HASH = /^[0-9a-f]{7,64}$/i;
 
@@ -144,7 +146,8 @@ export async function readGraph(path: string, filter: GraphFilter, limit: number
   const commits = parseLog(out);
   const mergeBase =
     head && upstream ? (await git(path, ['merge-base', head.revision, upstream.revision]).catch(() => '')).trim() : '';
-  return { commits: commits.slice(0, n), more: commits.length > n, head, upstream, base, mergeBase, refs: shown };
+  // At the cap there is no next page: the panel stops asking.
+  return { commits: commits.slice(0, n), more: n < MAX_LIMIT && commits.length > n, head, upstream, base, mergeBase, refs: shown };
 }
 
 /** `-z` output of --numstat and --name-status, where a rename spends two NUL-separated paths. */
@@ -196,7 +199,7 @@ export async function readDetails(path: string, id: string): Promise<CommitDetai
   const [numstat, names] = await Promise.all([git(path, [...base, '--numstat', ...range]), git(path, [...base, '--name-status', ...range])]);
   const files = parseNameStatus(names, parseNumstat(numstat));
   const sum = (key: 'added' | 'deleted') => files.reduce((s, f) => s + Math.max(0, f[key]), 0);
-  return { files: files.slice(0, MAX_FILES), added: sum('added'), deleted: sum('deleted') };
+  return { files: files.slice(0, MAX_COMMIT_FILES), added: sum('added'), deleted: sum('deleted') };
 }
 
 /** Local branches then remote branches, most recently committed first. */
@@ -263,6 +266,50 @@ function classify(err: unknown): RepoActionResult {
   return { ok: false, kind, message, detail: detail.slice(0, 4000) };
 }
 
+// Untracked folders count as one entry (like `git status`): listing every file in them would cost each poll.
+export const STATUS_ARGS = ['-c', 'core.quotePath=false', 'status', '--porcelain=v2', '--branch', '-z'];
+const MAX_STATUS_FILES = 1000;
+
+interface Porcelain {
+  oid: string;
+  branch: string;
+  upstream: string;
+  ab: [number, number] | null;
+  files: RepoFile[];
+  total: number;
+  conflicts: number;
+}
+
+/**
+ * `git status --porcelain=v2 --branch -z`: entries end with NUL, so paths are never quoted; a rename entry is
+ * followed by its former path. A path is everything after the fixed fields of its entry type.
+ */
+export function parseStatus(out: string, maxFiles = MAX_STATUS_FILES): Porcelain {
+  const st: Porcelain = { oid: '', branch: '', upstream: '', ab: null, files: [], total: 0, conflicts: 0 };
+  const add = (file: RepoFile) => {
+    st.total++;
+    if (st.files.length < maxFiles) st.files.push(file);
+  };
+  const parts = out.split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const line = parts[i];
+    const rest = (fields: number) => line.split(' ').slice(fields).join(' ');
+    if (line.startsWith('# branch.oid ')) st.oid = line.slice(13);
+    else if (line.startsWith('# branch.head ')) st.branch = line.slice(14);
+    else if (line.startsWith('# branch.upstream ')) st.upstream = line.slice(18);
+    else if (line.startsWith('# branch.ab ')) {
+      const m = /\+(\d+) -(\d+)/.exec(line);
+      if (m) st.ab = [Number(m[1]), Number(m[2])];
+    } else if (line.startsWith('1 ')) add({ code: line.slice(2, 4), path: rest(8), from: '' });
+    else if (line.startsWith('2 ')) add({ code: line.slice(2, 4), path: rest(9), from: parts[++i] ?? '' });
+    else if (line.startsWith('u ')) {
+      st.conflicts++;
+      add({ code: line.slice(2, 4), path: rest(10), from: '' });
+    } else if (line.startsWith('? ')) add({ code: '??', path: line.slice(2), from: '' });
+  }
+  return st;
+}
+
 /** Branch, upstream and distance of a checkout, read fresh before acting. */
 async function tracking(path: string) {
   const branch = (await git(path, ['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => '')).trim();
@@ -279,18 +326,8 @@ async function tracking(path: string) {
 
 /** Paths git reports as changed in this checkout: only those may be staged or unstaged. */
 async function changedPaths(path: string): Promise<Map<string, string>> {
-  const out = await git(path, ['-c', 'core.quotePath=false', 'status', '--porcelain=v2', '-z', '--untracked-files=all']);
-  const paths = new Map<string, string>();
-  const parts = out.split('\0');
-  for (let i = 0; i < parts.length; i++) {
-    const line = parts[i];
-    const rest = (n: number) => line.split(' ').slice(n).join(' ');
-    if (line.startsWith('1 ')) paths.set(rest(8), '');
-    else if (line.startsWith('2 ')) paths.set(rest(9), parts[++i] ?? '');
-    else if (line.startsWith('u ')) paths.set(rest(10), '');
-    else if (line.startsWith('? ')) paths.set(line.slice(2), '');
-  }
-  return paths;
+  const st = parseStatus(await git(path, STATUS_ARGS), Infinity);
+  return new Map(st.files.map((f) => [f.path, f.from]));
 }
 
 async function checkedPaths(path: string, requested: string[]): Promise<string[]> {
@@ -309,13 +346,16 @@ async function pull(path: string): Promise<void> {
   await git(path, ['pull', '--no-edit', ...(configured ? [] : ['--no-rebase'])], { timeout: NETWORK_MS, interactive: true });
 }
 
-async function push(path: string): Promise<void> {
-  const t = await tracking(path);
+/** Push and Sync need the branch's own remote branch: a worktree branch created from origin/main tracks it instead. */
+function noOwnUpstream(t: { branch: string; upstream: string }): void {
   if (!t.branch) throw new ActionError('invalid', 'HEAD détachée : aucune branche à pousser');
-  // A worktree branch created from origin/main tracks it: it has no remote branch of its own yet.
-  if (!t.upstream || t.upstream.slice(t.upstream.indexOf('/') + 1) !== t.branch) {
+  if (!ownUpstream(t.branch, t.upstream)) {
     throw new ActionError('no-upstream', t.upstream ? `${t.branch} suit ${t.upstream}, pas sa propre branche distante` : `${t.branch} n'a pas de branche distante`);
   }
+}
+
+async function push(path: string): Promise<void> {
+  noOwnUpstream(await tracking(path));
   await git(path, ['push'], { timeout: NETWORK_MS, interactive: true });
 }
 
@@ -325,27 +365,34 @@ async function publish(path: string): Promise<void> {
   const remotes = (await git(path, ['remote'])).split('\n').map((r) => r.trim()).filter(Boolean);
   const tracked = t.upstream.split('/')[0];
   const remote = remotes.includes(tracked) ? tracked : remotes.includes('origin') ? 'origin' : remotes[0];
-  if (!remote) throw new ActionError('invalid', 'Aucun remote configuré');
+  if (!remote || remote.startsWith('-')) throw new ActionError('invalid', 'Aucun remote utilisable');
   await git(path, ['push', '-u', remote, `HEAD:refs/heads/${t.branch}`], { timeout: NETWORK_MS, interactive: true });
 }
 
-async function commit(path: string, message: string, all: boolean, andPush: boolean): Promise<void> {
+/** VS Code's smart commit: the index as it is, or every change when nothing is staged (read here, never from the panel). */
+async function commit(path: string, message: string): Promise<void> {
   const text = message.trim();
   if (!text) throw new ActionError('invalid', 'Message de commit vide');
   if (text.length > MAX_MESSAGE) throw new ActionError('invalid', 'Message de commit trop long');
-  if (all) await git(path, ['add', '-A']);
+  const staged = await git(path, ['diff', '--cached', '--quiet']).then(
+    () => false,
+    () => true,
+  );
+  if (!staged) await git(path, ['add', '-A']);
   // The message is one argument of -m: never parsed by a shell, never taken for an option.
   await git(path, ['commit', '-m', text], { timeout: COMMIT_MS });
-  if (andPush) await push(path);
 }
 
 async function checkout(path: string, id: string): Promise<void> {
   const refs = await readRefs(path);
   const target = refs.find((r) => r.id === id);
   if (!target) throw new ActionError('invalid', 'Branche introuvable');
-  if (target.id.startsWith('refs/heads/')) return void (await git(path, ['switch', shortRef(target.id)]));
+  // A ref can be named like an option ("refs/heads/--orphan=x" via update-ref or a fetched remote branch):
+  // `git switch` would run it as one.
+  const local = target.id.startsWith('refs/heads/') ? shortRef(target.id) : shortRef(target.id).replace(/^[^/]+\//, '');
+  if (local.startsWith('-')) throw new ActionError('invalid', `Nom de branche refusé : ${local}`);
+  if (target.id.startsWith('refs/heads/')) return void (await git(path, ['switch', local]));
   // A remote branch: switch to the local branch of the same name, created to track it when missing.
-  const local = shortRef(target.id).replace(/^[^/]+\//, '');
   if (refs.some((r) => r.id === `refs/heads/${local}`)) return void (await git(path, ['switch', local]));
   await git(path, ['switch', '--track', shortRef(target.id)]);
 }
@@ -377,15 +424,16 @@ async function perform(path: string, action: RepoAction): Promise<void> {
     case 'publish':
       return publish(path);
     case 'sync': {
-      // VS Code's Sync: pull what is behind, then push what is ahead.
+      // VS Code's Sync: pull what is behind, then push what is ahead. Checked first: a branch that tracks
+      // another branch (a worktree made from origin/main) must not get main merged in, then fail to push.
       const t = await tracking(path);
-      if (!t.upstream) throw new ActionError('no-upstream', `${t.branch || 'HEAD'} n'a pas de branche distante`);
+      noOwnUpstream(t);
       if (t.behind > 0) await pull(path);
       if ((await tracking(path)).ahead > 0) await push(path);
       return;
     }
     case 'commit':
-      return commit(path, action.message, action.all, action.push);
+      return commit(path, action.message);
     case 'stage':
       return void (await git(path, ['--literal-pathspecs', 'add', '-A', '--', ...(await checkedPaths(path, action.paths))]));
     case 'unstage': {
@@ -436,9 +484,7 @@ export function parseAction(value: unknown): RepoAction | null {
     case 'abort':
       return { kind: a.kind };
     case 'commit':
-      return typeof a.message === 'string' && typeof a.all === 'boolean' && typeof a.push === 'boolean'
-        ? { kind: 'commit', message: a.message, all: a.all, push: a.push }
-        : null;
+      return typeof a.message === 'string' ? { kind: 'commit', message: a.message } : null;
     case 'stage':
     case 'unstage':
       return isStrList(a.paths, 1000) ? { kind: a.kind, paths: a.paths } : null;
