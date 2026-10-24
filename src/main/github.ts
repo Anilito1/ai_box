@@ -107,9 +107,16 @@ export async function ghPath(): Promise<string> {
 export async function ghLogin(): Promise<string> {
   const gh = await ghPath();
   if (!gh) return '';
+  const online = await new Promise<{ login: string; refused: boolean }>((resolve) => {
+    execFile(gh, ['api', 'user', '--jq', '.login'], { timeout: 15_000, windowsHide: true, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (err, stdout, stderr) =>
+      resolve({ login: err ? '' : stdout.trim(), refused: !!err && /HTTP 40[13]|Bad credentials|auth login|not logged/i.test(stderr) }),
+    );
+  });
+  if (LOGIN.test(online.login)) return online.login;
+  if (online.refused) return '';
+  // GitHub unreachable: the account gh has saved, so the CLI stays usable offline.
   const saved = await run(gh, ['config', 'get', 'user', '-h', 'github.com']);
-  const login = LOGIN.test(saved) ? saved : await run(gh, ['api', 'user', '--jq', '.login']);
-  return LOGIN.test(login) ? login : '';
+  return LOGIN.test(saved) ? saved : '';
 }
 
 /** owner/name as GitHub allows them; never "." or "..", which would leave the folder a clone goes into. */

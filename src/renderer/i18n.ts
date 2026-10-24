@@ -1,5 +1,6 @@
 import { APP_NAME, LOGO } from '../shared/brand';
 import { isLang, translator, type Lang } from '../shared/i18n';
+import { EFFORTS } from '../shared/types';
 
 const en = {
   'side.master': 'Master',
@@ -128,7 +129,6 @@ const en = {
   'setup.restart': 'Restart {app}',
   'setup.close': 'Done',
   'setup.cancel': 'Cancel',
-  'setup.save': 'Save',
   'setup.remove': 'Remove',
   'setup.check': 'Check again',
   'setup.verifySave': 'Verify and save',
@@ -153,7 +153,7 @@ const en = {
   'setup.err.deviceFlowDisabled': 'Device Flow is off for this OAuth App: tick “Enable Device Flow” in its settings on GitHub.',
   'setup.err.http': 'Unexpected answer from the server (HTTP {status}). Try again later.',
   'setup.err.keychain': 'No OS keychain available: {app} stores no secret in clear. Set the variable in your environment instead.',
-  'setup.err.clientId': 'GitHub sign-in needs the Client ID of an OAuth App (Advanced, below).',
+  'setup.err.clientId': 'GitHub sign-in needs the Client ID of an OAuth App: enter it in its field, in this section.',
   'setup.err.gh': 'The GitHub CLI is not installed or not signed in (gh auth login).',
   'setup.err.expired': 'The code expired: start again.',
   'setup.err.denied': 'Access denied on GitHub.',
@@ -411,7 +411,6 @@ const fr: Record<Key, string> = {
   'setup.restart': 'Redémarrer {app}',
   'setup.close': 'Terminé',
   'setup.cancel': 'Annuler',
-  'setup.save': 'Enregistrer',
   'setup.remove': 'Retirer',
   'setup.check': 'Vérifier à nouveau',
   'setup.verifySave': 'Vérifier et enregistrer',
@@ -436,7 +435,7 @@ const fr: Record<Key, string> = {
   'setup.err.deviceFlowDisabled': 'Le Device Flow est désactivé pour cette OAuth App : coche « Enable Device Flow » dans ses réglages sur GitHub.',
   'setup.err.http': 'Réponse inattendue du serveur (HTTP {status}). Réessaie plus tard.',
   'setup.err.keychain': 'Aucun trousseau système disponible : {app} ne stocke aucun secret en clair. Définis plutôt la variable dans ton environnement.',
-  'setup.err.clientId': 'La connexion GitHub demande le Client ID d’une OAuth App (Avancé, plus bas).',
+  'setup.err.clientId': 'La connexion GitHub demande le Client ID d’une OAuth App : saisis-le dans son champ, dans cette section.',
   'setup.err.gh': 'Le CLI GitHub n’est pas installé ou pas connecté (gh auth login).',
   'setup.err.expired': 'Le code a expiré : recommence.',
   'setup.err.denied': 'Accès refusé sur GitHub.',
@@ -576,6 +575,9 @@ export const LANG: Lang = isLang(requested) ? requested : 'en';
 export const PLATFORM = query.get('platform') ?? '';
 
 export const { t, tn } = translator<Key>({ en, fr }, () => LANG);
+
+/** An effort level in the user's language; one the hub does not know is shown as reported. */
+export const effortLabel = (effort: string) => ((EFFORTS as string[]).includes(effort) ? t(`effort.${effort}` as Key) : effort);
 
 /** Fills the static text of index.html: `data-i18n` sets the text, `data-i18n-title` the tooltip. */
 export function translateDom(root: ParentNode = document): void {

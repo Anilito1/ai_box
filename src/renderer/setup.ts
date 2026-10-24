@@ -16,7 +16,7 @@ import {
   type SettingsView,
 } from '../shared/types';
 import { copyButton, h, icon, ICONS } from './dom';
-import { t, type Key } from './i18n';
+import { effortLabel, t, type Key } from './i18n';
 
 type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'about';
 type Kind = 'onboarding' | 'settings';
@@ -102,7 +102,7 @@ export class SetupView {
     this.root.setAttribute('aria-labelledby', 'setup-title');
     document.addEventListener('keydown', (e) => {
       if (this.root.hidden) return;
-      if (e.key === 'Escape' && this.mode === 'settings') this.close();
+      if (e.key === 'Escape' && this.mode === 'settings') void this.close();
       else if (e.key === 'Tab') this.trapFocus(e);
     });
   }
@@ -154,8 +154,9 @@ export class SetupView {
     this.render();
   }
 
-  close(): void {
-    void this.flush(false);
+  /** Saves what was typed first: a refused value keeps the dialog open with its message. */
+  async close(): Promise<void> {
+    if (!(await this.flush(false))) return;
     if (this.device) this.hub.githubCancel();
     this.device = null;
     this.root.hidden = true;
@@ -170,14 +171,15 @@ export class SetupView {
   }
 
   /** Saves what was typed; `redraw` once the user has left the field (a redraw would steal the caret). */
-  private async flush(redraw: boolean): Promise<void> {
+  private async flush(redraw: boolean): Promise<boolean> {
     const patch = this.pending;
     this.pending = {};
-    if (Object.keys(patch).length === 0) return;
+    if (Object.keys(patch).length === 0) return true;
     const r = await this.hub.saveSettings(patch);
     this.view = r;
     if (!r.ok) this.note = { text: t('setup.invalid'), tone: 'error' };
     if (redraw || !r.ok) this.render();
+    return r.ok;
   }
 
   // ---------- frame ----------
@@ -212,7 +214,7 @@ export class SetupView {
     } else {
       foot.append(h('span', 'setup-hint', t('setup.appliesNext')), h('span', 'spacer'));
       foot.append(this.button(t('setup.restart'), 'btn ghost', () => this.hub.relaunch()));
-      foot.append(this.button(t('setup.close'), 'btn primary', () => this.close()));
+      foot.append(this.button(t('setup.close'), 'btn primary', () => void this.close()));
     }
     body.append(foot);
 
@@ -239,7 +241,7 @@ export class SetupView {
    * yet, a first press explains, a second one starts anyway.
    */
   private async finish(): Promise<void> {
-    await this.flush(false);
+    if (!(await this.flush(false))) return;
     if (!this.claude) await this.checkClaude();
     const c = this.claude;
     if (!c?.executable) {
@@ -257,7 +259,7 @@ export class SetupView {
     }
     await this.hub.finishSetup();
     forget(STEP_KEY);
-    this.close();
+    await this.close();
   }
 
   private sectionBody(el: HTMLElement, v: SettingsView): void {
@@ -470,8 +472,11 @@ export class SetupView {
     } else if (s.provider === 'bedrock' || s.provider === 'vertex') {
       const bedrock = s.provider === 'bedrock';
       const f = this.field(t(bedrock ? 'setup.bedrock' : 'setup.vertex'), t(bedrock ? 'setup.bedrock.hint' : 'setup.vertex.hint'));
-      const region = this.input(bedrock ? s.bedrock.region : s.vertex.region, bedrock ? 'us-east-1' : 'us-east5');
-      const other = this.input(bedrock ? s.bedrock.profile : s.vertex.projectId, bedrock ? t('setup.bedrock.profile') : t('setup.vertex.project'));
+      // What was typed but not saved yet survives a redraw (the Claude check redraws when it ends).
+      const b = { ...s.bedrock, ...this.pending.bedrock };
+      const x = { ...s.vertex, ...this.pending.vertex };
+      const region = this.input(bedrock ? b.region : x.region, bedrock ? 'us-east-1' : 'us-east5');
+      const other = this.input(bedrock ? b.profile : x.projectId, bedrock ? t('setup.bedrock.profile') : t('setup.vertex.project'));
       const stage = () =>
         this.stage(
           bedrock
@@ -635,7 +640,7 @@ export class SetupView {
   /** The OAuth App's Client ID, saved when the field is left. */
   private clientIdField(value: string, hasDefault: boolean): HTMLElement {
     const f = this.field(t('setup.github.clientId'), t('setup.github.clientId.hint'));
-    const input = this.input(value, hasDefault ? t('setup.github.clientId.default') : 'Ov23li…');
+    const input = this.input(this.pending.github?.clientId ?? value, hasDefault ? t('setup.github.clientId.default') : 'Ov23li…');
     input.addEventListener('input', () => this.stage({ github: { clientId: input.value.trim() } }));
     input.addEventListener('change', () => void this.flush(true));
     f.append(input, this.link(t('setup.github.clientId.how'), 'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app'));
@@ -844,7 +849,7 @@ export class SetupView {
 
     const f = this.field(t('setup.sessions.instructions'), t('setup.sessions.instructions.hint'));
     const area = h('textarea', 'setup-textarea');
-    area.value = s.masterInstructions;
+    area.value = this.pending.masterInstructions ?? s.masterInstructions;
     area.rows = 7;
     area.placeholder = t('setup.sessions.instructions.placeholder');
     area.spellcheck = false;
@@ -883,7 +888,7 @@ export class SetupView {
     model.append(new Option(t('setup.sessions.inherit'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
     model.value = value.model;
     const effort = h('select', 'setup-select');
-    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...EFFORTS.map((e) => new Option(t(`effort.${e}`), e)));
+    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
     effort.value = value.effort;
     const update = () => set({ model: model.value, effort: effort.value as Effort | '' });
     model.addEventListener('change', update);

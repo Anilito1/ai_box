@@ -548,7 +548,7 @@ export class SessionManager extends EventEmitter {
   private failed(s: Session, failure: string): void {
     if (this.quitting) return;
     // The executable the SDK expects is missing: the fix is in the settings, not in the conversation.
-    const noClaude = !this.opts.executable() || /not found|ENOENT|no such file/i.test(failure);
+    const noClaude = !this.opts.executable() || /Native CLI binary|pathToClaudeCodeExecutable|spawn \S*claude\S* ENOENT/i.test(failure);
     s.error = noClaude ? t('error.noClaude') : oneLine(failure, 300);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });

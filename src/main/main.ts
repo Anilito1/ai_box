@@ -508,6 +508,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     if (!win) return;
     if (win.isMinimized()) win.restore();
+    win.show();
     win.focus();
   });
   app.on('window-all-closed', () => app.quit());

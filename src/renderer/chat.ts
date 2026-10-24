@@ -15,7 +15,7 @@ import {
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
-import { PLATFORM, t } from './i18n';
+import { effortLabel, PLATFORM, t } from './i18n';
 import { activityOf, lastOf, WorkingLine } from './working';
 
 // Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
@@ -297,7 +297,7 @@ export class ChatView {
     this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? modeLabel(s.mode) : t('chat.modeDefault')));
     this.modeBtn.classList.toggle('danger', s.mode === 'bypassPermissions');
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
-    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? t(`effort.${s.effort}`) : ''), icon(ICONS.chevron, 'ico small'));
+    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? effortLabel(s.effort) : ''), icon(ICONS.chevron, 'ico small'));
     this.modelBtn.title = t('chat.modelTitle');
 
     const m = s.metrics;
@@ -463,7 +463,7 @@ export class ChatView {
       menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
       const seg = h('div', 'segmented');
       for (const effort of efforts) {
-        const b = h('button', effort === s.effort ? 'seg active' : 'seg', t(`effort.${effort}`));
+        const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
         b.addEventListener('click', () => {
           this.hub.setEffort(s.id, effort);
           close();

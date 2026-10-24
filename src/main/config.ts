@@ -140,7 +140,11 @@ export function loadConfig(dataDir: string, systemLang: Lang): HubConfig {
   if (raw.version === undefined) {
     // Kept as it was: the first save writes the new format over config.json.
     const backup = join(dataDir, 'config.legacy.json');
-    if (!existsSync(backup)) copyFileSync(file, backup);
+    try {
+      if (!existsSync(backup)) copyFileSync(file, backup);
+    } catch {
+      // Folder read-only or file locked: the settings load all the same, without the copy.
+    }
     raw = fromLegacy(raw);
   }
   merge(cfg, raw);

@@ -2,7 +2,7 @@ import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
 import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
-import { LANG, PLATFORM, t, translateDom } from './i18n';
+import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
 import { activityOf, lastOf } from './working';
@@ -140,7 +140,7 @@ function renderCard(s: SessionView): void {
   c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
   c.name.textContent = displayName(s);
   c.cost.textContent = fmtCost(m?.costUsd);
-  c.model.textContent = [s.modelLabel, s.effort ? t(`effort.${s.effort}`) : ''].filter(Boolean).join(' · ');
+  c.model.textContent = [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · ');
   c.pct.textContent = fmtPct(m?.contextPct);
   c.fill.style.width = `${Math.min(100, m?.contextPct ?? 0)}%`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;
