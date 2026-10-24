@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isLang, type Lang } from '../shared/i18n';
@@ -137,7 +137,12 @@ export function loadConfig(dataDir: string, systemLang: Lang): HubConfig {
     renameSync(file, `${file}.corrupt`);
     return cfg;
   }
-  if (raw.version === undefined) raw = fromLegacy(raw);
+  if (raw.version === undefined) {
+    // Kept as it was: the first save writes the new format over config.json.
+    const backup = join(dataDir, 'config.legacy.json');
+    if (!existsSync(backup)) copyFileSync(file, backup);
+    raw = fromLegacy(raw);
+  }
   merge(cfg, raw);
   mergeOwn(cfg, raw);
   return cfg;

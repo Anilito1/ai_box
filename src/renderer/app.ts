@@ -125,6 +125,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
   if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: oneLine(s.background[0]) }), cls: 'live' };
+  if (isClosed(s) && s.error) return { text: t('card.failed', { error: s.error }), cls: 'error' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
   if (s.mission) return { text: oneLine(s.mission), cls: '' };
   return { text: s.role === 'master' ? t('master.yourConversation') : t(`status.${s.status}`), cls: '' };
@@ -139,7 +140,7 @@ function renderCard(s: SessionView): void {
   c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
   c.name.textContent = displayName(s);
   c.cost.textContent = fmtCost(m?.costUsd);
-  c.model.textContent = [s.modelLabel, s.effort].filter(Boolean).join(' · ');
+  c.model.textContent = [s.modelLabel, s.effort ? t(`effort.${s.effort}`) : ''].filter(Boolean).join(' · ');
   c.pct.textContent = fmtPct(m?.contextPct);
   c.fill.style.width = `${Math.min(100, m?.contextPct ?? 0)}%`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;
@@ -314,6 +315,11 @@ reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
 // The git panel's own buttons to follow another repo or stop following one. Cancelling the event tells the panel
 // the hub handles it.
+// A notice that points to a section of the settings (Claude Code missing, for one).
+window.addEventListener('hub:open-settings', (e) => {
+  const section = (e as CustomEvent<unknown>).detail;
+  void setup.open('settings', section === 'claude' ? 'claude' : 'general');
+});
 window.addEventListener('hub:add-repo', (e) => {
   e.preventDefault();
   void setup.open('settings', 'repos');

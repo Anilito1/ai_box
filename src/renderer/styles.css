@@ -19,8 +19,8 @@
   --danger: #e5736f;
   --add: rgba(111, 191, 139, 0.12);
   --del: rgba(229, 115, 111, 0.12);
-  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', Ubuntu, Cantarell, 'Noto Sans', system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
   color-scheme: dark;
 }
 
@@ -3194,4 +3194,57 @@ button {
 }
 .btn.danger:hover:not(:disabled) {
   background: #c95e5a;
+}
+
+/* ---------- failures ---------- */
+.card-sub.error,
+.ph-status.error {
+  color: var(--danger);
+}
+.notice .notice-action {
+  margin-left: 10px;
+}
+.menu-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 6px 6px;
+  padding: 10px;
+  border: 1px solid rgba(229, 115, 111, 0.45);
+  border-radius: 8px;
+  background: rgba(229, 115, 111, 0.06);
+}
+.menu-confirm-text {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.menu-confirm-text input {
+  margin: 2px 0 0;
+  accent-color: var(--danger);
+}
+.menu-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- keyboard focus and contrast ---------- */
+/* Controls show where the keyboard is; text fields keep their own focus border. */
+button:focus-visible,
+summary:focus-visible,
+select:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible,
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Secondary text of the dialogs at 4.5:1 or more against their backgrounds. */
+.setup {
+  --text-3: #8b9099;
 }

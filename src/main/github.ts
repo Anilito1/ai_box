@@ -106,7 +106,9 @@ export async function ghPath(): Promise<string> {
 /** Login of the account the GitHub CLI is signed in with, or empty. */
 export async function ghLogin(): Promise<string> {
   const gh = await ghPath();
-  const login = gh ? await run(gh, ['api', 'user', '--jq', '.login']) : '';
+  if (!gh) return '';
+  const saved = await run(gh, ['config', 'get', 'user', '-h', 'github.com']);
+  const login = LOGIN.test(saved) ? saved : await run(gh, ['api', 'user', '--jq', '.login']);
   return LOGIN.test(login) ? login : '';
 }
 

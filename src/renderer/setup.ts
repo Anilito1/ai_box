@@ -32,6 +32,31 @@ const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
 /** Survives the reload a language change triggers, so the setup reopens where it was. */
 const RESUME_KEY = 'setupResume';
+/** Step of an unfinished first run, kept across restarts. */
+const STEP_KEY = 'setupStep';
+
+function remember(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Not kept: the first run restarts at its first step.
+  }
+}
+function forget(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Nothing kept.
+  }
+}
+function stepReached(): Section {
+  try {
+    const step = localStorage.getItem(STEP_KEY) as Section | null;
+    return step && STEPS.includes(step) ? step : 'general';
+  } catch {
+    return 'general';
+  }
+}
 
 const INSTALL = {
   win32: 'irm https://claude.ai/install.ps1 | iex',
@@ -58,6 +83,12 @@ export class SetupView {
   private confirmBypass = false;
   /** API key typed but not saved yet: kept across re-renders so a failed check can be retried. */
   private keyDraft = '';
+  /** Settings typed but not saved yet (see flush). */
+  private pending: SettingsPatch = {};
+  /** Focused before the dialog opened: it gets the focus back. */
+  private returnFocus: HTMLElement | null = null;
+  /** Start pressed while Claude has no access yet: the next press starts anyway. */
+  private startAnyway = false;
   private device: GithubDevice | null = null;
   private note: { text: string; tone: 'ok' | 'error' } | null = null;
   private busy = false;
@@ -66,9 +97,32 @@ export class SetupView {
     private readonly hub: HubApi,
     private readonly models: () => ModelOption[],
   ) {
+    this.root.setAttribute('role', 'dialog');
+    this.root.setAttribute('aria-modal', 'true');
+    this.root.setAttribute('aria-labelledby', 'setup-title');
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !this.root.hidden && this.mode === 'settings') this.close();
+      if (this.root.hidden) return;
+      if (e.key === 'Escape' && this.mode === 'settings') this.close();
+      else if (e.key === 'Tab') this.trapFocus(e);
     });
+  }
+
+  /** Tab cycles through the dialog's own controls only. */
+  private trapFocus(e: KeyboardEvent): void {
+    const items = [...this.root.querySelectorAll<HTMLElement>('button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')].filter(
+      (el) => !(el as HTMLButtonElement).disabled && el.offsetParent !== null,
+    );
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const inside = this.root.contains(document.activeElement);
+    if (e.shiftKey && (document.activeElement === first || !inside)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+      e.preventDefault();
+      first.focus();
+    }
   }
 
   get isOpen(): boolean {
@@ -89,20 +143,41 @@ export class SetupView {
     return true;
   }
 
-  async open(mode: Kind, section: Section = 'general'): Promise<void> {
+  async open(mode: Kind, section?: Section): Promise<void> {
     this.mode = mode;
-    this.section = section;
+    // A first run interrupted by a restart picks up at the step it reached.
+    this.section = section ?? (mode === 'onboarding' ? stepReached() : 'general');
     this.note = null;
     this.view = await this.hub.getSettings();
+    if (this.root.hidden) this.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.root.hidden = false;
     this.render();
   }
 
   close(): void {
+    void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
     this.root.hidden = true;
     this.root.replaceChildren();
+    this.returnFocus?.focus();
+    this.returnFocus = null;
+  }
+
+  /** Typed values wait here until their field loses focus, the section changes or the dialog closes. */
+  private stage(patch: SettingsPatch): void {
+    this.pending = { ...this.pending, ...patch, ...(patch.github ? { github: { ...this.pending.github, ...patch.github } } : {}) };
+  }
+
+  /** Saves what was typed; `redraw` once the user has left the field (a redraw would steal the caret). */
+  private async flush(redraw: boolean): Promise<void> {
+    const patch = this.pending;
+    this.pending = {};
+    if (Object.keys(patch).length === 0) return;
+    const r = await this.hub.saveSettings(patch);
+    this.view = r;
+    if (!r.ok) this.note = { text: t('setup.invalid'), tone: 'error' };
+    if (redraw || !r.ok) this.render();
   }
 
   // ---------- frame ----------
@@ -133,7 +208,7 @@ export class SetupView {
       if (index > 0) foot.append(this.button(t('setup.back'), 'btn ghost', () => this.go(STEPS[index - 1])));
       foot.append(h('span', 'spacer'));
       if (index < STEPS.length - 1) foot.append(this.button(t('setup.next'), 'btn primary', () => this.go(STEPS[index + 1])));
-      else foot.append(this.button(t('setup.finish'), 'btn primary', () => void this.finish()));
+      else foot.append(this.button(this.startAnyway ? t('setup.finish.anyway') : t('setup.finish'), 'btn primary', () => void this.finish()));
     } else {
       foot.append(h('span', 'setup-hint', t('setup.appliesNext')), h('span', 'spacer'));
       foot.append(this.button(t('setup.restart'), 'btn ghost', () => this.hub.relaunch()));
@@ -148,16 +223,40 @@ export class SetupView {
   }
 
   private go(section: Section): void {
+    void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
     this.confirmBypass = false;
+    this.startAnyway = false;
     this.section = section;
     this.note = null;
+    if (this.mode === 'onboarding') remember(STEP_KEY, section);
     this.render();
   }
 
+  /**
+   * The master needs Claude: without Claude Code the start is refused and the Claude step shown; without access
+   * yet, a first press explains, a second one starts anyway.
+   */
   private async finish(): Promise<void> {
+    await this.flush(false);
+    if (!this.claude) await this.checkClaude();
+    const c = this.claude;
+    if (!c?.executable) {
+      this.section = 'claude';
+      this.note = { text: t('setup.finish.noClaude'), tone: 'error' };
+      return this.render();
+    }
+    const s = this.view?.settings;
+    const external = s?.provider === 'bedrock' || s?.provider === 'vertex';
+    const noKey = s?.provider === 'api-key' && !this.view?.apiKeySet;
+    if (!this.startAnyway && (noKey || (!external && c.account?.ready !== true))) {
+      this.startAnyway = true;
+      this.note = { text: t('setup.finish.noAccess'), tone: 'error' };
+      return this.render();
+    }
     await this.hub.finishSetup();
+    forget(STEP_KEY);
     this.close();
   }
 
@@ -190,7 +289,9 @@ export class SetupView {
   }
 
   private head(el: HTMLElement, title: string, lead: string): void {
-    el.append(h('h2', 'setup-title', title), h('p', 'setup-lead', lead));
+    const heading = h('h2', 'setup-title', title);
+    heading.id = 'setup-title';
+    el.append(heading, h('p', 'setup-lead', lead));
   }
 
   private field(label: string, hint = ''): HTMLDivElement {
@@ -252,15 +353,15 @@ export class SetupView {
   private async save(patch: SettingsPatch): Promise<void> {
     const r = await this.run(() => this.hub.saveSettings(patch));
     this.view = r;
-    this.note = r.ok ? null : { text: t('setup.invalid', { field: r.error }), tone: 'error' };
+    this.note = r.ok ? null : { text: t('setup.invalid'), tone: 'error' };
     this.render();
   }
 
   /** Error codes of the main process, explained; anything else (a git message) is shown as is. */
-  private errorText(code: string, context: 'key' | 'github' = 'github'): string {
+  private errorText(code: string, context: 'key' | 'github' | 'pat' = 'github'): string {
     const known: Record<string, Key> = {
       format: 'setup.err.format',
-      unauthorized: context === 'key' ? 'setup.err.invalidKey' : 'setup.err.githubToken',
+      unauthorized: context === 'key' ? 'setup.err.invalidKey' : context === 'pat' ? 'setup.err.patRefused' : 'setup.err.githubToken',
       forbidden: context === 'key' ? 'setup.err.invalidKey' : 'setup.err.forbidden',
       'rate-limited': 'setup.err.rateLimited',
       network: 'setup.err.network',
@@ -277,13 +378,15 @@ export class SetupView {
     };
     if (known[code]) return t(known[code]);
     if (/^http-\d+$/.test(code)) return t('setup.err.http', { status: code.slice(5) });
-    return code;
+    // A code nobody explained (an API's error name) is not shown as is; a sentence (git's own message) is.
+    return /^[\w.-]+$/.test(code) ? t('setup.err.unexpected') : code;
   }
 
   // ---------- sections ----------
 
   private general(el: HTMLElement, v: SettingsView): void {
-    this.head(el, this.mode === 'onboarding' ? t('setup.welcome', { app: APP_NAME }) : t('setup.nav.general'), t('setup.welcome.lead'));
+    if (this.mode === 'onboarding') this.head(el, t('setup.welcome'), t('setup.welcome.lead'));
+    else this.head(el, t('setup.nav.general'), t('setup.general.lead'));
     const f = this.field(t('setup.language'));
     const seg = h('div', 'segmented setup-seg');
     for (const lang of LANGS) {
@@ -331,7 +434,11 @@ export class SetupView {
       status.classList.add(ready ? 'ok' : 'warn');
       const who = c.account
         ? [c.account.email, c.account.plan, c.account.provider !== 'firstParty' ? c.account.provider : '', c.account.source].filter(Boolean).join(' · ')
-        : c.error;
+        : c.error === 'timeout'
+          ? t('setup.claude.timeout')
+          : c.error
+            ? t('setup.claude.probeFailed')
+            : '';
       status.append(icon(ready ? ICONS.check : ICONS.shield), h('b', '', ready ? t('setup.claude.ready') : t('setup.claude.noAccess')));
       if (who) status.append(h('span', 'setup-status-detail', who));
       status.append(h('span', 'setup-status-path', c.executable));
@@ -365,18 +472,18 @@ export class SetupView {
       const f = this.field(t(bedrock ? 'setup.bedrock' : 'setup.vertex'), t(bedrock ? 'setup.bedrock.hint' : 'setup.vertex.hint'));
       const region = this.input(bedrock ? s.bedrock.region : s.vertex.region, bedrock ? 'us-east-1' : 'us-east5');
       const other = this.input(bedrock ? s.bedrock.profile : s.vertex.projectId, bedrock ? t('setup.bedrock.profile') : t('setup.vertex.project'));
+      const stage = () =>
+        this.stage(
+          bedrock
+            ? { bedrock: { region: region.value.trim(), profile: other.value.trim() } }
+            : { vertex: { region: region.value.trim(), projectId: other.value.trim() } },
+        );
+      for (const input of [region, other]) {
+        input.addEventListener('input', stage);
+        input.addEventListener('change', () => void this.flush(true));
+      }
       const row = h('div', 'setup-row');
-      row.append(
-        region,
-        other,
-        this.button(t('setup.save'), 'btn primary', () =>
-          void this.save(
-            bedrock
-              ? { bedrock: { region: region.value.trim(), profile: other.value.trim() } }
-              : { vertex: { region: region.value.trim(), projectId: other.value.trim() } },
-          ).then(() => this.checkClaude()),
-        ),
-      );
+      row.append(region, other);
       f.append(row);
       el.append(f);
     }
@@ -444,9 +551,14 @@ export class SetupView {
     if (g.source === 'none') {
       status.append(h('b', '', t('setup.github.none')));
     } else {
-      status.append(icon(broken ? ICONS.shield : ICONS.check), h('b', '', t('setup.github.connected', { login: g.login })), h('span', 'setup-status-detail', t(`setup.github.via.${g.source}` as Key)));
+      status.append(
+        icon(broken ? ICONS.shield : ICONS.check),
+        h('b', '', broken ? t('setup.github.signedOut', { login: g.login }) : t('setup.github.connected', { login: g.login })),
+        h('span', 'setup-status-detail', t(`setup.github.via.${g.source}` as Key)),
+      );
       status.append(this.button(t('setup.github.disconnect'), 'btn ghost small', () => void this.disconnect()));
-      if (broken) status.append(h('span', 'setup-status-problem', this.githubHealth === 'network' ? t('setup.err.network') : t('setup.github.broken', { reason: this.errorText(this.githubHealth ?? '') })));
+      // The heading already says the sign-in stopped working: this line says why.
+      if (broken) status.append(h('span', 'setup-status-problem', this.errorText(this.githubHealth ?? '')));
     }
     el.append(status);
 
@@ -478,9 +590,9 @@ export class SetupView {
     other.append(h('summary', '', t('setup.github.other')));
     const device = h('div', 'setup-option');
     device.append(h('div', 'setup-choice-title', t('setup.github.device')), h('div', 'setup-choice-hint', t('setup.github.device.hint')));
-    device.append(this.button(t('setup.github.signIn'), 'btn primary', () => void this.startDevice(), !clientId || !v.secureStorage));
-    if (!clientId) device.append(h('div', 'setup-hint warn', t('setup.err.clientId')));
-    options.append(device);
+    if (clientId) device.append(this.button(t('setup.github.signIn'), 'btn primary', () => void this.startDevice(), !v.secureStorage));
+    else device.append(this.clientIdField(g.clientId, v.defaultClientId));
+    if (clientId) options.append(device);
 
     const gh = h('div', 'setup-option');
     gh.append(h('div', 'setup-choice-title', t('setup.github.gh')), h('div', 'setup-choice-hint', this.ghUser ? t('setup.github.gh.found', { login: this.ghUser }) : t('setup.github.gh.hint')));
@@ -491,9 +603,10 @@ export class SetupView {
     pat.append(h('div', 'setup-choice-title', t('setup.github.token')), h('div', 'setup-choice-hint', t('setup.github.token.hint')));
     const tokenInput = this.input('', 'github_pat_… / ghp_…', 'password');
     const row = h('div', 'setup-row');
-    row.append(tokenInput, this.button(t('setup.verifySave'), 'btn', () => void this.githubResult(this.hub.githubUseToken(tokenInput.value.trim())), !v.secureStorage));
+    row.append(tokenInput, this.button(t('setup.verifySave'), 'btn', () => void this.githubResult(this.hub.githubUseToken(tokenInput.value.trim()), 'pat'), !v.secureStorage));
     pat.append(row);
     options.append(pat);
+    if (!clientId) options.append(device);
     if (healthy) {
       other.append(options);
       el.append(other);
@@ -511,16 +624,22 @@ export class SetupView {
     share.append(box, text);
     el.append(share);
 
-    const adv = h('details', 'setup-advanced');
-    adv.append(h('summary', '', t('setup.github.advanced')));
+    // With a Client ID set, changing it stays possible under Advanced.
+    if (clientId) {
+      const adv = h('details', 'setup-advanced');
+      adv.append(h('summary', '', t('setup.github.advanced')), this.clientIdField(g.clientId, v.defaultClientId));
+      el.append(adv);
+    }
+  }
+
+  /** The OAuth App's Client ID, saved when the field is left. */
+  private clientIdField(value: string, hasDefault: boolean): HTMLElement {
     const f = this.field(t('setup.github.clientId'), t('setup.github.clientId.hint'));
-    const idInput = this.input(g.clientId, v.defaultClientId ? t('setup.github.clientId.default') : 'Ov23li…');
-    const idRow = h('div', 'setup-row');
-    idRow.append(idInput, this.button(t('setup.save'), 'btn', () => void this.save({ github: { clientId: idInput.value.trim() } })));
-    f.append(idRow, this.link(t('setup.github.clientId.how'), 'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app'));
-    adv.append(f);
-    adv.open = !clientId;
-    el.append(adv);
+    const input = this.input(value, hasDefault ? t('setup.github.clientId.default') : 'Ov23li…');
+    input.addEventListener('input', () => this.stage({ github: { clientId: input.value.trim() } }));
+    input.addEventListener('change', () => void this.flush(true));
+    f.append(input, this.link(t('setup.github.clientId.how'), 'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app'));
+    return f;
   }
 
   private async startDevice(): Promise<void> {
@@ -544,12 +663,12 @@ export class SetupView {
     this.render();
   }
 
-  private async githubResult(task: Promise<SettingsView & { ok: boolean; error: string }>): Promise<void> {
+  private async githubResult(task: Promise<SettingsView & { ok: boolean; error: string }>, context: 'github' | 'pat' = 'github'): Promise<void> {
     const r = await this.run(() => task);
     this.view = r;
     this.ghRepos = null;
     this.githubHealth = null;
-    this.flash(r.ok ? t('setup.github.ok', { login: r.settings.github.login }) : this.errorText(r.error), r.ok ? 'ok' : 'error');
+    this.flash(r.ok ? t('setup.github.ok', { login: r.settings.github.login }) : this.errorText(r.error, context), r.ok ? 'ok' : 'error');
     this.render();
   }
 
@@ -692,7 +811,8 @@ export class SetupView {
     const r = await this.run(() => this.hub.cloneRepo(slug, root));
     this.cloning = '';
     this.view = r;
-    this.flash(r.ok ? t('setup.repos.cloned', { slug }) : r.error === 'exists' ? t('setup.err.exists', { slug }) : this.errorText(r.error), r.ok ? 'ok' : 'error');
+    const failure = r.error === 'exists' ? t('setup.err.exists', { slug }) : r.error === 'exists-other' ? t('setup.err.existsOther', { slug }) : this.errorText(r.error);
+    this.flash(r.ok ? t('setup.repos.cloned', { slug }) : failure, r.ok ? 'ok' : 'error');
     this.found = null;
     this.render();
   }
@@ -728,7 +848,9 @@ export class SetupView {
     area.rows = 7;
     area.placeholder = t('setup.sessions.instructions.placeholder');
     area.spellcheck = false;
-    f.append(area, this.button(t('setup.save'), 'btn', () => void this.save({ masterInstructions: area.value })));
+    area.addEventListener('input', () => this.stage({ masterInstructions: area.value }));
+    area.addEventListener('change', () => void this.flush(false));
+    f.append(area);
     el.append(f);
   }
 
@@ -761,7 +883,7 @@ export class SetupView {
     model.append(new Option(t('setup.sessions.inherit'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
     model.value = value.model;
     const effort = h('select', 'setup-select');
-    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...EFFORTS.map((e) => new Option(e, e)));
+    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...EFFORTS.map((e) => new Option(t(`effort.${e}`), e)));
     effort.value = value.effort;
     const update = () => set({ model: model.value, effort: effort.value as Effort | '' });
     model.addEventListener('change', update);

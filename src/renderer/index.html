@@ -6,13 +6,13 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
-    <title>Claude Hub</title>
+    <title></title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div class="app">
       <header class="titlebar">
-        <div class="brand"><img class="brand-logo" src="logo.png" alt="" />Claude Hub</div>
+        <div class="brand"><img class="brand-logo" id="brand-logo" alt="" /><span id="brand-name"></span></div>
         <button class="title-btn" id="open-settings" data-i18n-title="side.settings">
           <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="8" cy="8" r="2.2" />

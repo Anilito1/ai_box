@@ -1,6 +1,6 @@
 import type { Lang } from './i18n';
 
-export const APP_NAME = 'Claude Hub';
+export { APP_NAME } from './brand';
 
 export type Role = 'master' | 'worker';
 export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
@@ -69,6 +69,8 @@ export interface SessionView {
   compacting: boolean;
   /** An API call failed (overloaded, rate limit) and is being retried. */
   retrying: boolean;
+  /** Why its last start or run failed; empty once it runs again. */
+  error: string;
 }
 
 /** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
@@ -275,7 +277,7 @@ export type ChatItem =
       canAlways: boolean;
       state: 'pending' | 'allowed' | 'denied' | 'expired';
     }
-  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'error' };
+  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'error'; /** A button that opens Settings › Claude. */ action?: 'claude-settings' };
 
 export interface PermissionDecision {
   behavior: 'allow' | 'always' | 'deny';

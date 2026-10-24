@@ -442,6 +442,7 @@ export class SessionManager extends EventEmitter {
         agents: s.agents,
         compacting: s.compacting,
         retrying: s.retrying,
+        error: s.error,
       }));
     return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits };
   }
@@ -453,6 +454,18 @@ export class SessionManager extends EventEmitter {
   // ---------- SDK session ----------
 
   private async launch(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
+    try {
+      await this.start(s, resume, firstPrompt);
+    } catch (err) {
+      // Claude Code could not be started (missing executable, broken install): nothing else would report it.
+      if (s.query) return; // Started: consume() reports what happens next.
+      this.teardown(s);
+      this.failed(s, errorText(err));
+      this.changed();
+    }
+  }
+
+  private async start(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
     const { cfg } = this.opts;
     // Claimed synchronously: a send() or resume() during the awaits below queues into this inbox instead of launching twice.
     const inbox = new Inbox();
@@ -508,10 +521,11 @@ export class SessionManager extends EventEmitter {
       ...(resume ? { resume: s.sessionId } : { sessionId: s.sessionId }),
     };
 
+    // Shown (and queued) before Claude Code starts: a start that fails still leaves the message visible.
+    if (firstPrompt) this.pushUser(s, firstPrompt);
     const q = query({ prompt: inbox, options });
     s.query = q;
     s.costBase = resume ? (s.metrics?.costUsd ?? 0) : 0;
-    if (firstPrompt) this.pushUser(s, firstPrompt);
     this.changed();
     void this.onReady(s, q);
     await this.consume(s, q);
@@ -526,12 +540,20 @@ export class SessionManager extends EventEmitter {
     }
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
-    if (failure && !this.quitting) {
-      this.event(s, 'crashed');
-      this.notice(s, t('notice.stopped', { error: failure }), 'error');
-      if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: s.name, error: oneLine(failure, 400) }));
-    }
+    if (failure && !this.quitting) this.failed(s, failure);
     this.changed();
+  }
+
+  /** A session that stopped on an error: its card and conversation say why; the master hears about a worker. */
+  private failed(s: Session, failure: string): void {
+    if (this.quitting) return;
+    // The executable the SDK expects is missing: the fix is in the settings, not in the conversation.
+    const noClaude = !this.opts.executable() || /not found|ENOENT|no such file/i.test(failure);
+    s.error = noClaude ? t('error.noClaude') : oneLine(failure, 300);
+    this.event(s, 'crashed');
+    if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
+    else this.notice(s, t('notice.stopped', { error: failure }), 'error');
+    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: s.name, error: oneLine(failure, 400) }));
   }
 
   private teardown(s: Session): void {
@@ -749,6 +771,7 @@ export class SessionManager extends EventEmitter {
       return; // The session failed to start: consume() reports it.
     }
     if (s.query !== q) return;
+    s.error = '';
     if (s.status === 'starting') {
       s.status = 'idle';
       s.idleAt = Date.now();
@@ -1323,6 +1346,7 @@ export class SessionManager extends EventEmitter {
       agents: 0,
       compacting: false,
       retrying: false,
+      error: '',
       sessionId: randomUUID(),
       started: false,
       costBase: 0,

@@ -1,3 +1,4 @@
+import './shellPath';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +14,7 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
+import { APP_ID } from '../shared/brand';
 import type { Lang } from '../shared/i18n';
 import {
   APP_NAME,
@@ -77,7 +79,7 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     minWidth: 960,
     minHeight: 600,
     title: APP_NAME,
-    icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'logo.png'),
+    icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     backgroundColor: '#0c0d0f',
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#0c0d0f', symbolColor: '#8b9099', height: 36 },
@@ -113,22 +115,37 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
   });
   win.on('focus', () => win?.flashFrame(false));
   win.on('close', (e) => {
-    const busy = mgr.busySessions();
-    if (busy === 0 || !win) return;
-    const choice = dialog.showMessageBoxSync(win, {
-      type: 'question',
-      buttons: [t('close.quit'), t('close.cancel')],
-      defaultId: 1,
-      cancelId: 1,
-      message: tn('close.busy', busy),
-      detail: t('close.detail'),
-    });
-    if (choice !== 0) e.preventDefault();
+    if (quitting) return; // Confirmed by before-quit.
+    if (process.platform === 'darwin') {
+      // The Mac way: the window goes, the app and its sessions stay (Dock icon brings it back, Cmd+Q quits).
+      e.preventDefault();
+      win?.hide();
+      return;
+    }
+    if (!confirmQuit(mgr)) return e.preventDefault();
+    quitting = true;
   });
   loadRenderer(lang);
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
+
+/** Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q, relaunch). */
+let quitting = false;
+function confirmQuit(mgr: SessionManager | undefined): boolean {
+  const busy = mgr?.busySessions() ?? 0;
+  if (busy === 0 || !win) return true;
+  if (!win.isVisible()) win.show();
+  const choice = dialog.showMessageBoxSync(win, {
+    type: 'question',
+    buttons: [t('close.quit'), t('close.cancel')],
+    defaultId: 1,
+    cancelId: 1,
+    message: tn('close.busy', busy),
+    detail: t('close.detail'),
+  });
+  return choice === 0;
+}
 
 /** Images from the renderer, or null when any is malformed, of an unsupported type or over the per-message limits. */
 function parseImages(value: unknown): ImageInput[] | null {
@@ -420,7 +437,9 @@ class Hub {
       if (!isStr(slug) || !SLUG.test(slug) || !isStr(root) || !this.cfg.workspaces.includes(root)) return { ...this.view(), ok: false, error: 'format' };
       const dest = join(root, slug.split('/')[1]);
       // Already cloned there: it is only added. Any other folder of that name is left alone.
-      if (existsSync(dest) && remoteOf(dest).toLowerCase() !== `github.com/${slug}`.toLowerCase()) return { ...this.view(), ok: false, error: 'exists' };
+      if (existsSync(dest) && remoteOf(dest).toLowerCase() !== `github.com/${slug}`.toLowerCase()) {
+        return { ...this.view(), ok: false, error: existsSync(join(dest, '.git')) ? 'exists-other' : 'exists' };
+      }
       if (!existsSync(dest)) {
         try {
           await cloneRepo(slug, root, dest);
@@ -443,6 +462,9 @@ class Hub {
       this.startMaster();
     });
     on('app:relaunch', () => {
+      // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
+      if (!confirmQuit(mgr)) return;
+      quitting = true;
       app.relaunch();
       app.quit();
     });
@@ -478,7 +500,7 @@ async function start(): Promise<void> {
 }
 
 // Groups the taskbar button under the app's own identity and icon instead of Electron's.
-if (process.platform === 'win32') app.setAppUserModelId('ClaudeHub');
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -489,7 +511,13 @@ if (!app.requestSingleInstanceLock()) {
     win.focus();
   });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => {
+  app.on('activate', () => win?.show());
+  app.on('before-quit', (e) => {
+    if (quitting) return;
+    if (!confirmQuit(manager)) return e.preventDefault();
+    quitting = true;
+  });
+  app.on('will-quit', () => {
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
   });

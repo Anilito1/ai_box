@@ -15,7 +15,7 @@ import {
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu } from './dom';
-import { t } from './i18n';
+import { PLATFORM, t } from './i18n';
 import { activityOf, lastOf, WorkingLine } from './working';
 
 // Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
@@ -133,7 +133,7 @@ export class ChatView {
       this.fileInput.value = '';
     });
     const attachBtn = h('button', 'cbtn cbtn-icon');
-    attachBtn.title = t('chat.attach');
+    attachBtn.title = t('chat.attach', { mod: PLATFORM === 'darwin' ? '⌘' : 'Ctrl' });
     attachBtn.setAttribute('aria-label', t('chat.attachShort'));
     attachBtn.append(icon(ICONS.attach));
     attachBtn.addEventListener('click', () => this.fileInput.click());
@@ -280,7 +280,8 @@ export class ChatView {
     if (!s) return;
     this.head.dot.className = `dot s-${s.status}`;
     this.head.name.textContent = displayName(s);
-    this.head.status.textContent = t(`status.${s.status}`);
+    this.head.status.textContent = s.status === 'exited' && s.error ? t('status.failed') : t(`status.${s.status}`);
+    this.head.status.classList.toggle('error', s.status === 'exited' && !!s.error);
     this.head.mission.textContent = s.role === 'worker' ? oneLine(s.mission) : '';
     this.head.mission.title = s.mission;
     this.head.cwd.textContent = s.cwd.split(/[\\/]/).filter(Boolean).pop() ?? s.cwd;
@@ -296,7 +297,7 @@ export class ChatView {
     this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? modeLabel(s.mode) : t('chat.modeDefault')));
     this.modeBtn.classList.toggle('danger', s.mode === 'bypassPermissions');
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
-    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ?? ''), icon(ICONS.chevron, 'ico small'));
+    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? t(`effort.${s.effort}`) : ''), icon(ICONS.chevron, 'ico small'));
     this.modelBtn.title = t('chat.modelTitle');
 
     const m = s.metrics;
@@ -411,12 +412,36 @@ export class ChatView {
         const row = this.menuRow(modeLabel(mode), modeHint(mode), s.mode === mode);
         row.classList.toggle('danger', mode === 'bypassPermissions');
         row.addEventListener('click', () => {
+          if (mode === 'bypassPermissions' && s.mode !== mode) return this.confirmBypass(menu, s.id, close);
           this.hub.setMode(s.id, mode);
           close();
         });
         menu.append(row);
       }
     });
+  }
+
+  /** Same explicit confirmation as in the settings before a session runs without any approval. */
+  private confirmBypass(menu: HTMLElement, id: string, close: () => void): void {
+    const box = h('div', 'menu-confirm');
+    const label = h('label', 'menu-confirm-text');
+    const check = h('input');
+    check.type = 'checkbox';
+    label.append(check, h('span', '', t('setup.mode.bypassConfirm')));
+    const enable = h('button', 'btn danger', t('setup.mode.bypassEnable'));
+    enable.disabled = true;
+    check.addEventListener('change', () => (enable.disabled = !check.checked));
+    enable.addEventListener('click', () => {
+      this.hub.setMode(id, 'bypassPermissions');
+      close();
+    });
+    const cancel = h('button', 'btn ghost', t('setup.cancel'));
+    cancel.addEventListener('click', close);
+    const row = h('div', 'menu-confirm-actions');
+    row.append(enable, cancel);
+    box.append(label, row);
+    menu.replaceChildren(h('div', 'menu-label', t('mode.bypassPermissions')), box);
+    check.focus();
   }
 
   private openModelMenu(): void {
@@ -438,7 +463,7 @@ export class ChatView {
       menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
       const seg = h('div', 'segmented');
       for (const effort of efforts) {
-        const b = h('button', effort === s.effort ? 'seg active' : 'seg', effort);
+        const b = h('button', effort === s.effort ? 'seg active' : 'seg', t(`effort.${effort}`));
         b.addEventListener('click', () => {
           this.hub.setEffort(s.id, effort);
           close();
@@ -532,8 +557,15 @@ export class ChatView {
       }
       case 'permission':
         return item.state === 'pending' ? this.permissionCard(item) : this.permissionDone(item);
-      case 'notice':
-        return h('div', `notice ${item.tone}`, item.text);
+      case 'notice': {
+        const el = h('div', `notice ${item.tone}`, item.text);
+        if (item.action === 'claude-settings') {
+          const open = h('button', 'btn small notice-action', t('notice.openClaudeSettings'));
+          open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'claude' })));
+          el.append(open);
+        }
+        return el;
+      }
     }
   }
 

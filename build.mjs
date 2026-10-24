@@ -29,4 +29,5 @@ mkdirSync('dist/renderer', { recursive: true });
 cpSync('src/renderer/index.html', 'dist/renderer/index.html');
 cpSync('src/renderer/styles.css', 'dist/renderer/styles.css');
 cpSync('assets/logo.png', 'dist/renderer/logo.png');
+cpSync('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
 console.log('build ok');

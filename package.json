@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "description": "Desktop hub for Claude Code: one master session plans the work and drives worker sessions, each in its own repo.",
+  "author": "Anilito1 (https://github.com/Anilito1)",
   "license": "MIT",
   "main": "dist/main.mjs",
   "engines": {
@@ -13,7 +14,8 @@
     "start": "node build.mjs && electron .",
     "typecheck": "tsc --noEmit",
     "dist": "node build.mjs && electron-builder",
-    "dist:dir": "node build.mjs && electron-builder --dir"
+    "dist:dir": "node build.mjs && electron-builder --dir",
+    "notices": "node scripts/notices.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.308",
@@ -31,7 +33,7 @@
     "typescript": "~5.9.3"
   },
   "build": {
-    "appId": "ClaudeHub",
+    "appId": "io.github.anilito1.hub",
     "productName": "Claude Hub",
     "directories": {
       "output": "release"
@@ -39,8 +41,11 @@
     "files": [
       "dist/**",
       "assets/icon.ico",
+      "assets/icon.png",
       "assets/logo.png",
       "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
       "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
     ],
     "win": {
@@ -54,12 +59,13 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.developer-tools",
-      "icon": "assets/logo.png"
+      "icon": "assets/icon.png"
     },
     "linux": {
       "target": "AppImage",
       "category": "Development",
-      "icon": "assets/logo.png"
-    }
+      "icon": "assets/icon.png"
+    },
+    "publish": null
   }
 }

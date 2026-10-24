@@ -11,7 +11,7 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 - **Master and workers.** The master is a Claude Code session with a few extra tools (`spawn_worker`, `message_worker`, `list_workers`, `worker_report`, `close_worker`, `list_repos`). It writes a self-contained brief for each mission and starts a worker in the right folder. Workers report to the master; the master summarizes for you. Independent missions run in parallel; workers that touch the same thing talk to each other.
 - **Every session is a real Claude Code session.** Same model, effort, `CLAUDE.md` files, plugins and MCP servers as when you run `claude` yourself. You can open any worker beside the master and write to it directly.
 - **Live view.** Status, context use, cost, background tasks, permission requests, and an animated mascot per session that reacts to what the session is doing.
-- **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub.
+- **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
 - **Closed sessions resume.** Idle workers close after 15 minutes; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
 - **English and French**, for the interface and for the instructions the sessions receive.
 
@@ -36,14 +36,18 @@ npm start
 
 `npm start` builds the app and opens it. On the first run Electron downloads its binary (about 100 MB). Running from source uses the Claude Code binary that npm installs with the Agent SDK.
 
-### Build an installer
+### Build an installer yourself
+
+This project is published **as source only**: no installer is released, and nothing in the repository publishes one (`"publish": null`). The reason: an installer bundles the Claude Agent SDK's JavaScript, which is Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance), not under this project's MIT license. Building one for yourself is fine:
 
 ```sh
 npm run dist        # installer for the current platform, in release/
 npm run dist:dir    # unpacked app only, quicker
 ```
 
-Builds are not code-signed: Windows SmartScreen and macOS Gatekeeper will warn. An installed build does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` or in `~/.local/bin`.
+Your builds are not code-signed: Windows SmartScreen and macOS Gatekeeper will warn. A built app does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` (on macOS and Linux, the `PATH` of your login shell, even when the app starts from the Finder or a launcher) or in `~/.local/bin`.
+
+On macOS, closing the window keeps the hub and its sessions running (the Dock icon brings it back); **Cmd+Q** quits, and asks first if sessions are at work.
 
 ## First run
 
@@ -100,7 +104,7 @@ The hub asks for the `repo`, `read:org` and `workflow` scopes (push to your repo
 |---|---|---|---|
 | Settings, state, secrets | `%APPDATA%\claude-hub` | `~/Library/Application Support/claude-hub` | `~/.config/claude-hub` |
 
-- `config.json`: your settings (no secret).
+- `config.json`: your settings (no secret). Settings of the first versions are migrated on the first start (your old file is kept as `config.legacy.json`, and a file already in the new format is never replaced by a migration); choose the repos to follow again in **Settings › Repos**.
 - `secrets.json`: the API key and GitHub token, encrypted with the OS keychain through Electron [safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage) (DPAPI, Keychain, libsecret/KWallet). On Linux without a keychain, the hub refuses to store secrets: set `ANTHROPIC_API_KEY` in your environment instead.
 - `state.json` and `attachments/`: the session list and the images you paste (deleted after 30 days). Conversations themselves are Claude Code's own transcripts, in `~/.claude/projects`.
 
@@ -113,7 +117,7 @@ Claude Hub gives AI agents your computer. Read this before using it on anything 
 - **Permission modes.** The default is **Claude Code's own default** (auto mode where your account has it, otherwise it asks). **Ask** shows every approval in the conversation. Approvals and MCP confirmations of a worker appear in its conversation; the master cannot grant them for you.
 - **⚠ "Allow everything" (bypass) removes every approval**: sessions run any command, commit, push, deploy or SQL, and MCP servers' confirmations (before a `DROP` or `DELETE`, for instance) are accepted automatically. Use it only on a machine, accounts and repos you can afford to lose, and keep backups. It is never on unless you turn it on, after an explicit confirmation.
 - **The window is locked down**: sandboxed renderer with context isolation, strict Content-Security-Policy, sanitized Markdown, no navigation or pop-ups, and every message from the window to the hub is checked to come from its own page. Secrets never reach the window.
-- **What leaves your computer**: the sessions talk to Anthropic (or your cloud provider) like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`. No telemetry.
+- **What leaves your computer**: the sessions talk to Anthropic (or your cloud provider) like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds. No telemetry.
 
 Found a vulnerability? Please open a private security advisory on the repository rather than a public issue.
 
@@ -127,6 +131,8 @@ npm start           # build + run
 
 The code: `src/main` (Electron main process: sessions, hub tools, settings, GitHub, git), `src/preload` (the bridge the window uses), `src/renderer` (DOM, no framework), `src/shared` (types and i18n helpers). Strings live in `src/main/i18n.ts`, `src/renderer/i18n.ts` and the prompts in `src/main/prompts.ts`.
 
+**Renaming the app** takes three places: `APP_NAME` (and `LOGO`) in `src/shared/brand.ts`, `build.productName` in `package.json`, and the images in `assets/` (`icon.ico`, `icon.png` at 512×512, `logo.png`). Keep `build.appId` and `APP_ID`: the settings folder and the Windows taskbar identity do not depend on the name. On macOS, the keychain entry that protects the stored secrets follows the app's name: after a rename, enter the API key and GitHub sign-in again.
+
 ## License
 
-[MIT](LICENSE). The commit graph in `src/renderer/graph.ts` is ported from [Visual Studio Code](https://github.com/microsoft/vscode) (MIT, © Microsoft Corporation; notice kept in the file). The Claude Agent SDK and Claude Code are Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); they are installed from npm or by you, not shipped in this repository.
+[MIT](LICENSE). The code the app bundles (three.js, marked, DOMPurify, and the commit graph ported from [Visual Studio Code](https://github.com/microsoft/vscode)) is listed with its licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (`npm run notices` rewrites it). The Claude Agent SDK and Claude Code are Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); they are installed from npm or by you, not shipped in this repository.
