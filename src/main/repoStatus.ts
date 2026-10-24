@@ -76,7 +76,7 @@ export class RepoWatcher extends EventEmitter {
       if (!existsSync(this.path)) return;
       this.update({ fetching: true });
       try {
-        // With the hub's sign-in, never a hook of the repo: nothing a session wrote runs every minute.
+        // With the hub's sign-in and none of the repo's hooks, which could otherwise read it every minute.
         await fetchRemote(this.path, { quiet: true, timeout: 45_000 });
         this.update({ fetching: false, fetchedAt: Date.now(), fetchError: '' });
       } catch (err) {

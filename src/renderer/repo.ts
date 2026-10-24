@@ -47,6 +47,45 @@ const SCALE = ROW / SWIMLANE_HEIGHT;
 // Commit shortcut as the platform names it.
 const SHORTCUT = t(PLATFORM === 'darwin' ? 'scm.shortcutMac' : 'scm.shortcut');
 
+// Keys typed by kind: a new action, error or state cannot be left untranslated.
+const BUSY: Record<RepoActionKind, Key> = {
+  fetch: 'scm.busy.fetch',
+  pull: 'scm.busy.pull',
+  push: 'scm.busy.push',
+  sync: 'scm.busy.sync',
+  publish: 'scm.busy.publish',
+  commit: 'scm.busy.commit',
+  stage: 'scm.busy.stage',
+  unstage: 'scm.busy.unstage',
+  'stage-all': 'scm.busy.stage-all',
+  'unstage-all': 'scm.busy.unstage-all',
+  checkout: 'scm.busy.checkout',
+  branch: 'scm.busy.branch',
+  abort: 'scm.busy.abort',
+};
+const ERRORS: Record<RepoErrorKind, Key> = {
+  'no-upstream': 'scm.error.no-upstream',
+  rejected: 'scm.error.rejected',
+  diverged: 'scm.error.diverged',
+  conflict: 'scm.error.conflict',
+  'local-changes': 'scm.error.local-changes',
+  'nothing-to-commit': 'scm.error.nothing-to-commit',
+  auth: 'scm.error.auth',
+  busy: 'scm.error.busy',
+  invalid: 'scm.error.invalid',
+  other: 'scm.error.other',
+};
+const STATES: Record<Exclude<RepoState, ''>, { text: Key; abort: Key }> = {
+  merge: { text: 'scm.state.merge', abort: 'scm.abort.merge' },
+  rebase: { text: 'scm.state.rebase', abort: 'scm.abort.rebase' },
+  'cherry-pick': { text: 'scm.state.cherry-pick', abort: 'scm.abort.cherry-pick' },
+  revert: { text: 'scm.state.revert', abort: 'scm.abort.revert' },
+};
+const FILTERS: Record<GraphFilter, { name: Key; hint: Key }> = {
+  auto: { name: 'scm.filter.auto', hint: 'scm.filterHint.auto' },
+  all: { name: 'scm.filter.all', hint: 'scm.filterHint.all' },
+};
+
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REF_ICONS: Record<GitRefKind, string> = { head: ICONS.target, branch: ICONS.branch, remote: ICONS.cloud, tag: ICONS.tag };
 
@@ -431,7 +470,7 @@ export class RepoPanel {
     const busy = repo.busy?.path === tree.path ? repo.busy.action : this.pending;
     return [
       ownUpstream(tree.branch, tree.upstream) ? t('scm.syncHint', { behind: tree.behind, ahead: tree.ahead, upstream: tree.upstream }) : t('scm.publishHint'),
-      busy ? t(`scm.busy.${busy}` as Key) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t('scm.fetchFailed', { error: repo.fetchError }) : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
+      busy ? t(BUSY[busy]) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t('scm.fetchFailed', { error: repo.fetchError }) : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -454,9 +493,9 @@ export class RepoPanel {
     };
     if (state) {
       const box = h('div', 'scm-alert-box warn');
-      box.append(h('div', 'scm-alert-text', t(`scm.state.${state}` as Key)));
+      box.append(h('div', 'scm-alert-text', t(STATES[state].text)));
       const fixes = h('div', 'scm-fixes');
-      fixes.append(fix(t(`scm.abort.${state}` as Key), ICONS.undo, { kind: 'abort' }));
+      fixes.append(fix(t(STATES[state].abort), ICONS.undo, { kind: 'abort' }));
       box.append(fixes);
       items.push(box);
     }
@@ -467,7 +506,7 @@ export class RepoPanel {
         this.renderAlert();
       });
       const text = h('div', 'scm-alert-text');
-      text.append(h('b', '', t(`scm.error.${a.kind}` as Key)), h('span', 'scm-alert-git', a.message));
+      text.append(h('b', '', t(ERRORS[a.kind])), h('span', 'scm-alert-git', a.message));
       box.append(close, text);
       const fixes = h('div', 'scm-fixes');
       if (a.kind === 'no-upstream') fixes.append(fix(t('scm.publish'), ICONS.publish, { kind: 'publish' }));
@@ -674,8 +713,8 @@ export class RepoPanel {
 
   private filterButton(): HTMLElement {
     const btn = h('button', 'scm-filter');
-    btn.append(icon(ICONS.filter, 'ico small'), h('span', '', t(`scm.filter.${this.filter}` as Key)));
-    btn.title = t('scm.filterTooltip', { title: t('scm.filterTitle'), hint: t(`scm.filterHint.${this.filter}` as Key) });
+    btn.append(icon(ICONS.filter, 'ico small'), h('span', '', t(FILTERS[this.filter].name)));
+    btn.title = t('scm.filterTooltip', { title: t('scm.filterTitle'), hint: t(FILTERS[this.filter].hint) });
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       openMenu(btn, (menu, close) => {
@@ -683,7 +722,7 @@ export class RepoPanel {
         for (const f of ['auto', 'all'] as GraphFilter[]) {
           const row = h('button', 'menu-row');
           const text = h('span', 'menu-text');
-          text.append(h('span', 'menu-title', t(`scm.filter.${f}` as Key)), h('span', 'menu-hint', t(`scm.filterHint.${f}` as Key)));
+          text.append(h('span', 'menu-title', t(FILTERS[f].name)), h('span', 'menu-hint', t(FILTERS[f].hint)));
           row.append(icon(f === this.filter ? ICONS.check : ''), text);
           row.addEventListener('click', () => {
             close();
@@ -936,7 +975,7 @@ export class RepoPanel {
         row(t('scm.switchBranch'), ICONS.branch, () => this.openBranchPicker(anchor)),
         row(t('scm.newBranch'), ICONS.plus, () => this.openBranchPicker(anchor)),
       );
-      if (tree.state) menu.append(h('div', 'menu-sep'), row(t(`scm.abort.${tree.state}` as Key), ICONS.undo, () => void this.run({ kind: 'abort' })));
+      if (tree.state) menu.append(h('div', 'menu-sep'), row(t(STATES[tree.state].abort), ICONS.undo, () => void this.run({ kind: 'abort' })));
     });
   }
 

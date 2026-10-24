@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { t } from './i18n';
@@ -45,28 +45,53 @@ const stripCredentials = (text: string) => text.replace(/\/\/[^/\s]*@/g, '//');
 const NO_HOOKS = ['-c', `core.hooksPath=${process.execPath}`];
 
 let tokenDir = '';
+const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** `url` is on the sign-in's host (any user name in it aside): only then is the sign-in offered. */
+function servedBy(url: string, prefix: string): boolean {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}` === prefix;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Config handing the sign-in to git for this one command. A token never enters the environment, which hooks and
- * every program git starts inherit: it waits in a file the helper reads once and deletes, removed anyway when the
- * command ends. The empty helper first drops the helpers configured elsewhere for that URL.
+ * every program git starts inherit: it waits in a file removed when the command ends. When the repo's hooks may run
+ * (push, merge), the helper also deletes it on first read, before any hook. The empty helper first drops every
+ * helper configured elsewhere for that host, and askpass is off: nothing named by the repo's config gets a prompt.
+ * The GitHub CLI's helper needs none of this: any program of the user can already ask the CLI itself.
  */
-function credential(sign: NonNullable<GitSignIn>): { args: string[]; cleanup: () => void } | null {
+function credential(sign: NonNullable<GitSignIn>, once: boolean): { args: string[]; cleanup: () => void } {
   const key = `credential.${sign.prefix}.helper`;
-  if ('helper' in sign) return { args: ['-c', `${key}=`, '-c', `${key}=${sign.helper}`], cleanup: () => {} };
-  tokenDir ||= mkdtempSync(join(tmpdir(), 'claude-hub-git-'));
+  const reset = ['-c', `${key}=`, '-c', 'core.askPass='];
+  if ('helper' in sign) return { args: [...reset, '-c', `${key}=${sign.helper}`], cleanup: () => {} };
+  if (!tokenDir) {
+    // Left by a hub that crashed during a command: a folder in use is touched by every command, so it stays recent.
+    for (const name of readdirSync(tmpdir()).filter((n) => n.startsWith('claude-hub-git-'))) {
+      const dir = join(tmpdir(), name);
+      try {
+        if (Date.now() - statSync(dir).mtimeMs > 10 * 60_000) rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Gone already or locked: the next start tries again.
+      }
+    }
+    tokenDir = mkdtempSync(join(tmpdir(), 'claude-hub-git-'));
+  }
+  const path = join(tokenDir, randomBytes(16).toString('hex'));
+  writeFileSync(path, sign.token, { mode: 0o600 });
   // Forward slashes: git runs the helper with its POSIX shell, on Windows too.
-  const file = join(tokenDir, randomBytes(16).toString('hex')).replace(/\\/g, '/');
-  if (file.includes("'")) return null;
-  writeFileSync(file, sign.token, { mode: 0o600 });
-  const helper = `!f() { test "$1" = get || exit 0; t=$(cat '${file}' 2>/dev/null); rm -f '${file}'; test -n "$t" || exit 0; echo username=x-access-token; echo "password=$t"; }; f`;
-  return { args: ['-c', `${key}=`, '-c', `${key}=${helper}`], cleanup: () => rmSync(file, { force: true }) };
+  const file = shellQuote(path.replace(/\\/g, '/'));
+  const helper = `!f() { test "$1" = get || exit 0; t=$(cat ${file} 2>/dev/null);${once ? ` rm -f ${file};` : ''} test -n "$t" || exit 0; echo username=x-access-token; echo "password=$t"; }; f`;
+  return { args: [...reset, '-c', `${key}=${helper}`], cleanup: () => rmSync(path, { force: true }) };
 }
 
 /** The single place where the main process runs git: always an argument list, never a shell. */
 export function git(cwd: string, args: string[], { timeout = 15_000, interactive = false, auth, hooks = true }: GitOptions = {}): Promise<string> {
   const sign = auth ? signIn() : null;
-  const cred = sign && auth?.startsWith(`${sign.prefix}/`) ? credential(sign) : null;
+  const cred = sign && auth && servedBy(auth, sign.prefix) ? credential(sign, hooks) : null;
   const env = interactive ? GIT_ENV : { ...GIT_ENV, GCM_INTERACTIVE: 'never' };
   // fsmonitor would run a program named in the repo's own config, which a session may have written.
   const config = ['-c', 'core.fsmonitor=false', ...(hooks ? [] : NO_HOOKS), ...(cred?.args ?? [])];

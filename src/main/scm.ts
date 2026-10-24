@@ -368,8 +368,9 @@ async function pull(path: string): Promise<void> {
   if (!tr.upstream) throw new ActionError('no-upstream', t('scm.noUpstream', { branch: tr.branch || 'HEAD' }));
   if ((await config(path, `branch.${tr.branch}.remote`)) !== '.') await fetchRemote(path, { interactive: true });
   const rebase = (await config(path, `branch.${tr.branch}.rebase`)) || (await config(path, 'pull.rebase'));
-  if (rebase && rebase !== 'false') {
-    await git(path, ['rebase', ...(/^(merges|m)$/.test(rebase) ? ['--rebase-merges'] : []), '@{upstream}'], { timeout: COMMIT_MS });
+  if (/^(true|yes|on|1|merges|m|interactive|i|preserve|p)$/i.test(rebase)) {
+    // No upstream argument: git then finds the fork point, like `git pull --rebase`.
+    await git(path, ['rebase', ...(/^(merges|m)$/i.test(rebase) ? ['--rebase-merges'] : [])], { timeout: COMMIT_MS });
     return;
   }
   const ff = await config(path, 'pull.ff');
@@ -384,11 +385,20 @@ function noOwnUpstream(tr: { branch: string; upstream: string }): void {
   }
 }
 
+/** Remote a push goes to, as git picks it: the branch's pushRemote, the repo's pushDefault, then its fetch remote. */
+async function pushRemoteFor(path: string, branch: string): Promise<string> {
+  const remotes = (await git(path, ['remote'])).split('\n').map((r) => r.trim());
+  const named = (await config(path, `branch.${branch}.pushRemote`)) || (await config(path, 'remote.pushDefault'));
+  return named && !named.startsWith('-') && remotes.includes(named) ? named : remoteFor(path, branch);
+}
+
 async function push(path: string): Promise<void> {
   const tr = await tracking(path);
   noOwnUpstream(tr);
-  const remote = await remoteFor(path, tr.branch);
-  await git(path, ['push'], { timeout: NETWORK_MS, interactive: true, auth: remote ? await urlOf(path, remote, true) : undefined });
+  const remote = await pushRemoteFor(path, tr.branch);
+  if (!remote) throw new ActionError('invalid', t('scm.noRemote'));
+  // Named here, so the sign-in goes to the very remote git pushes to.
+  await git(path, ['push', remote], { timeout: NETWORK_MS, interactive: true, auth: await urlOf(path, remote, true) });
 }
 
 async function publish(path: string): Promise<void> {
