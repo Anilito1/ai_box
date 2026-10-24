@@ -1,6 +1,7 @@
 import type { SessionView } from '../shared/types';
+import { t } from './i18n';
 
-export const displayName = (s: SessionView) => (s.role === 'master' ? 'Maître' : s.name.replace(/^hub-/, ''));
+export const displayName = (s: SessionView) => (s.role === 'master' ? t('master') : s.name.replace(/^hub-/, ''));
 
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
@@ -53,7 +54,7 @@ export const ICONS = {
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */
-export function copyButton(text: () => string, label = 'Copier'): HTMLButtonElement {
+export function copyButton(text: () => string, label = t('copy')): HTMLButtonElement {
   const btn = h('button', 'icon-btn copy-btn');
   btn.title = label;
   btn.setAttribute('aria-label', label);
@@ -100,11 +101,11 @@ export const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 export function ago(at: number): string {
   const s = Math.max(0, Math.round((Date.now() - at) / 1000));
-  if (s < 10) return "à l'instant";
-  if (s < 60) return `il y a ${s} s`;
-  if (s < 3600) return `il y a ${Math.floor(s / 60)} min`;
-  if (s < 86_400) return `il y a ${Math.floor(s / 3600)} h`;
-  return `il y a ${Math.floor(s / 86_400)} j`;
+  if (s < 10) return t('ago.now');
+  if (s < 60) return t('ago.s', { n: s });
+  if (s < 3600) return t('ago.min', { n: Math.floor(s / 60) });
+  if (s < 86_400) return t('ago.h', { n: Math.floor(s / 3600) });
+  return t('ago.d', { n: Math.floor(s / 86_400) });
 }
 
 /** Popover anchored above a button; closes on outside click, Escape or window blur. */

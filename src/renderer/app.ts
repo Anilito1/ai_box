@@ -1,8 +1,10 @@
-import { STATUS_LABEL, type ChatItem, type HubApi, type HubSnapshot, type RateLimits, type SessionView } from '../shared/types';
+import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
 import { displayName, fmtCost, fmtPct, h, icon, ICONS, level, oneLine } from './dom';
+import { LANG, PLATFORM, t, translateDom } from './i18n';
 import { RepoPanel } from './repo';
+import { SetupView } from './setup';
 import { activityOf, lastOf } from './working';
 
 declare global {
@@ -20,8 +22,13 @@ const closedList = $('closed-list');
 const closedGroup = $<HTMLDetailsElement>('closed-group');
 const reposRoot = $('repos');
 
-const masterView = new ChatView($('pane-master'), hub, 'Parle au maître : il découpe, délègue les missions à des workers et te fait les rapports.');
-const workerView = new ChatView($('pane-worker'), hub, 'Ce worker n’a encore rien produit.', () => openWorker(null), true);
+translateDom();
+document.body.classList.add(`platform-${PLATFORM}`);
+
+const masterView = new ChatView($('pane-master'), hub, t('master.empty'));
+const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
+const setup = new SetupView(hub, () => snapshot.models);
+$('open-settings').addEventListener('click', () => void setup.open('settings'));
 
 interface Card {
   root: HTMLDivElement;
@@ -65,9 +72,9 @@ function renderActions(c: Card, s: SessionView): void {
   if (c.actionsKey === key) return;
   c.actionsKey = key;
   c.actions.replaceChildren();
-  if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton('Fermer ce worker', ICONS.stop, () => hub.stop(s.id)));
-  if (isClosed(s)) c.actions.append(actionButton('Reprendre', ICONS.resume, () => hub.resume(s.id)));
-  if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton('Retirer de la liste', ICONS.remove, () => hub.remove(s.id)));
+  if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.close'), ICONS.stop, () => hub.stop(s.id)));
+  if (isClosed(s)) c.actions.append(actionButton(t('card.resume'), ICONS.resume, () => hub.resume(s.id)));
+  if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
 }
 
 /** Shows a worker's conversation beside the master (a closed one is read from its transcript), or hides it. */
@@ -112,15 +119,15 @@ function ensureCard(s: SessionView): Card {
 
 /** What the card says under the meter: live activity while working, else the latest news. */
 function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
-  if (s.status === 'attention') return { text: 'Attend ta validation', cls: 'warn' };
+  if (s.status === 'attention') return { text: t('card.attention'), cls: 'warn' };
   if (s.status === 'busy') {
     const activity = activityOf(last);
-    return { text: activity ? `▸ ${activity}` : '▸ au travail', cls: 'live' };
+    return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
-  if (s.background.length > 0 && !isClosed(s)) return { text: `Tâche de fond : ${oneLine(s.background[0])}`, cls: 'live' };
+  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: oneLine(s.background[0]) }), cls: 'live' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
   if (s.mission) return { text: oneLine(s.mission), cls: '' };
-  return { text: s.role === 'master' ? 'Ta conversation principale' : STATUS_LABEL[s.status], cls: '' };
+  return { text: s.role === 'master' ? t('master.yourConversation') : t(`status.${s.status}`), cls: '' };
 }
 
 function renderCard(s: SessionView): void {
@@ -180,7 +187,7 @@ function sbItem(label: string, value: string, cls = '', title = ''): HTMLDivElem
 function resetTime(epochSeconds: number | null, withDay: boolean): string {
   if (!epochSeconds) return '';
   const opts: Intl.DateTimeFormatOptions = withDay ? { weekday: 'short', hour: '2-digit', minute: '2-digit' } : { hour: '2-digit', minute: '2-digit' };
-  return `Réinitialisation : ${new Date(epochSeconds * 1000).toLocaleString('fr-FR', opts)}`;
+  return t('sb.reset', { date: new Date(epochSeconds * 1000).toLocaleString(LANG, opts) });
 }
 
 function renderStatusbar(rate: RateLimits | null): void {
@@ -192,20 +199,20 @@ function renderStatusbar(rate: RateLimits | null): void {
   const left: HTMLElement[] = [];
   if (master) {
     const item = h('div', 'sb-item');
-    item.append(h('span', `dot s-${master.status}`), h('span', '', `Maître · ${STATUS_LABEL[master.status]}`));
+    item.append(h('span', `dot s-${master.status}`), h('span', '', t('sb.master', { status: t(`status.${master.status}`) })));
     left.push(item);
   }
-  left.push(h('span', 'sb-sep'), sbItem('Workers actifs', String(workers.length)));
-  if (running) left.push(sbItem('en cours', String(running)));
-  if (attention) left.push(sbItem('à valider', String(attention), 'warn'));
+  left.push(h('span', 'sb-sep'), sbItem(t('sb.active'), String(workers.length)));
+  if (running) left.push(sbItem(t('sb.running'), String(running)));
+  if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
   const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
-  const right: HTMLElement[] = [sbItem('Σ coût API', fmtCost(total), '', 'Estimation au tarif API, toutes sessions du hub')];
+  const right: HTMLElement[] = [sbItem(t('sb.cost'), fmtCost(total), '', t('sb.costHint'))];
   if (rate?.fiveHourPct != null) {
-    right.push(h('span', 'sb-sep'), sbItem('5 h', fmtPct(rate.fiveHourPct), level(rate.fiveHourPct), resetTime(rate.fiveHourResetsAt, false)));
+    right.push(h('span', 'sb-sep'), sbItem(t('sb.5h'), fmtPct(rate.fiveHourPct), level(rate.fiveHourPct), resetTime(rate.fiveHourResetsAt, false)));
   }
-  if (rate?.sevenDayPct != null) right.push(sbItem('7 j', fmtPct(rate.sevenDayPct), level(rate.sevenDayPct), resetTime(rate.sevenDayResetsAt, true)));
+  if (rate?.sevenDayPct != null) right.push(sbItem(t('sb.7d'), fmtPct(rate.sevenDayPct), level(rate.sevenDayPct), resetTime(rate.sevenDayResetsAt, true)));
   $('sb-right').replaceChildren(...right);
 }
 
@@ -305,5 +312,28 @@ hub.onItems((id, items, reset) => {
 hub.onEvent((id, kind) => clawdEvent(id, kind));
 reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
+// The git panel's own buttons to follow another repo or stop following one. Cancelling the event tells the panel
+// the hub handles it.
+window.addEventListener('hub:add-repo', (e) => {
+  e.preventDefault();
+  void setup.open('settings', 'repos');
+});
+window.addEventListener('hub:remove-repo', (e) => {
+  const path = (e as CustomEvent<unknown>).detail;
+  if (typeof path !== 'string') return;
+  e.preventDefault();
+  void hub.getSettings().then((v) => hub.saveSettings({ mainRepos: v.settings.mainRepos.filter((p) => p !== path) }));
+});
+// The repos the settings follow: the panel forgets the others.
+hub.onRepos((paths) => {
+  repoPanel.setRepos(paths);
+  $('repos-empty').hidden = paths.length > 0;
+});
 hub.ready();
 masterView.focus();
+// A first run opens the setup; so does a language change made in the middle of it (the page reloads).
+if (!setup.resume()) {
+  void hub.getSettings().then((v) => {
+    if (!v.settings.onboarded) void setup.open('onboarding');
+  });
+}

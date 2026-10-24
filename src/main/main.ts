@@ -1,27 +1,59 @@
-import { dirname, join } from 'node:path';
+import { existsSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from 'electron';
 import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+  type MenuItemConstructorOptions,
+} from 'electron';
+import type { Lang } from '../shared/i18n';
+import {
+  APP_NAME,
   ATTACH_LIMITS,
   base64Bytes,
+  EFFORTS,
   IMAGE_TYPES,
   type ChatItem,
   type Effort,
+  type FoundRepo,
   type HubEventKind,
   type ImageInput,
   type ImageType,
   type Mode,
   type PermissionDecision,
+  type SettingsPatch,
+  type SettingsView,
 } from '../shared/types';
-import { loadConfig, mainRepoPath } from './config';
+import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
+import { applyPatch, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
+import { errorCode } from './errors';
+import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, SLUG } from './github';
+import { setLang, t, tn } from './i18n';
+import { setGitSignIn } from './git';
 import { RepoWatcher } from './repoStatus';
+import { findRepos } from './repos';
 import { parseAction, readBranches, readDetails, readGraph } from './scm';
+import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
 const DECISIONS = ['allow', 'always', 'deny'];
+const API_KEY = /^sk-ant-[\w-]{20,300}$/;
+const GITHUB_TOKEN = /^(gh[pousr]_[A-Za-z0-9_]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
+
+// One folder whatever the build is named (a packaged build takes its productName): settings and conversations follow.
+app.setPath(
+  'userData',
+  app.commandLine.hasSwitch('user-data-dir') ? app.commandLine.getSwitchValue('user-data-dir') : join(app.getPath('appData'), 'claude-hub'),
+);
 
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
@@ -32,14 +64,19 @@ const send = (channel: string, ...args: unknown[]) => {
   if (win && !win.isDestroyed() && rendererReady) win.webContents.send(channel, ...args);
 };
 
-function createWindow(mgr: SessionManager): void {
+/** The renderer gets its language and platform in the URL: it builds its whole UI from them before any IPC. */
+function loadRenderer(lang: Lang): void {
+  void win?.loadFile(join(here, 'renderer', 'index.html'), { query: { lang, platform: process.platform } });
+}
+
+function createWindow(mgr: SessionManager, lang: Lang): void {
   win = new BrowserWindow({
     width: 1480,
     height: 920,
     minWidth: 960,
     minHeight: 600,
-    title: 'Claude Hub',
-    icon: join(here, '..', 'assets', 'icon.ico'),
+    title: APP_NAME,
+    icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'logo.png'),
     backgroundColor: '#0c0d0f',
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: '#0c0d0f', symbolColor: '#8b9099', height: 36 },
@@ -60,17 +97,17 @@ function createWindow(mgr: SessionManager): void {
     const items: MenuItemConstructorOptions[] = [];
     if (p.isEditable) {
       items.push(
-        { role: 'cut', label: 'Couper', enabled: p.editFlags.canCut },
-        { role: 'copy', label: 'Copier', enabled: p.editFlags.canCopy },
-        { role: 'paste', label: 'Coller', enabled: p.editFlags.canPaste },
+        { role: 'cut', label: t('menu.cut'), enabled: p.editFlags.canCut },
+        { role: 'copy', label: t('menu.copy'), enabled: p.editFlags.canCopy },
+        { role: 'paste', label: t('menu.paste'), enabled: p.editFlags.canPaste },
         { type: 'separator' },
-        { role: 'selectAll', label: 'Tout sélectionner' },
+        { role: 'selectAll', label: t('menu.selectAll') },
       );
     } else if (p.selectionText.trim()) {
-      items.push({ role: 'copy', label: 'Copier' });
+      items.push({ role: 'copy', label: t('menu.copy') });
     }
-    if (p.mediaType === 'image') items.push({ label: "Copier l'image", click: () => win?.webContents.copyImageAt(p.x, p.y) });
-    if (/^https?:\/\//i.test(p.linkURL)) items.push({ label: 'Copier le lien', click: () => clipboard.writeText(p.linkURL) });
+    if (p.mediaType === 'image') items.push({ label: t('menu.copyImage'), click: () => win?.webContents.copyImageAt(p.x, p.y) });
+    if (/^https?:\/\//i.test(p.linkURL)) items.push({ label: t('menu.copyLink'), click: () => clipboard.writeText(p.linkURL) });
     if (win && items.length > 0) Menu.buildFromTemplate(items).popup({ window: win });
   });
   win.on('focus', () => win?.flashFrame(false));
@@ -79,15 +116,15 @@ function createWindow(mgr: SessionManager): void {
     if (busy === 0 || !win) return;
     const choice = dialog.showMessageBoxSync(win, {
       type: 'question',
-      buttons: ['Fermer', 'Annuler'],
+      buttons: [t('close.quit'), t('close.cancel')],
       defaultId: 1,
       cancelId: 1,
-      message: `${busy} session${busy > 1 ? 's' : ''} au travail`,
-      detail: 'Leur tour en cours et leurs tâches de fond seront interrompus. Les conversations reprennent au prochain lancement.',
+      message: tn('close.busy', busy),
+      detail: t('close.detail'),
     });
     if (choice !== 0) e.preventDefault();
   });
-  void win.loadFile(join(here, 'renderer', 'index.html'));
+  loadRenderer(lang);
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -109,80 +146,315 @@ function parseImages(value: unknown): ImageInput[] | null {
   return images;
 }
 
-function registerIpc(mgr: SessionManager, repos: RepoWatcher[]): void {
-  ipcMain.on('hub:ready', (e) => {
-    e.sender.send('hub:snapshot', mgr.snapshot());
-    for (const [id, items] of mgr.allItems()) e.sender.send('hub:items', id, items, true);
-    for (const repo of repos) e.sender.send('hub:repo', repo.status);
-    rendererReady = true;
+/** The hub's own window, showing its own page: nothing else may drive sessions, settings or secrets. */
+const trusted = (e: IpcMainEvent | IpcMainInvokeEvent) => !!win && e.sender === win.webContents && e.senderFrame?.url.startsWith('file://') === true;
+const on = (channel: string, fn: (...args: unknown[]) => void) =>
+  ipcMain.on(channel, (e, ...args: unknown[]) => {
+    if (trusted(e)) fn(...args);
   });
-  ipcMain.on('session:send', (_e, id: unknown, text: unknown, images: unknown) => {
-    if (!isStr(id) || !isStr(text)) return;
-    const parsed = parseImages(images);
-    if (parsed) mgr.send(id, text, parsed);
-    else mgr.refuse(id, text, 'images invalides ou trop lourdes');
+const handle = <T>(channel: string, fn: (...args: unknown[]) => T | Promise<T>) =>
+  ipcMain.handle(channel, (e, ...args: unknown[]) => {
+    if (!trusted(e)) throw new Error('untrusted sender');
+    return fn(...args);
   });
-  ipcMain.on('session:interrupt', (_e, id: unknown) => {
-    if (isStr(id)) mgr.interrupt(id);
-  });
-  ipcMain.on('session:model', (_e, id: unknown, model: unknown) => {
-    if (isStr(id) && isStr(model)) mgr.setModel(id, model);
-  });
-  ipcMain.on('session:effort', (_e, id: unknown, effort: unknown) => {
-    if (isStr(id) && EFFORTS.includes(effort as Effort)) mgr.setEffort(id, effort as Effort);
-  });
-  ipcMain.on('session:mode', (_e, id: unknown, mode: unknown) => {
-    if (isStr(id) && MODES.includes(mode as Mode)) mgr.setMode(id, mode as Mode);
-  });
-  ipcMain.on('session:decide', (_e, id: unknown, requestId: unknown, decision: unknown) => {
-    const d = decision as PermissionDecision | null;
-    if (isStr(id) && isStr(requestId) && d && DECISIONS.includes(d.behavior) && (d.message === undefined || isStr(d.message))) {
-      mgr.decide(id, requestId, { behavior: d.behavior, message: d.message });
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+class Hub {
+  readonly dataDir = app.getPath('userData');
+  readonly cfg: HubConfig;
+  readonly secrets = new Secrets(this.dataDir);
+  readonly mgr: SessionManager;
+  private readonly device = new DeviceFlow();
+  private executable = '';
+  private gh = '';
+  private masterStarted = false;
+
+  constructor() {
+    const system = app.getPreferredSystemLanguages()[0] ?? app.getLocale();
+    this.cfg = loadConfig(this.dataDir, system.toLowerCase().startsWith('fr') ? 'fr' : 'en');
+    setLang(this.cfg.language);
+    this.mgr = new SessionManager({
+      cfg: this.cfg,
+      dataDir: this.dataDir,
+      executable: () => this.executable,
+      sessionEnv: () => this.sessionEnv(),
+    });
+  }
+
+  async init(): Promise<void> {
+    setGitSignIn(() => this.gitEnv());
+    [this.executable, this.gh] = await Promise.all([
+      claudeExecutable(this.cfg),
+      this.cfg.github.source === 'gh' ? ghPath() : '',
+      this.secrets.load(),
+    ]);
+  }
+
+  /** Claude access chosen in the settings, plus the GitHub sign-in when the user shares it with the sessions. */
+  sessionEnv(): { set: Record<string, string>; unset: string[] } {
+    const claude = claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
+    const github = this.cfg.github.shareWithSessions ? this.gitEnv() : {};
+    return { set: { ...claude.set, ...github }, unset: claude.unset };
+  }
+
+  /** What the hub's own git commands (the git panel) need to reach GitHub with the hub's sign-in. */
+  gitEnv(): Record<string, string> {
+    return githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh);
+  }
+
+  view(): SettingsView {
+    return {
+      settings: structuredClone(this.cfg),
+      apiKeySet: this.secrets.has('anthropicApiKey'),
+      githubTokenSet: this.secrets.has('githubToken'),
+      secureStorage: this.secrets.available(),
+      defaultClientId: DEFAULT_CLIENT_ID !== '',
+      platform: process.platform,
+      version: app.getVersion(),
+    };
+  }
+
+  save(): void {
+    saveConfig(this.dataDir, this.cfg);
+  }
+
+  startMaster(): void {
+    if (this.masterStarted || !this.cfg.onboarded) return;
+    this.masterStarted = true;
+    this.mgr.startMaster();
+  }
+
+  setWatchers(): void {
+    for (const repo of repoWatchers) repo.stop();
+    repoWatchers = this.cfg.mainRepos.map((r) => new RepoWatcher(mainRepoPath(this.cfg, r)));
+    send('hub:repos', repoWatchers.map((r) => r.path));
+    for (const repo of repoWatchers) {
+      repo.on('changed', (status) => send('hub:repo', status));
+      repo.start();
     }
-  });
-  ipcMain.on('session:stop', (_e, id: unknown) => {
-    if (isStr(id)) mgr.stop(id);
-  });
-  ipcMain.on('session:resume', (_e, id: unknown) => {
-    if (isStr(id)) mgr.resume(id);
-  });
-  ipcMain.on('session:remove', (_e, id: unknown) => {
-    if (isStr(id)) mgr.remove(id);
-  });
-  ipcMain.on('session:open', (_e, id: unknown) => {
-    if (isStr(id)) mgr.open(id);
-  });
-  // Only a checkout (main folder or worktree) listed by one of the configured repos: no other folder ever reaches git.
-  const checkout = (path: unknown) => {
-    const repo = repos.find((r) => r.tree(path));
-    if (!repo || !isStr(path)) throw new Error('Dossier inconnu du Hub');
-    return { repo, path };
-  };
-  ipcMain.handle('repo:graph', (_e, path: unknown, filter: unknown, limit: unknown) => {
-    const c = checkout(path);
-    if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error('Requête invalide');
-    return readGraph(c.path, filter, limit);
-  });
-  ipcMain.handle('repo:details', (_e, path: unknown, id: unknown) => {
-    const c = checkout(path);
-    if (!isStr(id)) throw new Error('Requête invalide');
-    return readDetails(c.path, id);
-  });
-  ipcMain.handle('repo:branches', (_e, path: unknown) => readBranches(checkout(path).path));
-  ipcMain.handle('repo:action', (_e, path: unknown, action: unknown) => {
-    const c = checkout(path);
-    const parsed = parseAction(action);
-    if (!parsed) throw new Error('Action invalide');
-    return c.repo.act(c.path, parsed);
-  });
-  ipcMain.on('open-external', (_e, url: unknown) => {
-    if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
-  });
+  }
+
+  registerIpc(): void {
+    const mgr = this.mgr;
+    // Only a checkout (main folder or worktree) listed by one of the configured repos: no other folder ever reaches git.
+    const checkout = (path: unknown) => {
+      const repo = repoWatchers.find((r) => r.tree(path));
+      if (!repo || !isStr(path)) throw new Error(t('repo.unknownFolder'));
+      return { repo, path };
+    };
+    on('hub:ready', () => {
+      const sender = win?.webContents;
+      if (!sender) return;
+      sender.send('hub:snapshot', mgr.snapshot());
+      for (const [id, items] of mgr.allItems()) sender.send('hub:items', id, items, true);
+      sender.send('hub:repos', repoWatchers.map((r) => r.path));
+      for (const repo of repoWatchers) sender.send('hub:repo', repo.status);
+      rendererReady = true;
+    });
+    on('session:send', (id, text, images) => {
+      if (!isStr(id) || !isStr(text)) return;
+      const parsed = parseImages(images);
+      if (parsed) mgr.send(id, text, parsed);
+      else mgr.refuse(id, text, t('images.invalid'));
+    });
+    on('session:interrupt', (id) => isStr(id) && mgr.interrupt(id));
+    on('session:model', (id, model) => isStr(id) && isStr(model) && mgr.setModel(id, model));
+    on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
+    on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
+    on('session:decide', (id, requestId, decision) => {
+      const d = decision as PermissionDecision | null;
+      if (isStr(id) && isStr(requestId) && d && DECISIONS.includes(d.behavior) && (d.message === undefined || isStr(d.message))) {
+        mgr.decide(id, requestId, { behavior: d.behavior, message: d.message });
+      }
+    });
+    on('session:stop', (id) => isStr(id) && mgr.stop(id));
+    on('session:resume', (id) => isStr(id) && mgr.resume(id));
+    on('session:remove', (id) => isStr(id) && mgr.remove(id));
+    on('session:open', (id) => isStr(id) && mgr.open(id));
+    handle('repo:graph', (path, filter, limit) => {
+      const c = checkout(path);
+      if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error(t('repo.badRequest'));
+      return readGraph(c.path, filter, limit);
+    });
+    handle('repo:details', (path, id) => {
+      const c = checkout(path);
+      if (!isStr(id)) throw new Error(t('repo.badRequest'));
+      return readDetails(c.path, id);
+    });
+    handle('repo:branches', (path) => readBranches(checkout(path).path));
+    handle('repo:action', (path, action) => {
+      const c = checkout(path);
+      const parsed = parseAction(action);
+      if (!parsed) throw new Error(t('repo.badAction'));
+      return c.repo.act(c.path, parsed);
+    });
+    on('open-external', (url) => {
+      if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
+    });
+
+    handle('settings:get', () => this.view());
+    handle('settings:save', (patch) => {
+      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n') };
+      const bad = applyPatch(this.cfg, (patch ?? {}) as SettingsPatch);
+      if (bad) return { ...this.view(), ok: false, error: bad };
+      this.save();
+      setLang(this.cfg.language);
+      mgr.forgetRepos();
+      if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
+      // The page is built in one language: it is reloaded in the new one.
+      if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
+      return { ...this.view(), ok: true, error: '' };
+    });
+    handle('settings:api-key', async (key) => {
+      if (key === null) {
+        await this.secrets.set('anthropicApiKey', null);
+        return { ...this.view(), ok: true, error: '' };
+      }
+      if (!isStr(key) || !API_KEY.test(key.trim())) return { ...this.view(), ok: false, error: 'format' };
+      if (!this.secrets.available()) return { ...this.view(), ok: false, error: 'no-keychain' };
+      const refused = await checkApiKey(key.trim());
+      if (refused) return { ...this.view(), ok: false, error: refused };
+      await this.secrets.set('anthropicApiKey', key.trim());
+      this.cfg.provider = 'api-key';
+      this.save();
+      return { ...this.view(), ok: true, error: '' };
+    });
+    handle('claude:check', async () => {
+      this.executable = await claudeExecutable(this.cfg);
+      return claudeStatus(this.cfg, mgr.environment());
+    });
+    handle('github:gh-login', () => ghLogin());
+    // Whether the saved sign-in still works: a token may have expired or been revoked, gh may be signed out.
+    handle('github:check', async () => {
+      const { source, login } = this.cfg.github;
+      try {
+        if (source === 'gh') return (await ghLogin()) === login ? { ok: true, error: '' } : { ok: false, error: 'gh-signed-out' };
+        if (source === 'oauth' || source === 'token') await githubLogin(this.secrets.get('githubToken'));
+        return { ok: true, error: '' };
+      } catch (err) {
+        return { ok: false, error: errorCode(err) };
+      }
+    });
+    handle('github:device-start', async () => {
+      const clientId = clientIdOf(this.cfg);
+      const none = { userCode: '', verificationUri: '', expiresIn: 0 };
+      if (!clientId) return { ...none, ok: false, error: 'no-client-id' };
+      try {
+        return { ...(await this.device.start(clientId)), ok: true, error: '' };
+      } catch (err) {
+        return { ...none, ok: false, error: errorCode(err) };
+      }
+    });
+    handle('github:device-wait', async () => {
+      try {
+        const token = await this.device.wait();
+        return await this.useGithubToken('oauth', token);
+      } catch (err) {
+        return { ...this.view(), ok: false, error: errorCode(err) };
+      }
+    });
+    on('github:cancel', () => this.device.cancel());
+    handle('github:use-token', async (token) => {
+      if (!isStr(token) || !GITHUB_TOKEN.test(token.trim())) return { ...this.view(), ok: false, error: 'format' };
+      try {
+        return await this.useGithubToken('token', token.trim());
+      } catch (err) {
+        return { ...this.view(), ok: false, error: errorCode(err) };
+      }
+    });
+    handle('github:use-gh', async () => {
+      const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
+      if (!gh || !login) return { ...this.view(), ok: false, error: 'gh-signed-out' };
+      this.gh = gh;
+      if (this.secrets.has('githubToken')) await this.secrets.set('githubToken', null);
+      Object.assign(this.cfg.github, { source: 'gh', login });
+      this.save();
+      return { ...this.view(), ok: true, error: '' };
+    });
+    handle('github:disconnect', async () => {
+      if (this.secrets.has('githubToken')) await this.secrets.set('githubToken', null);
+      Object.assign(this.cfg.github, { source: 'none', login: '' });
+      this.save();
+      return this.view();
+    });
+    handle('dialog:folder', async () => {
+      if (!win) return null;
+      const r = await dialog.showOpenDialog(win, { title: t('dialog.pickFolder'), properties: ['openDirectory'] });
+      return r.canceled ? null : (r.filePaths[0] ?? null);
+    });
+    handle('repos:scan', (roots): FoundRepo[] => {
+      const dirs = Array.isArray(roots) ? roots.filter((r): r is string => isStr(r) && isAbsolute(r) && isDir(r)).slice(0, 20) : [];
+      const seen = new Set<string>();
+      return dirs
+        .flatMap(findRepos)
+        .filter((r) => !r.worktreeOf && !seen.has(r.path) && seen.add(r.path))
+        .slice(0, 300)
+        .map((r) => ({ name: r.name, path: r.path, remote: r.remote }));
+    });
+    handle('github:repos', async () => {
+      try {
+        const gh = this.cfg.github.source === 'gh' ? this.gh || (this.gh = await ghPath()) : '';
+        return { ok: true, error: '', repos: await githubRepos(this.cfg.github.source, this.secrets.get('githubToken'), gh) };
+      } catch (err) {
+        return { ok: false, error: errorCode(err), repos: [] };
+      }
+    });
+    handle('repos:clone', async (slug, root) => {
+      if (!isStr(slug) || !SLUG.test(slug) || !isStr(root) || !this.cfg.workspaces.includes(root)) return { ...this.view(), ok: false, error: 'format' };
+      const dest = join(root, slug.split('/')[1]);
+      // Already cloned there: it is only added. Any other folder of that name is left alone.
+      if (existsSync(dest) && !existsSync(join(dest, '.git'))) return { ...this.view(), ok: false, error: 'exists' };
+      if (!existsSync(dest)) {
+        try {
+          await cloneRepo(slug, root, dest);
+        } catch (err) {
+          return { ...this.view(), ok: false, error: errorCode(err) };
+        }
+      }
+      if (!this.cfg.mainRepos.includes(dest)) {
+        const bad = applyPatch(this.cfg, { mainRepos: [...this.cfg.mainRepos, dest] });
+        if (bad) return { ...this.view(), ok: false, error: bad };
+        this.save();
+        mgr.forgetRepos();
+        this.setWatchers();
+      }
+      return { ...this.view(), ok: true, error: '' };
+    });
+    handle('setup:finish', () => {
+      this.cfg.onboarded = true;
+      this.save();
+      this.startMaster();
+    });
+    on('app:relaunch', () => {
+      app.relaunch();
+      app.quit();
+    });
+  }
+
+  /** Keeps a GitHub token only once GitHub accepted it, and only encrypted. */
+  private async useGithubToken(source: 'oauth' | 'token', token: string) {
+    const login = await githubLogin(token);
+    if (!this.secrets.available()) return { ...this.view(), ok: false, error: 'no-keychain' };
+    await this.secrets.set('githubToken', token);
+    Object.assign(this.cfg.github, { source, login });
+    this.save();
+    return { ...this.view(), ok: true, error: '' };
+  }
 }
 
-function start(): void {
-  const cfg = loadConfig(app.getPath('userData'));
-  const mgr = new SessionManager({ cfg, dataDir: app.getPath('userData') });
+const isDir = (p: string) => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+async function start(): Promise<void> {
+  const hub = new Hub();
+  await hub.init();
+  const mgr = hub.mgr;
   manager = mgr;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
@@ -190,17 +462,15 @@ function start(): void {
   mgr.on('attention', () => {
     if (win && !win.isFocused()) win.flashFrame(true);
   });
-  repoWatchers = cfg.mainRepos.map((r) => new RepoWatcher(mainRepoPath(cfg, r)));
-  for (const repo of repoWatchers) repo.on('changed', (status) => send('hub:repo', status));
-
-  registerIpc(mgr, repoWatchers);
-  createWindow(mgr);
-  mgr.startMaster();
-  for (const repo of repoWatchers) repo.start();
+  hub.registerIpc();
+  createWindow(mgr, hub.cfg.language);
+  // A first run waits for the setup: the master needs Claude access before it starts.
+  hub.startMaster();
+  hub.setWatchers();
 }
 
 // Groups the taskbar button under the app's own identity and icon instead of Electron's.
-app.setAppUserModelId('ClaudeHub');
+if (process.platform === 'win32') app.setAppUserModelId('ClaudeHub');
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -219,7 +489,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(start)
     .catch((err: unknown) => {
-      dialog.showErrorBox('Claude Hub', err instanceof Error ? err.message : String(err));
+      dialog.showErrorBox(APP_NAME, errorText(err));
       app.quit();
     });
 }

@@ -1,42 +1,12 @@
 import type { ChatItem, Status } from '../shared/types';
 import { h, oneLine } from './dom';
+import { t, tn } from './i18n';
 
 // Claude Code's spinner: the starburst breathes in and out while a verb rotates.
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const FRAME_MS = 120;
 const VERB_MS = 3200;
-const VERBS = [
-  'Cogitation',
-  'Mijotage',
-  'Gamberge',
-  'Ruminage',
-  'Infusion',
-  'Brassage',
-  'Distillation',
-  'Élaboration',
-  'Concoction',
-  'Fermentation',
-  'Peaufinage',
-  'Bricolage',
-  'Pétrissage',
-  'Mitonnage',
-  'Décorticage',
-  'Turbinage',
-  'Méditation',
-  'Tricotage',
-  'Ciselage',
-  'Alchimie',
-  'Délibération',
-  'Maturation',
-  'Cristallisation',
-  'Orchestration',
-  'Échafaudage',
-  'Moulinage',
-  'Synthèse',
-  'Défrichage',
-  'Calibrage',
-  'Clauding',
-];
+const VERBS = t('work.verbs').split(',');
 
 const active = new Set<WorkingLine>();
 let ticker: number | null = null;
@@ -71,12 +41,10 @@ export function lastOf(items: Map<string, ChatItem> | undefined): ChatItem | und
 /** What a session is doing right now, read from its latest chat item. */
 export function activityOf(last: ChatItem | undefined): string {
   if (last?.kind === 'tool' && last.result === null) return oneLine(`${last.name} ${last.summary}`).slice(0, 90);
-  if (last?.kind === 'thinking') return 'réflexion';
-  if (last?.kind === 'assistant' && last.live) return 'rédaction';
+  if (last?.kind === 'thinking') return t('work.thinking');
+  if (last?.kind === 'assistant' && last.live) return t('work.writing');
   return '';
 }
-
-const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? 's' : ''}`;
 
 /**
  * "✻ Cogitation… (12 s · Bash npm test)": shown while a session works, so a long turn visibly progresses.
@@ -94,7 +62,7 @@ export class WorkingLine {
   private mode: 'busy' | 'waiting' | 'background' = 'busy';
 
   constructor() {
-    this.root.append(this.glyph, this.verb, this.meta, h('span', 'working-hint', 'Échap pour interrompre'));
+    this.root.append(this.glyph, this.verb, this.meta, h('span', 'working-hint', t('work.escHint')));
     this.root.hidden = true;
   }
 
@@ -131,9 +99,9 @@ export class WorkingLine {
     setText(this.glyph, this.mode === 'waiting' ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
     const verb =
       this.mode === 'waiting'
-        ? 'En attente de ta validation'
+        ? t('work.waiting')
         : this.mode === 'background'
-          ? 'Tâche de fond…'
+          ? t('work.background')
           : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
@@ -143,7 +111,7 @@ export class WorkingLine {
     const parts =
       this.mode === 'background'
         ? [oneLine(this.background[0]).slice(0, 90), n > 1 ? `+${n - 1}` : '']
-        : [fmtElapsed(now - this.since), this.activity, n ? plural(n, 'tâche') + ' de fond' : ''];
+        : [fmtElapsed(now - this.since), this.activity, n ? tn('work.tasks', n) : ''];
     setText(this.meta, `(${parts.filter(Boolean).join(' · ')})`);
   }
 }

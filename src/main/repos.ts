@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
+import { t } from './i18n';
 
 export interface RepoInfo {
   name: string;
@@ -22,7 +23,7 @@ export function findRepos(root: string): RepoInfo[] {
       try {
         repos.push(describe(dir, gitPath));
       } catch {
-        repos.push({ name: basename(dir), path: dir, remote: '', branch: 'illisible', worktreeOf: '' }); // locked or placeholder .git
+        repos.push({ name: basename(dir), path: dir, remote: '', branch: t('repos.unreadable'), worktreeOf: '' }); // locked or placeholder .git
       }
       return;
     }
@@ -67,7 +68,7 @@ function describe(dir: string, gitPath: string): RepoInfo {
     name: basename(dir),
     path: dir,
     remote: cleanRemote(remoteUrl(config)),
-    branch: head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : `détachée (${head.slice(0, 8)})`,
+    branch: head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : t('repos.detached', { sha: head.slice(0, 8) }),
     worktreeOf: common ? dirname(commonDir) : '',
   };
 }

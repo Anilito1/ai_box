@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import type { RepoAction, RepoActionResult, RepoStatus, RepoTree } from '../shared/types';
 import { errorMessage, git } from './git';
+import { t } from './i18n';
 import { parseStatus, repoState, runAction, STATUS_ARGS } from './scm';
 
 const POLL_MS = 8_000;
@@ -86,7 +87,7 @@ export class RepoWatcher extends EventEmitter {
 
   /** Runs one action of the panel in a checkout; one at a time per repo, never during a background fetch. */
   async act(path: string, action: RepoAction): Promise<RepoActionResult> {
-    if (this.status.busy) return { ok: false, kind: 'busy', message: 'Une autre action git est en cours sur ce dépôt', detail: '' };
+    if (this.status.busy) return { ok: false, kind: 'busy', message: t('scm.busy'), detail: '' };
     this.update({ busy: { path, action: action.kind } });
     try {
       await this.fetchRun;
@@ -121,7 +122,7 @@ export class RepoWatcher extends EventEmitter {
   }
 
   private async read(): Promise<Partial<RepoStatus>> {
-    if (!existsSync(this.path)) throw new Error(`Dossier introuvable : ${this.path}`);
+    if (!existsSync(this.path)) throw new Error(t('repo.missingFolder', { path: this.path }));
     const listed = parseWorktrees(await git(this.path, ['worktree', 'list', '--porcelain', '-z']));
     // A worktree whose folder was deleted without `git worktree remove` stays listed until pruned.
     const others = listed.filter((p) => !samePath(p, this.path) && existsSync(p));

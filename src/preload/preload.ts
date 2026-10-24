@@ -14,6 +14,9 @@ const api: HubApi = {
   onEvent: (cb) => {
     ipcRenderer.on('hub:event', (_e, id: string, kind: HubEventKind) => cb(id, kind));
   },
+  onRepos: (cb) => {
+    ipcRenderer.on('hub:repos', (_e, paths: string[]) => cb(paths));
+  },
   ready: () => ipcRenderer.send('hub:ready'),
   repoGraph: (path, filter, limit) => ipcRenderer.invoke('repo:graph', path, filter, limit),
   repoDetails: (path, id) => ipcRenderer.invoke('repo:details', path, id),
@@ -30,6 +33,24 @@ const api: HubApi = {
   resume: (id) => ipcRenderer.send('session:resume', id),
   remove: (id) => ipcRenderer.send('session:remove', id),
   openExternal: (url) => ipcRenderer.send('open-external', url),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
+  setApiKey: (key) => ipcRenderer.invoke('settings:api-key', key),
+  checkClaude: () => ipcRenderer.invoke('claude:check'),
+  ghLogin: () => ipcRenderer.invoke('github:gh-login'),
+  githubDeviceStart: () => ipcRenderer.invoke('github:device-start'),
+  githubDeviceWait: () => ipcRenderer.invoke('github:device-wait'),
+  githubCancel: () => ipcRenderer.send('github:cancel'),
+  githubUseToken: (token) => ipcRenderer.invoke('github:use-token', token),
+  githubUseGh: () => ipcRenderer.invoke('github:use-gh'),
+  githubDisconnect: () => ipcRenderer.invoke('github:disconnect'),
+  githubCheck: () => ipcRenderer.invoke('github:check'),
+  pickFolder: () => ipcRenderer.invoke('dialog:folder'),
+  scanRepos: (roots) => ipcRenderer.invoke('repos:scan', roots),
+  githubRepos: () => ipcRenderer.invoke('github:repos'),
+  cloneRepo: (slug, root) => ipcRenderer.invoke('repos:clone', slug, root),
+  finishSetup: () => ipcRenderer.invoke('setup:finish'),
+  relaunch: () => ipcRenderer.send('app:relaunch'),
 };
 
 contextBridge.exposeInMainWorld('hub', api);

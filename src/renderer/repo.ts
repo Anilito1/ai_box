@@ -18,6 +18,7 @@ import {
   type SessionView,
 } from '../shared/types';
 import { ago, copyButton, displayName, h, icon, ICONS, openMenu } from './dom';
+import { LANG } from './i18n';
 import {
   BASE_REF_COLOR,
   cssColor,
@@ -43,7 +44,7 @@ const DEFAULT_HEIGHT = 260;
 const ROW = 18;
 const SCALE = ROW / SWIMLANE_HEIGHT;
 
-const L = {
+const FR = {
   pickRepo: 'Changer de dépôt',
   auto: 'Auto',
   autoHint: 'Suit le worker ouvert, sinon le premier dépôt',
@@ -136,7 +137,7 @@ const L = {
     conflict: 'Conflits : résous-les dans les fichiers, indexe-les puis committe — ou annule.',
     'local-changes': 'Des modifications locales seraient écrasées : committe-les d’abord.',
     'nothing-to-commit': 'Rien à committer.',
-    auth: 'Authentification refusée par le remote : vérifie ta connexion GitHub (gh auth login).',
+    auth: 'Authentification refusée par le remote : vérifie ta connexion GitHub (Réglages › GitHub).',
     busy: 'Une autre action git tourne déjà sur ce dépôt.',
     invalid: 'Action impossible.',
     other: 'Git a refusé l’opération.',
@@ -144,6 +145,110 @@ const L = {
   details: 'Détails',
   dismiss: 'Fermer',
 };
+
+const EN: typeof FR = {
+  pickRepo: 'Switch repository',
+  auto: 'Auto',
+  autoHint: 'Follows the open worker, otherwise the first repository',
+  mainFolder: 'main folder',
+  addRepo: 'Add a repository…',
+  removeRepo: 'Remove from the panel',
+  reposInSettings: 'The followed repositories cannot be changed in this version.',
+  detached: (oid: string) => `detached ${oid}`,
+  noCommit: 'no commit',
+  unreadable: 'unreadable',
+  fetch: 'Fetch',
+  pull: 'Pull',
+  push: 'Push',
+  more: 'More actions',
+  collapse: 'Collapse',
+  expand: 'Expand',
+  resize: 'Drag to resize',
+  sync: 'Sync',
+  syncHint: (behind: number, ahead: number, upstream: string) => `Sync with ${upstream}: ${behind}↓ to pull, ${ahead}↑ to push`,
+  publish: 'Publish branch',
+  publishHint: 'Publish the branch: push it to the remote and track it',
+  switchBranch: 'Switch branch',
+  newBranch: 'Create a branch…',
+  branchFilter: 'Filter, or name of the new branch',
+  createBranch: (name: string) => `Create "${name}" from HEAD`,
+  localBranches: 'Branches',
+  remoteBranches: 'Remote branches',
+  inWorktree: (folder: string) => `open in ${folder}`,
+  current: 'current branch',
+  loading: 'Loading…',
+  abort: { merge: 'Abort merge', rebase: 'Abort rebase', 'cherry-pick': 'Abort cherry-pick', revert: 'Abort revert' },
+  state: {
+    merge: 'Merge in progress: resolve the conflicts, stage them, then commit.',
+    rebase: 'Rebase in progress: resolve the conflicts or abort it.',
+    'cherry-pick': 'Cherry-pick in progress: resolve the conflicts or abort it.',
+    revert: 'Revert in progress: resolve the conflicts or abort it.',
+  },
+  commitPlaceholder: (branch: string, all: boolean) => (all ? `Message (Ctrl+Enter: commit all on ${branch})` : `Message (Ctrl+Enter: commit on ${branch})`),
+  commit: (branch: string, all: boolean) => (all ? `Commit all changes on ${branch} (Ctrl+Enter)` : `Commit on ${branch} (Ctrl+Enter)`),
+  commitPush: 'Commit & Push',
+  emptyMessage: 'Write a commit message',
+  changes: 'Changes',
+  conflicts: 'Conflicts',
+  staged: 'Staged',
+  unstaged: 'Changes',
+  stage: 'Stage',
+  unstage: 'Unstage',
+  stageAll: 'Stage all',
+  unstageAll: 'Unstage all',
+  truncated: (shown: number, total: number) => `${shown} of ${total} shown`,
+  graph: 'Graph',
+  filterTitle: 'Branches shown',
+  filters: { auto: 'Auto', all: 'All' } as Record<GraphFilter, string>,
+  filterHints: {
+    auto: 'Current branch, upstream, base and the worktrees’ branches',
+    all: 'Every local and remote branch, and the tags',
+  } as Record<GraphFilter, string>,
+  loadMore: 'Load more…',
+  noHistory: 'No commit',
+  incoming: 'Incoming changes',
+  outgoing: 'Outgoing changes',
+  files: (n: number) => (n > 1 ? `${n} files changed` : `${n} file changed`),
+  insertions: (n: number) => (n > 1 ? `${n} insertions(+)` : `${n} insertion(+)`),
+  deletions: (n: number) => (n > 1 ? `${n} deletions(-)` : `${n} deletion(-)`),
+  binary: 'binary',
+  copyHash: 'Copy hash',
+  openWeb: 'Open on the web',
+  fetchedAgo: (when: string) => `Remote checked ${when}`,
+  fetchFailed: (error: string) => `Fetch failed: ${error}`,
+  workers: (names: string) => `↳ ${names}`,
+  busy: {
+    fetch: 'Fetching…',
+    pull: 'Pulling…',
+    push: 'Pushing…',
+    sync: 'Syncing…',
+    publish: 'Publishing…',
+    commit: 'Committing…',
+    stage: 'Staging…',
+    unstage: 'Unstaging…',
+    'stage-all': 'Staging…',
+    'unstage-all': 'Unstaging…',
+    checkout: 'Switching branch…',
+    branch: 'Creating the branch…',
+    abort: 'Aborting…',
+  } as Record<RepoActionKind, string>,
+  errors: {
+    'no-upstream': 'This branch has no remote branch of its own yet.',
+    rejected: 'Push rejected: the remote has commits you do not have yet. Sync, then push again.',
+    diverged: 'The branch and its upstream have diverged: git refuses to merge them with your pull configuration.',
+    conflict: 'Conflicts: resolve them in the files, stage them, then commit — or abort.',
+    'local-changes': 'Local changes would be overwritten: commit them first.',
+    'nothing-to-commit': 'Nothing to commit.',
+    auth: 'The remote refused authentication: check your GitHub connection (Settings › GitHub).',
+    busy: 'Another git action is already running in this repository.',
+    invalid: 'Not possible.',
+    other: 'Git refused the operation.',
+  } as Record<RepoErrorKind, string>,
+  details: 'Details',
+  dismiss: 'Close',
+};
+
+const L = LANG === 'fr' ? FR : EN;
 
 const CONFLICT_CODES = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 const REF_ICONS: Record<GitRefKind, string> = { head: ICONS.target, branch: ICONS.branch, remote: ICONS.cloud, tag: ICONS.tag };
@@ -358,6 +463,13 @@ export class RepoPanel {
     if (key(workers) === key(this.workers)) return;
     this.workers = workers;
     this.render();
+  }
+
+  /** The repos the settings follow: a repo no longer followed leaves the panel. */
+  setRepos(paths: string[]): void {
+    const before = this.statuses.size;
+    for (const path of this.statuses.keys()) if (!paths.includes(path)) this.statuses.delete(path);
+    if (this.statuses.size !== before) this.render();
   }
 
   /** Folder of the worker opened beside the master: in Auto, the panel follows it. */

@@ -1,7 +1,8 @@
-import { STATUS_LABEL, type ChatItem, type SessionView } from '../shared/types';
+import type { ChatItem, SessionView } from '../shared/types';
 import { clawdStage, type StageView } from './clawd/stage';
 import { hash, Mind, signalsOf, type MindEvent } from './clawd/state';
 import { h } from './dom';
+import { t } from './i18n';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -138,7 +139,8 @@ export class Avatar {
     this.root.classList.toggle('waiting', s.status === 'attention');
     this.root.classList.toggle('off', s.status === 'exited');
     if (this.badge) this.badge.className = `dot avatar-badge s-${s.status}`;
-    this.root.title = s.background.length > 0 && s.status !== 'busy' ? `${STATUS_LABEL[s.status]} · tâche de fond` : STATUS_LABEL[s.status];
+    const status = t(`status.${s.status}`);
+    this.root.title = s.background.length > 0 && s.status !== 'busy' ? t('avatar.background', { status }) : status;
   }
 
   dispose(): void {

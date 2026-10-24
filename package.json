@@ -1,26 +1,65 @@
 {
   "name": "claude-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Lightweight desktop hub: one master Claude Code session orchestrating worker sessions.",
+  "description": "Desktop hub for Claude Code: one master session plans the work and drives worker sessions, each in its own repo.",
+  "license": "MIT",
   "main": "dist/main.mjs",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "build": "node build.mjs",
     "start": "node build.mjs && electron .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist": "node build.mjs && electron-builder",
+    "dist:dir": "node build.mjs && electron-builder --dir"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.308",
-    "dompurify": "^3.4.17",
-    "marked": "^18.1.1",
-    "three": "^0.186.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/three": "^0.186.0",
+    "dompurify": "^3.4.17",
     "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.0",
+    "marked": "^18.1.1",
+    "three": "^0.186.1",
     "typescript": "~5.9.3"
+  },
+  "build": {
+    "appId": "ClaudeHub",
+    "productName": "Claude Hub",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "assets/icon.ico",
+      "assets/logo.png",
+      "package.json",
+      "!node_modules/@anthropic-ai/claude-agent-sdk-*/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/logo.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "icon": "assets/logo.png"
+    }
   }
 }

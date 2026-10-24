@@ -1,3 +1,7 @@
+import type { Lang } from './i18n';
+
+export const APP_NAME = 'Claude Hub';
+
 export type Role = 'master' | 'worker';
 export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -15,32 +19,8 @@ export interface ImageInput {
   data: string;
 }
 
-export const STATUS_LABEL: Record<Status, string> = {
-  starting: 'démarrage',
-  busy: 'en cours',
-  idle: 'prêt',
-  attention: 'attend ta validation',
-  exited: 'fermé',
-};
-
-export const MODE_LABEL: Record<Mode, string> = {
-  auto: 'Auto',
-  default: 'Manuel',
-  acceptEdits: 'Édition auto',
-  plan: 'Plan',
-  bypassPermissions: 'Tout autoriser',
-  dontAsk: 'Ne pas demander',
-};
-
-export const MODE_HINT: Partial<Record<Mode, string>> = {
-  bypassPermissions: 'Aucune demande : commandes, commit, push, deploy, SQL',
-  auto: 'Un classifieur valide les actions sûres, bloque les déploiements',
-  default: 'Demande avant les modifications et la plupart des commandes',
-  acceptEdits: 'Modifie les fichiers sans demander',
-  plan: 'Explore et propose un plan, sans rien modifier',
-};
-
-export const MENU_MODES: Mode[] = ['bypassPermissions', 'auto', 'default', 'acceptEdits', 'plan'];
+export const MENU_MODES: Mode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface ModelOption {
   value: string;
@@ -302,11 +282,103 @@ export interface PermissionDecision {
   message?: string;
 }
 
+/** Where sessions get their Claude access. `claude-code`: whatever Claude Code itself is set up with (its own sign-in). */
+export type Provider = 'claude-code' | 'api-key' | 'bedrock' | 'vertex';
+export const PROVIDERS: Provider[] = ['claude-code', 'api-key', 'bedrock', 'vertex'];
+/** `oauth`: device flow sign-in; `token`: personal access token; `gh`: the GitHub CLI's own sign-in. */
+export type GithubSource = 'none' | 'oauth' | 'token' | 'gh';
+
+export interface HubSettings {
+  language: Lang;
+  /** False until the first-run setup is finished: the master only starts after it. */
+  onboarded: boolean;
+  /** Claude Code executable; empty = the binary bundled with the Agent SDK, else `claude` found on the PATH. */
+  claudePath: string;
+  provider: Provider;
+  bedrock: { region: string; profile: string };
+  vertex: { region: string; projectId: string };
+  /** Folders scanned by `list_repos`; the master runs in the first one. */
+  workspaces: string[];
+  /** Repos the user mainly works on (absolute paths): known to the master, git state shown in the sidebar. */
+  mainRepos: string[];
+  /** Empty model/effort = exactly like a normal Claude Code session (settings.json: model, effortLevel). */
+  master: { model: string; effort: Effort | '' };
+  worker: { model: string; effort: Effort | '' };
+  /** Models the master may pick explicitly for a worker (default: inherit). */
+  workerModels: string[];
+  /** Permission mode of every session at launch; empty = Claude Code's own default (settings, else auto or manual). */
+  permissionMode: Mode | '';
+  /** The user's own guidance, appended to the master's system prompt. */
+  masterInstructions: string;
+  github: {
+    /** Client ID of the GitHub OAuth App used for the device flow; empty = the build's default. */
+    clientId: string;
+    source: GithubSource;
+    login: string;
+    /** Sessions get this GitHub access for git and gh (a token source puts the token in their environment). */
+    shareWithSessions: boolean;
+  };
+}
+
+/** Settings as the renderer sees them: secrets only as "set or not". */
+export interface SettingsView {
+  settings: HubSettings;
+  apiKeySet: boolean;
+  githubTokenSet: boolean;
+  /** The OS keychain can encrypt secrets (safeStorage); without it no secret is stored. */
+  secureStorage: boolean;
+  /** A client ID ships with this build, so the device flow works without configuring one. */
+  defaultClientId: boolean;
+  platform: string;
+  version: string;
+}
+
+/** Sections the renderer may replace; the main process validates each field. */
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath'>> & { github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>> };
+
+export interface ClaudeStatus {
+  /** Executable the sessions will run, or empty when none is found. */
+  executable: string;
+  /** Claude Code found on the PATH (or its default install folder). */
+  installed: string;
+  /** What Claude Code reports about its credentials once started with the hub's settings; null when it could not start. */
+  account: { ready: boolean; provider: string; email: string; plan: string; source: string } | null;
+  error: string;
+}
+
+export interface GithubDevice {
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+}
+
+export interface Result {
+  ok: boolean;
+  error: string;
+}
+
+export interface FoundRepo {
+  name: string;
+  path: string;
+  remote: string;
+}
+
+/** A repository of the connected GitHub account. */
+export interface GithubRepo {
+  /** owner/name */
+  slug: string;
+  private: boolean;
+  description: string;
+  pushedAt: number;
+}
+
 export interface HubApi {
   onSnapshot(cb: (snapshot: HubSnapshot) => void): void;
   onItems(cb: (sessionId: string, items: ChatItem[], reset: boolean) => void): void;
   onRepo(cb: (status: RepoStatus) => void): void;
   onEvent(cb: (sessionId: string, kind: HubEventKind) => void): void;
+  /** Paths of the repos shown in the sidebar, sent at start and whenever the settings change them. */
+  onRepos(cb: (paths: string[]) => void): void;
   ready(): void;
   /** The repo calls take the folder of a checkout (main folder or worktree) of a main repo. */
   repoGraph(path: string, filter: GraphFilter, limit: number): Promise<RepoGraph>;
@@ -326,4 +398,29 @@ export interface HubApi {
   resume(id: string): void;
   remove(id: string): void;
   openExternal(url: string): void;
+  getSettings(): Promise<SettingsView>;
+  saveSettings(patch: SettingsPatch): Promise<SettingsView & Result>;
+  /** Stores (or with null, deletes) the Anthropic API key after checking it with the API. */
+  setApiKey(key: string | null): Promise<SettingsView & Result>;
+  checkClaude(): Promise<ClaudeStatus>;
+  /** GitHub CLI signed in on this machine: its login, else empty. */
+  ghLogin(): Promise<string>;
+  githubDeviceStart(): Promise<GithubDevice & Result>;
+  /** Resolves once the device flow ends: signed in, denied, expired or cancelled. */
+  githubDeviceWait(): Promise<SettingsView & Result>;
+  githubCancel(): void;
+  githubUseToken(token: string): Promise<SettingsView & Result>;
+  githubUseGh(): Promise<SettingsView & Result>;
+  githubDisconnect(): Promise<SettingsView>;
+  /** Whether the saved GitHub sign-in still works (expired or revoked token, gh signed out). */
+  githubCheck(): Promise<Result>;
+  pickFolder(): Promise<string | null>;
+  scanRepos(roots: string[]): Promise<FoundRepo[]>;
+  /** Repositories of the connected GitHub account, most recently pushed first. */
+  githubRepos(): Promise<Result & { repos: GithubRepo[] }>;
+  /** Clones owner/name into one of the working folders and adds it to the main repos. */
+  cloneRepo(slug: string, root: string): Promise<SettingsView & Result>;
+  /** Ends the first-run setup and starts the master. */
+  finishSetup(): Promise<void>;
+  relaunch(): void;
 }

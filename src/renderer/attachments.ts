@@ -1,4 +1,5 @@
 import { ATTACH_LIMITS, type ImageInput, type ImageType } from '../shared/types';
+import { t } from './i18n';
 
 // A long edge the model reads in full (larger images are downscaled anyway).
 const MAX_EDGE = 2000;
@@ -12,7 +13,7 @@ function readBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
-    reader.onerror = () => reject(reader.error ?? new Error('Lecture impossible'));
+    reader.onerror = () => reject(reader.error ?? new Error(t('img.readFailed')));
     reader.readAsDataURL(blob);
   });
 }
@@ -29,20 +30,20 @@ async function sniff(blob: Blob): Promise<ImageType | null> {
 }
 
 // Decoded straight from the bytes: an <img> on a blob: URL would be blocked by the page's CSP (img-src 'self' data:).
-const decode = (file: Blob): Promise<ImageBitmap> => createImageBitmap(file).catch(() => Promise.reject(new Error('Image illisible')));
+const decode = (file: Blob): Promise<ImageBitmap> => createImageBitmap(file).catch(() => Promise.reject(new Error(t('img.unreadable'))));
 
 function encode(img: ImageBitmap, scale: number, type: 'image/png' | 'image/jpeg'): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
   const ctx = canvas.getContext('2d');
-  if (!ctx) return Promise.reject(new Error('Canvas indisponible'));
+  if (!ctx) return Promise.reject(new Error(t('img.noCanvas')));
   if (type === 'image/jpeg') {
     ctx.fillStyle = '#ffffff'; // JPEG has no alpha: transparent areas would turn black.
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Encodage impossible'))), type, 0.88));
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error(t('img.encodeFailed')))), type, 0.88));
 }
 
 /** A pasted, dropped or picked image, kept as is when the API accepts it, else downscaled and re-encoded. */
@@ -61,7 +62,7 @@ export async function toAttachment(file: Blob): Promise<Attachment> {
         blob = await encode(img, scale, 'image/jpeg');
         type = 'image/jpeg';
       }
-      if (blob.size > max) throw new Error('Image trop lourde, même compressée.');
+      if (blob.size > max) throw new Error(t('img.tooHeavy'));
     }
   } finally {
     img.close();

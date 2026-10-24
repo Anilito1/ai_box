@@ -17,6 +17,7 @@ import {
   type RepoState,
 } from '../shared/types';
 import { git, GitError } from './git';
+import { t } from './i18n';
 
 const NETWORK_MS = 120_000;
 const COMMIT_MS = 120_000;
@@ -191,7 +192,7 @@ export async function readDetails(path: string, id: string): Promise<CommitDetai
     const mergeBase = (await git(path, ['merge-base', 'HEAD', '@{upstream}'])).trim();
     range = [mergeBase, id === 'incoming' ? '@{upstream}' : 'HEAD'];
   } else {
-    if (!HASH.test(id)) throw new Error('Commit invalide');
+    if (!HASH.test(id)) throw new Error(t('scm.badCommit'));
     const parents = (await git(path, ['rev-list', '--parents', '-n1', id, '--'])).trim().split(' ').slice(1);
     range = parents.length ? [parents[0], id] : ['--root', id];
   }
@@ -333,24 +334,24 @@ async function changedPaths(path: string): Promise<Map<string, string>> {
 async function checkedPaths(path: string, requested: string[]): Promise<string[]> {
   const known = await changedPaths(path);
   const paths = requested.filter((p) => known.has(p));
-  if (paths.length === 0) throw new ActionError('invalid', 'Ces fichiers ne sont plus modifiés');
+  if (paths.length === 0) throw new ActionError('invalid', t('scm.notChanged'));
   // A rename is staged and unstaged with its former path.
   return [...new Set(paths.flatMap((p) => [p, known.get(p) ?? ''].filter(Boolean)))];
 }
 
 async function pull(path: string): Promise<void> {
-  const t = await tracking(path);
-  if (!t.upstream) throw new ActionError('no-upstream', `${t.branch || 'HEAD'} n'a pas de branche distante`);
+  const tr = await tracking(path);
+  if (!tr.upstream) throw new ActionError('no-upstream', t('scm.noUpstream', { branch: tr.branch || 'HEAD' }));
   // Merge unless the user configured a rebase: git refuses divergent branches when nothing is configured.
   const configured = (await git(path, ['config', '--get', 'pull.rebase']).catch(() => '')).trim();
   await git(path, ['pull', '--no-edit', ...(configured ? [] : ['--no-rebase'])], { timeout: NETWORK_MS, interactive: true });
 }
 
 /** Push and Sync need the branch's own remote branch: a worktree branch created from origin/main tracks it instead. */
-function noOwnUpstream(t: { branch: string; upstream: string }): void {
-  if (!t.branch) throw new ActionError('invalid', 'HEAD détachée : aucune branche à pousser');
-  if (!ownUpstream(t.branch, t.upstream)) {
-    throw new ActionError('no-upstream', t.upstream ? `${t.branch} suit ${t.upstream}, pas sa propre branche distante` : `${t.branch} n'a pas de branche distante`);
+function noOwnUpstream(tr: { branch: string; upstream: string }): void {
+  if (!tr.branch) throw new ActionError('invalid', t('scm.detachedPush'));
+  if (!ownUpstream(tr.branch, tr.upstream)) {
+    throw new ActionError('no-upstream', tr.upstream ? t('scm.tracksOther', { branch: tr.branch, upstream: tr.upstream }) : t('scm.noUpstream', { branch: tr.branch }));
   }
 }
 
@@ -360,20 +361,20 @@ async function push(path: string): Promise<void> {
 }
 
 async function publish(path: string): Promise<void> {
-  const t = await tracking(path);
-  if (!t.branch) throw new ActionError('invalid', 'HEAD détachée : aucune branche à publier');
+  const tr = await tracking(path);
+  if (!tr.branch) throw new ActionError('invalid', t('scm.detachedPublish'));
   const remotes = (await git(path, ['remote'])).split('\n').map((r) => r.trim()).filter(Boolean);
-  const tracked = t.upstream.split('/')[0];
+  const tracked = tr.upstream.split('/')[0];
   const remote = remotes.includes(tracked) ? tracked : remotes.includes('origin') ? 'origin' : remotes[0];
-  if (!remote || remote.startsWith('-')) throw new ActionError('invalid', 'Aucun remote utilisable');
-  await git(path, ['push', '-u', remote, `HEAD:refs/heads/${t.branch}`], { timeout: NETWORK_MS, interactive: true });
+  if (!remote || remote.startsWith('-')) throw new ActionError('invalid', t('scm.noRemote'));
+  await git(path, ['push', '-u', remote, `HEAD:refs/heads/${tr.branch}`], { timeout: NETWORK_MS, interactive: true });
 }
 
 /** VS Code's smart commit: the index as it is, or every change when nothing is staged (read here, never from the panel). */
 async function commit(path: string, message: string): Promise<void> {
   const text = message.trim();
-  if (!text) throw new ActionError('invalid', 'Message de commit vide');
-  if (text.length > MAX_MESSAGE) throw new ActionError('invalid', 'Message de commit trop long');
+  if (!text) throw new ActionError('invalid', t('scm.emptyMessage'));
+  if (text.length > MAX_MESSAGE) throw new ActionError('invalid', t('scm.longMessage'));
   const staged = await git(path, ['diff', '--cached', '--quiet']).then(
     () => false,
     () => true,
@@ -386,11 +387,11 @@ async function commit(path: string, message: string): Promise<void> {
 async function checkout(path: string, id: string): Promise<void> {
   const refs = await readRefs(path);
   const target = refs.find((r) => r.id === id);
-  if (!target) throw new ActionError('invalid', 'Branche introuvable');
+  if (!target) throw new ActionError('invalid', t('scm.branchNotFound'));
   // A ref can be named like an option ("refs/heads/--orphan=x" via update-ref or a fetched remote branch):
   // `git switch` would run it as one.
   const local = target.id.startsWith('refs/heads/') ? shortRef(target.id) : shortRef(target.id).replace(/^[^/]+\//, '');
-  if (local.startsWith('-')) throw new ActionError('invalid', `Nom de branche refusé : ${local}`);
+  if (local.startsWith('-')) throw new ActionError('invalid', t('scm.branchRefused', { name: local }));
   if (target.id.startsWith('refs/heads/')) return void (await git(path, ['switch', local]));
   // A remote branch: switch to the local branch of the same name, created to track it when missing.
   if (refs.some((r) => r.id === `refs/heads/${local}`)) return void (await git(path, ['switch', local]));
@@ -400,16 +401,16 @@ async function checkout(path: string, id: string): Promise<void> {
 async function createBranch(path: string, name: string): Promise<void> {
   const clean = name.trim();
   // check-ref-format rejects spaces, "..", "~", "^", ":", a leading dash and the rest of git's rules.
-  if (!clean || clean.startsWith('-')) throw new ActionError('invalid', 'Nom de branche invalide');
+  if (!clean || clean.startsWith('-')) throw new ActionError('invalid', t('scm.badBranch'));
   await git(path, ['check-ref-format', '--branch', clean]).catch(() => {
-    throw new ActionError('invalid', `Nom de branche invalide : ${clean}`);
+    throw new ActionError('invalid', t('scm.badBranchNamed', { name: clean }));
   });
   await git(path, ['switch', '-c', clean]);
 }
 
 async function abort(path: string): Promise<void> {
   const op = repoState((await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
-  if (!op) throw new ActionError('invalid', 'Aucune opération en cours à annuler');
+  if (!op) throw new ActionError('invalid', t('scm.nothingToAbort'));
   await git(path, [op, '--abort']);
 }
 
@@ -426,9 +427,9 @@ async function perform(path: string, action: RepoAction): Promise<void> {
     case 'sync': {
       // VS Code's Sync: pull what is behind, then push what is ahead. Checked first: a branch that tracks
       // another branch (a worktree made from origin/main) must not get main merged in, then fail to push.
-      const t = await tracking(path);
-      noOwnUpstream(t);
-      if (t.behind > 0) await pull(path);
+      const tr = await tracking(path);
+      noOwnUpstream(tr);
+      if (tr.behind > 0) await pull(path);
       if ((await tracking(path)).ahead > 0) await push(path);
       return;
     }

@@ -1,5 +1,6 @@
 import { IMAGE_TYPES, type ChatItem } from '../shared/types';
-import { MASTER_NAME } from './prompts';
+import { lang, t } from './i18n';
+import { masterName } from './prompts';
 
 // Converts Anthropic message content blocks (live SDK frames or stored transcripts) into chat items.
 
@@ -23,7 +24,7 @@ export function toolLabel(name: string): string {
 }
 
 export function toolSummary(name: string, input: Record<string, unknown>): string {
-  if (name === 'TodoWrite' && Array.isArray(input.todos)) return `${input.todos.length} tâches`;
+  if (name === 'TodoWrite' && Array.isArray(input.todos)) return t('todos', { n: input.todos.length });
   if (name === 'SendMessage') return `→ ${str(input.to)}`;
   const keys = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'name', 'to', 'path', 'prompt'];
   const value = keys.map((k) => input[k]).find((v): v is string => typeof v === 'string' && v.length > 0) ?? '';
@@ -116,16 +117,11 @@ export function assistantItems(blocks: Block[], baseId: string, textId?: string)
 const PEER = /<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message>/;
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '';
 
-/** First line of a message the hub delivers on someone's behalf as a user turn, and who it is shown from. */
-export const TAGS = {
-  mission: (worker: string) => `[Mission du maître — tu es le worker "${worker}"]`,
-  master: '[Message du maître]',
-  hub: '[Hub]',
-} as const;
-const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Hub)\]\s*/;
+/** The tags of prompts.ts in either language: a transcript keeps the language it was written in. */
+const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from the master[^\]\n]*|Message from the master|Hub)\]\s*/;
 /** Appended for each image saved to disk, so the model can hand its path to another session. */
-export const capturedLine = (path: string) => `[Capture jointe : ${path}]`;
-const CAPTURED = /^\[Capture jointe : [^\]\n]+\]\n?/gm;
+export const capturedLine = (path: string) => (lang() === 'fr' ? `[Capture jointe : ${path}]` : `[Attached image: ${path}]`);
+const CAPTURED = /^\[(?:Capture jointe :|Attached image:) [^\]\n]+\]\n?/gm;
 
 /** Text as the user sees it: without the saved-image lines the model alone needs. */
 export const visibleText = (text: string) => text.replace(CAPTURED, '').trim();
@@ -134,7 +130,7 @@ export const visibleText = (text: string) => text.replace(CAPTURED, '').trim();
 export function taggedSender(text: string): { from: string; text: string } | null {
   const m = TAGGED.exec(text);
   if (!m) return null;
-  return { from: m[1] === 'Hub' ? 'hub' : MASTER_NAME, text: text.slice(m[0].length) };
+  return { from: m[1] === 'Hub' ? 'hub' : masterName(), text: text.slice(m[0].length) };
 }
 
 /** data: URLs of the base64 images of a user message. */
