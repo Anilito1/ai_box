@@ -1,5 +1,6 @@
 import type { ChatItem, SessionView } from '../shared/types';
-import { clawdStage, type StageView } from './clawd/stage';
+import { clawdStage } from './clawd/load';
+import type { StageView } from './clawd/stage';
 import { hash, Mind, signalsOf, type MindEvent } from './clawd/state';
 import { h, statusDot, statusLabel } from './dom';
 import { t } from './i18n';
@@ -143,7 +144,9 @@ export class Avatar {
     this.root.classList.toggle('off', s.status === 'exited');
     if (this.badge) this.badge.className = `${statusDot(s)} avatar-badge`;
     const status = statusLabel(s);
-    this.root.title = s.background.length > 0 && s.status !== 'busy' ? t('avatar.background', { status }) : status;
+    const title = s.background.length > 0 && s.status !== 'busy' ? t('avatar.background', { status }) : status;
+    // Written when it changes only: renders come 25 times a second while a reply streams (the tooltip watches it).
+    if (title !== this.root.title && title !== this.root.dataset.tip) this.root.title = title;
   }
 
   dispose(): void {
@@ -160,8 +163,9 @@ export class Avatar {
     this.canvas.hidden = false;
     void clawdStage().then((stage) => {
       if (this.session?.id !== s.id) return; // Switched to another session meanwhile.
-      if (stage) this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), this.large, () => this.fallback());
-      else this.fallback();
+      if (!stage) return this.fallback();
+      this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), this.large, () => this.fallback());
+      this.root.classList.add('drawn'); // Fades in: the stage arrives a moment after the first paint.
     });
   }
 

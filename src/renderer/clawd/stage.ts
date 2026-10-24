@@ -1,9 +1,13 @@
 import {
   AnimationMixer,
+  BackSide,
+  BoxGeometry,
   DirectionalLight,
   LoopOnce,
   LoopRepeat,
   Mesh,
+  MeshBasicMaterial,
+  OrthographicCamera,
   PMREMGenerator,
   PerspectiveCamera,
   Scene,
@@ -11,9 +15,12 @@ import {
   WebGLRenderer,
   type AnimationAction,
   type AnimationClip,
+  type Material,
   type MeshStandardMaterial,
   type Object3D,
   type Skeleton,
+  type Texture,
+  type WebGLRenderTarget,
 } from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
@@ -71,14 +78,10 @@ class Stage {
   constructor(
     readonly renderer: WebGLRenderer,
     gltf: GLTF,
+    environment: Texture,
   ) {
-    renderer.setPixelRatio(1); // Views size themselves in device pixels.
-    renderer.setScissorTest(true);
-    renderer.setClearColor(0x000000, 0);
-    const pmrem = new PMREMGenerator(renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environment = environment;
     this.scene.environmentIntensity = 0.75;
-    pmrem.dispose();
     const key = new DirectionalLight(0xffffff, 1.6);
     key.position.set(-2, 4, 5);
     this.scene.add(key);
@@ -441,14 +444,74 @@ export class StageView {
 
 let loading: Promise<Stage | null> | null = null;
 
+/** Lets the hub handle input between the steps of setting up the stage. */
+const breathe = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** PMREMGenerator internals reached below (three is pinned to 0.186.x). */
+interface PmremInternals {
+  _setSize(size: number): void;
+  _allocateTargets(): WebGLRenderTarget;
+  _blurMaterial: Material;
+  _ggxMaterial: Material;
+  _lodMeshes: Mesh[];
+}
+
+/**
+ * The room light reflected on the mascot, prefiltered. Its shaders (a 256-sample GGX loop the D3D compiler unrolls)
+ * would freeze the page for most of a second if compiled on first use: they are compiled in the GPU process first,
+ * against the same render target, while the page keeps running.
+ */
+async function roomLight(renderer: WebGLRenderer): Promise<Texture> {
+  const pmrem = new PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  try {
+    await precompile(renderer, pmrem, room);
+  } catch (err) {
+    console.warn('Clawd: room light compiled on first use instead:', err); // three changed these internals.
+  }
+  const texture = pmrem.fromScene(room, 0.04).texture;
+  pmrem.dispose();
+  return texture;
+}
+
+async function precompile(renderer: WebGLRenderer, pmrem: PMREMGenerator, room: Scene): Promise<void> {
+  const internals = pmrem as unknown as PmremInternals;
+  const camera = new OrthographicCamera();
+  internals._setSize(256); // fromScene's default size: it reuses these materials.
+  const target = internals._allocateTargets();
+  // The same programs fromScene will ask for: its plane geometry, its background box, its target's colour space.
+  const plane = internals._lodMeshes[0].geometry;
+  const background = new Mesh(new BoxGeometry(), new MeshBasicMaterial({ side: BackSide, depthWrite: false, depthTest: false }));
+  renderer.setRenderTarget(target);
+  const compiling = [room, background, new Mesh(plane, internals._blurMaterial), new Mesh(plane, internals._ggxMaterial)].map((object) => renderer.compileAsync(object, camera));
+  renderer.setRenderTarget(null);
+  await Promise.all(compiling);
+  target.dispose();
+  background.geometry.dispose();
+  background.material.dispose();
+}
+
 /** The shared stage, or null when WebGL or the model is unavailable (the avatars then keep their SVG). */
 export function clawdStage(): Promise<Stage | null> {
   return (loading ??= (async () => {
+    let renderer: WebGLRenderer | null = null;
     try {
       const gltf = await new GLTFLoader().parseAsync(glb.slice().buffer, '');
-      return new Stage(new WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' }), gltf);
+      await breathe();
+      renderer = new WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
+      renderer.setPixelRatio(1); // Views size themselves in device pixels.
+      renderer.setScissorTest(true);
+      renderer.setClearColor(0x000000, 0);
+      const stage = new Stage(renderer, gltf, await roomLight(renderer));
+      await breathe();
+      // The mascot's shaders compile in the GPU process while the page keeps running (KHR_parallel_shader_compile),
+      // instead of freezing it on the first frame.
+      await stage.renderer.compileAsync(stage.rig, stage.camera, stage.scene);
+      return stage;
     } catch (err) {
       console.warn('Clawd 3D unavailable, SVG mascots instead:', err);
+      renderer?.dispose(); // Its WebGL context goes too: nothing will draw with it.
+      renderer?.forceContextLoss();
       return null;
     }
   })());

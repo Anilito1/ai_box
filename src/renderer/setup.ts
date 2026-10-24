@@ -70,6 +70,9 @@ const INSTALL = {
 /** First-run setup (steps, no way out before the end) and the settings screen (same sections, free navigation). */
 export class SetupView {
   private readonly root = document.getElementById('setup') as HTMLDivElement;
+  /** Kept across renders, so the dialog animates in once when it opens, not at every section change. */
+  private readonly card = h('div', 'setup-card');
+  private clearTimer = 0;
   private mode: Kind = 'settings';
   private section: Section = 'general';
   private view: SettingsView | null = null;
@@ -165,6 +168,7 @@ export class SetupView {
     this.note = null;
     this.view = await this.hub.getSettings();
     if (this.root.hidden) this.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.clearTimeout(this.clearTimer);
     this.root.hidden = false;
     this.render();
   }
@@ -175,7 +179,8 @@ export class SetupView {
     if (this.device) this.hub.githubCancel();
     this.device = null;
     this.root.hidden = true;
-    this.root.replaceChildren();
+    // Emptied once its closing transition is over.
+    this.clearTimer = window.setTimeout(() => this.root.hidden && this.root.replaceChildren(), 240);
     this.returnFocus?.focus();
     this.returnFocus = null;
   }
@@ -233,9 +238,8 @@ export class SetupView {
     }
     body.append(foot);
 
-    const card = h('div', 'setup-card');
-    card.append(nav, body);
-    this.root.replaceChildren(card);
+    this.card.replaceChildren(nav, body);
+    if (this.card.parentElement !== this.root) this.root.replaceChildren(this.card);
     content.querySelector<HTMLElement>('[data-autofocus]')?.focus();
   }
 

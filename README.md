@@ -16,6 +16,7 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 - **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
 - **Closed sessions resume.** Idle ad-hoc workers close after 15 minutes, permanent ones fall asleep after 5; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
 - **English and French**, for the interface and for the instructions the sessions receive.
+- **Keyboard and appearance.** Ctrl+K (⌘K on a Mac) opens the commands, Ctrl+1 to 9 switch between the master and the workers, Ctrl+, opens the settings, Ctrl+Shift+G folds the git panel. Light and dark follow the system.
 
 ## Requirements
 

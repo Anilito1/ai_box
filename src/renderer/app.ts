@@ -3,8 +3,10 @@ import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
+import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
+import './tooltip';
 import { activityOf, lastOf } from './working';
 
 declare global {
@@ -30,9 +32,10 @@ document.body.classList.add(`platform-${PLATFORM}`);
 // Settings open from the end of the master's header, where its folder chip was (the folder is in its name's tooltip).
 const settingsButton = h('button', 'ph-settings');
 settingsButton.id = 'open-settings';
+settingsButton.title = `${t('side.settings')} · ${shortcut(',')}`;
 settingsButton.setAttribute('aria-haspopup', 'dialog');
 settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
-const masterView = new ChatView($('pane-master'), hub, t('master.empty'), undefined, false, settingsButton);
+const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
@@ -129,6 +132,11 @@ function ensureCard(s: SessionView): Card {
   return card;
 }
 
+/** Writes only what changed: a streamed reply re-renders the cards 25 times a second. */
+function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 /** What the card says under the meter: live activity while working, else the latest news. */
 function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
   if (s.status === 'attention') return { text: t('card.attention'), cls: 'warn' };
@@ -153,16 +161,17 @@ function renderCard(s: SessionView): void {
   c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker' && !s.post);
   c.root.classList.toggle('asleep', isClosed(s) && s.post !== null);
   c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
-  c.name.textContent = displayName(s);
-  c.cost.textContent = fmtCost(m?.costUsd);
-  c.model.textContent = [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · ');
-  c.pct.textContent = fmtPct(m?.contextPct);
-  c.fill.style.width = `${Math.min(100, m?.contextPct ?? 0)}%`;
+  setText(c.name, displayName(s));
+  setText(c.cost, fmtCost(m?.costUsd));
+  setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
+  setText(c.pct, fmtPct(m?.contextPct));
+  // A scale on the compositor rather than a width: the meter moves without a layout.
+  c.fill.style.transform = `scaleX(${Math.min(100, m?.contextPct ?? 0) / 100})`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;
   const sub = cardSub(s, last);
-  c.sub.textContent = sub.text;
+  setText(c.sub, sub.text);
   c.sub.className = `card-sub ${sub.cls}`;
-  c.root.title = s.cwd;
+  if (c.root.title !== s.cwd && c.root.dataset.tip !== s.cwd) c.root.title = s.cwd;
   renderActions(c, s);
 }
 
@@ -206,11 +215,17 @@ function resetTime(epochSeconds: number | null, withDay: boolean): string {
   return t('sb.reset', { date: new Date(epochSeconds * 1000).toLocaleString(LANG, opts) });
 }
 
+let statusKey = '';
+
 function renderStatusbar(rate: RateLimits | null): void {
   const workers = snapshot.sessions.filter((s) => s.role === 'worker' && !isClosed(s));
   const running = workers.filter((s) => s.status === 'busy').length;
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
+  const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(total), rate]);
+  if (key === statusKey) return;
+  statusKey = key;
 
   const left: HTMLElement[] = [];
   if (master) {
@@ -223,7 +238,6 @@ function renderStatusbar(rate: RateLimits | null): void {
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
-  const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
   const right: HTMLElement[] = [sbItem(t('sb.cost'), fmtCost(total), '', t('sb.costHint'))];
   if (rate?.fiveHourPct != null) {
     right.push(h('span', 'sb-sep'), sbItem(t('sb.5h'), fmtPct(rate.fiveHourPct), level(rate.fiveHourPct), resetTime(rate.fiveHourResetsAt, false)));
@@ -309,6 +323,52 @@ splitter.addEventListener('pointerdown', (e) => {
   splitter.addEventListener('pointermove', move);
   splitter.addEventListener('pointerup', up);
   splitter.addEventListener('pointercancel', up);
+});
+
+// ---------- keyboard ----------
+
+/** The team, then the active workers, as the sidebar shows them: Ctrl/Cmd+2 to 9 open them in that order. */
+function sidebarOrder(): SessionView[] {
+  const posts = snapshot.sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
+  return [...posts, ...snapshot.sessions.filter((s) => s.role === 'worker' && !s.post && !isClosed(s))];
+}
+
+/** Everything the hub can do from the keyboard, with its shortcut when it has one. */
+function commands(): Command[] {
+  const list: Command[] = [{ title: t('palette.master'), keys: shortcut('1'), run: () => openWorker(null) }];
+  sidebarOrder().forEach((s, i) => list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), keys: i < 8 ? shortcut(String(i + 2)) : undefined, run: () => openWorker(s.id) }));
+  if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
+  list.push(
+    { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
+    { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
+    { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
+  );
+  const closed = snapshot.sessions.filter((s) => s.role === 'worker' && !s.post && isClosed(s));
+  for (const s of closed.reverse()) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
+  return list;
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.isComposing || setup.isOpen) return;
+  if (isMod(e) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    showPalette(commands());
+  } else if (paletteOpen()) {
+    return;
+  } else if (isMod(e) && e.key === ',') {
+    e.preventDefault();
+    void setup.open('settings');
+  } else if (isMod(e, true) && e.code === 'KeyG') {
+    e.preventDefault();
+    repoPanel.toggle();
+  } else if (isMod(e) && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
+    // 1: the master; 2 to 9: the team and the active workers, in the sidebar's order. Physical keys: on an AZERTY
+    // keyboard the digits are shifted.
+    e.preventDefault();
+    const n = Number(e.code.slice(-1));
+    const target = n === 1 ? null : sidebarOrder()[n - 2];
+    if (n === 1 || target) openWorker(target ? target.id : null);
+  }
 });
 
 // ---------- boot ----------

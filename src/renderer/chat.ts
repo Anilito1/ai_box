@@ -25,7 +25,59 @@ const markdown = (text: string): string =>
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
   });
 
+// Rendered Markdown by item, so switching back to a conversation or re-sending an unchanged item skips the parser.
+const HTML_CACHE_MAX = 4000;
+const htmlCache = new Map<string, { text: string; html: string }>();
+
+function cachedMarkdown(key: string, text: string): string {
+  const hit = htmlCache.get(key);
+  if (hit?.text === text) return hit.html;
+  const html = markdown(text);
+  htmlCache.delete(key);
+  htmlCache.set(key, { text, html });
+  if (htmlCache.size > HTML_CACHE_MAX) htmlCache.delete(htmlCache.keys().next().value as string);
+  return html;
+}
+
+/**
+ * End of the reply's last finished block: what comes before it no longer changes as the reply streams. A block ends at
+ * a blank line or a closing fence, once the next line starts flush left outside any fence (an indented line may still
+ * belong to the block above: a list item's paragraph or code).
+ */
+function stableEnd(text: string): number {
+  let end = 0;
+  let candidate = -1;
+  let fence = '';
+  let at = 0;
+  for (;;) {
+    const nl = text.indexOf('\n', at);
+    if (nl < 0) return end; // The last line is still being written.
+    const line = text.slice(at, nl);
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1] ?? '';
+    if (fence) {
+      // Closed by the same character, at least as long, with nothing after it.
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
+        fence = '';
+        candidate = nl + 1;
+      }
+    } else if (line.trim() === '') {
+      candidate = nl + 1;
+    } else {
+      if (candidate >= 0 && !/^\s/.test(line)) end = candidate;
+      candidate = -1;
+      if (marker) fence = marker;
+    }
+    at = nl + 1;
+  }
+}
+
+/** The newest items render at once; older ones follow in batches, so opening a long conversation never freezes. */
+const FIRST_BATCH = 60;
+const LATER_BATCH = 40;
+
 type Items = Map<string, ChatItem>;
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const modeLabel = (mode: Mode) => t(`mode.${mode}`);
 const modeHint = (mode: Mode) => (mode === 'dontAsk' ? '' : t(`modeHint.${mode}`));
@@ -49,6 +101,16 @@ export class ChatView {
   /** The session's Clawd, large, in the header of a panel that asks for one. */
   private readonly mascot: Avatar | null;
   private readonly nodes = new Map<string, HTMLElement>();
+  /** Older items not drawn yet, oldest first (see FIRST_BATCH). */
+  private pending: string[] = [];
+  private pendingSet = new Set<string>();
+  private pendingTimer = 0;
+  /** At the end of the stream: it stays there as the stream grows (see the ResizeObserver). */
+  private pinned = true;
+  /** The reply being streamed: its finished blocks stay put, only the block being written is redrawn. */
+  private live: { id: string; stable: HTMLElement; tail: HTMLElement; source: string } | null = null;
+  /** Rebuilding the stream (a conversation opens): its items appear without the arrival animation. */
+  private resetting = false;
   private readonly drafts = new Map<string, { text: string; attachments: Attachment[] }>();
   private attachments: Attachment[] = [];
   /** Images still being decoded or re-encoded: sending waits for them so none is dropped. */
@@ -95,6 +157,12 @@ export class ChatView {
     this.empty = h('div', 'chat-empty', emptyText);
     this.stream.append(this.empty, this.working.root);
     this.scroller.append(this.stream);
+    // Pinned to the end while the stream grows (a reply streaming, an image loading, messages laid out as they
+    // scroll into view), measured after layout: no script forces one.
+    this.scroller.addEventListener('scroll', () => (this.pinned = this.atBottom()), { passive: true });
+    new ResizeObserver(() => {
+      if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    }).observe(this.stream);
     this.scroller.addEventListener('click', (e) => {
       const a = (e.target as HTMLElement).closest('a');
       if (!a) return;
@@ -103,12 +171,10 @@ export class ChatView {
       if (href) this.hub.openExternal(href);
     });
 
+    // Grows with its text through CSS (field-sizing), without measuring on every keystroke.
     this.input = h('textarea', 'composer-input');
     this.input.rows = 1;
-    this.input.addEventListener('input', () => {
-      this.autosize();
-      this.syncSend();
-    });
+    this.input.addEventListener('input', () => this.syncSend());
     this.input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -142,6 +208,7 @@ export class ChatView {
     this.attachStrip.hidden = true;
     this.attachNote.hidden = true;
 
+    pane.dataset.drop = t('chat.drop');
     pane.addEventListener('dragover', (e) => {
       if (!e.dataTransfer?.types.includes('Files')) return;
       e.preventDefault();
@@ -213,6 +280,7 @@ export class ChatView {
   /** Releases the draft (and its images) of a session that no longer exists. */
   forget(id: string): void {
     this.drafts.delete(id);
+    for (const key of htmlCache.keys()) if (key.startsWith(`${id}\n`)) htmlCache.delete(key);
   }
 
   focus(): void {
@@ -223,16 +291,18 @@ export class ChatView {
   show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
     this.models = models;
     const switched = (session?.id ?? null) !== this.sessionId;
-    if (switched && this.session) this.drafts.set(this.session.id, { text: this.input.value, attachments: this.attachments });
+    const previous = this.session;
+    if (switched && previous) this.drafts.set(previous.id, { text: this.input.value, attachments: this.attachments });
     this.session = session ?? null;
     this.items = items;
     if (!session) this.mascot?.dispose(); // Hidden panel: its Clawd leaves the stage.
     if (switched) {
+      // Another conversation in the same panel: it fades in rather than replacing the last one in a flash.
+      if (session && previous && !reducedMotion.matches) this.scroller.animate([{ opacity: 0.35 }, { opacity: 1 }], { duration: 200, easing: 'ease-out' });
       const draft = session ? this.drafts.get(session.id) : undefined;
       this.input.value = draft?.text ?? '';
       this.attachments = draft?.attachments ?? [];
       this.renderAttachments();
-      this.autosize();
       this.reset(items);
     }
     this.renderChrome();
@@ -243,32 +313,58 @@ export class ChatView {
     this.items = items;
     for (const node of this.nodes.values()) node.remove();
     this.nodes.clear();
-    for (const item of items?.values() ?? []) this.place(item);
-    this.empty.hidden = this.nodes.size > 0;
+    this.live = null;
+    window.clearTimeout(this.pendingTimer);
+    const all = [...(items?.values() ?? [])];
+    const first = all.slice(-FIRST_BATCH);
+    this.pending = all.slice(0, all.length - first.length).map((item) => item.id);
+    this.pendingSet = new Set(this.pending);
+    this.resetting = true;
+    for (const item of first) this.place(item);
+    this.resetting = false;
+    this.empty.hidden = all.length > 0;
     this.syncWorking();
-    this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.scrollToEnd();
+    if (this.pending.length > 0) this.pendingTimer = window.setTimeout(() => this.drawOlder(), 0);
+  }
+
+  /** Draws the next batch of older items above the ones shown; scroll anchoring keeps the view where it is. */
+  private drawOlder(): void {
+    const batch = this.pending.splice(Math.max(0, this.pending.length - LATER_BATCH));
+    let before = this.empty.nextElementSibling;
+    for (let i = batch.length - 1; i >= 0; i--) {
+      this.pendingSet.delete(batch[i]);
+      const item = this.items?.get(batch[i]);
+      if (!item) continue;
+      const node = this.render(item);
+      this.stream.insertBefore(node, before);
+      this.nodes.set(item.id, node);
+      before = node;
+    }
+    if (this.pending.length > 0) this.pendingTimer = window.setTimeout(() => this.drawOlder(), 16);
   }
 
   upsert(items: ChatItem[]): void {
-    const stick = this.atBottom();
     for (const item of items) this.place(item);
-    this.empty.hidden = this.nodes.size > 0;
+    this.empty.hidden = this.nodes.size + this.pending.length > 0;
     this.syncWorking();
-    if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 
   private atBottom(): boolean {
     return this.scroller.scrollHeight - this.scroller.scrollTop - this.scroller.clientHeight < 48;
   }
 
+  private scrollToEnd(): void {
+    this.pinned = true;
+    this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
   /** Working line at the end of the stream, driven by the session status and its latest item. */
   private syncWorking(): void {
-    const stick = this.atBottom();
     const s = this.session;
     const last = lastOf(this.items);
     this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background);
     if (s) this.mascot?.update(s, last);
-    if (stick) this.scroller.scrollTop = this.scroller.scrollHeight;
   }
 
   // ---------- chrome (header + composer state) ----------
@@ -326,11 +422,6 @@ export class ChatView {
     this.sendBtn.title = stop ? t('chat.interrupt') : this.preparing > 0 ? t('chat.preparing') : t('chat.send');
   }
 
-  private autosize(): void {
-    this.input.style.height = 'auto';
-    this.input.style.height = `${Math.min(this.input.scrollHeight, 240)}px`;
-  }
-
   private submit(): void {
     if (!this.hasContent() || this.preparing > 0 || !this.session) return;
     this.hub.send(
@@ -341,9 +432,8 @@ export class ChatView {
     this.input.value = '';
     this.attachments = [];
     this.renderAttachments();
-    this.autosize();
     this.syncSend();
-    this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.scrollToEnd();
   }
 
   /** Adds images to the draft they were picked for, even if another session is shown by the time they are ready. */
@@ -489,11 +579,16 @@ export class ChatView {
   // ---------- stream ----------
 
   private place(item: ChatItem): void {
+    if (this.pendingSet.has(item.id)) return; // Drawn with its latest state when its batch comes.
+    if (item.kind === 'assistant' && item.live && this.live?.id === item.id) return this.streamLive(item.text);
     const old = this.nodes.get(item.id);
     const node = this.render(item);
     if (old instanceof HTMLDetailsElement && node instanceof HTMLDetailsElement) node.open = old.open;
     if (old) old.replaceWith(node);
-    else this.stream.insertBefore(node, this.working.root);
+    else {
+      if (!this.resetting) node.classList.add('enter');
+      this.stream.insertBefore(node, this.working.root);
+    }
     this.nodes.set(item.id, node);
   }
 
@@ -523,7 +618,7 @@ export class ChatView {
         const label = h('div', 'peer-head');
         label.append(h('span', '', t('chat.from')), h('b', '', item.from));
         const body = h('div', 'md');
-        body.innerHTML = markdown(item.text);
+        body.innerHTML = cachedMarkdown(this.cacheKey(item.id), item.text);
         this.addCodeCopy(body);
         wrap.append(label, body, this.actions(item.text));
         return wrap;
@@ -531,10 +626,19 @@ export class ChatView {
       case 'assistant': {
         const el = h('div', item.live ? 'msg msg-assistant live' : 'msg msg-assistant');
         const body = h('div', 'md');
-        body.innerHTML = markdown(item.text);
-        this.addCodeCopy(body);
         el.append(body);
-        if (!item.live) el.append(this.actions(item.text));
+        if (item.live) {
+          const stable = h('div', 'md-part');
+          const tail = h('div', 'md-part md-tail');
+          body.append(stable, tail);
+          this.live = { id: item.id, stable, tail, source: '' };
+          this.streamLive(item.text);
+          return el;
+        }
+        if (this.live?.id === item.id) this.live = null;
+        body.innerHTML = cachedMarkdown(this.cacheKey(item.id), item.text);
+        this.addCodeCopy(body);
+        el.append(this.actions(item.text));
         return el;
       }
       case 'thinking': {
@@ -570,6 +674,26 @@ export class ChatView {
         return el;
       }
     }
+  }
+
+  private cacheKey(id: string): string {
+    return `${this.session?.id ?? ''}\n${id}`;
+  }
+
+  /** Appends the blocks the reply finished since the last frame, then redraws only the block being written. */
+  private streamLive(text: string): void {
+    const live = this.live;
+    if (!live) return;
+    if (!text.startsWith(live.source)) {
+      live.stable.replaceChildren(); // Rewritten rather than extended: start over.
+      live.source = '';
+    }
+    const end = stableEnd(text);
+    if (end > live.source.length) {
+      live.stable.insertAdjacentHTML('beforeend', markdown(text.slice(live.source.length, end)));
+      live.source = text.slice(0, end);
+    }
+    live.tail.innerHTML = markdown(text.slice(live.source.length));
   }
 
   /** Hover row under a message; copies its raw text (markdown source for Claude's replies). */

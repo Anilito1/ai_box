@@ -9,6 +9,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
@@ -74,6 +75,9 @@ function loadRenderer(lang: Lang): void {
   void win?.loadFile(join(here, 'renderer', 'index.html'), { query: { lang, platform: process.platform } });
 }
 
+/** The window's own colours, the page's --bg and --text-3 in the system's appearance (light or dark). */
+const chrome = () => (nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 36 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 36 });
+
 function createWindow(mgr: SessionManager, lang: Lang): void {
   win = new BrowserWindow({
     width: 1480,
@@ -82,9 +86,9 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     minHeight: 600,
     title: APP_NAME,
     icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
-    backgroundColor: '#0c0d0f',
+    backgroundColor: chrome().color,
     titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0c0d0f', symbolColor: '#8b9099', height: 36 },
+    titleBarOverlay: chrome(),
     webPreferences: {
       preload: join(here, 'preload.cjs'),
       contextIsolation: true,
@@ -93,6 +97,11 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     },
   });
   win.removeMenu();
+  nativeTheme.on('updated', () => {
+    if (!win || win.isDestroyed()) return;
+    win.setBackgroundColor(chrome().color);
+    if (process.platform !== 'darwin') win.setTitleBarOverlay(chrome());
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('did-start-loading', () => {

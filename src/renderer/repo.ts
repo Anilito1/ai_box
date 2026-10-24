@@ -315,6 +315,11 @@ export class RepoPanel {
     if (this.statuses.size !== before) this.render();
   }
 
+  /** Folds or unfolds the panel (the keyboard shortcut). */
+  toggle(): void {
+    this.setCollapsed(!this.collapsed);
+  }
+
   /** Folder of the worker opened beside the master: in Auto, the panel follows it. */
   setFocus(cwd: string | null): void {
     if (cwd === this.focusCwd) return;
