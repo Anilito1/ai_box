@@ -78,9 +78,9 @@ const CELEBRATE_MIN_MS = 8_000;
 const COOLDOWN_MS = 4_000;
 /** A new session shown this soon after its creation is being born, not resumed. */
 const NEWBORN_MS = 15_000;
-// Every frame drawn costs CPU and GPU: a resting Clawd fidgets every 20-45 s and blinks every 4-9 s.
-const FIDGET_MS = [20_000, 45_000] as const;
-const BLINK_MS = [4_000, 9_000] as const;
+// Every frame drawn costs CPU and GPU: a resting Clawd fidgets every 30-60 s and blinks every 5-12 s.
+const FIDGET_MS = [30_000, 60_000] as const;
+const BLINK_MS = [5_000, 12_000] as const;
 const DOUBLE_BLINK_MS = 350;
 const FRENZY_POKES = 4;
 const FRENZY_MS = 2_000;
@@ -319,7 +319,7 @@ export class Mind {
   }
 
   /**
-   * Blinks so far: every 2-6 s, sometimes twice, never over an expression nor while `quiet`. A view blinks when
+   * Blinks so far: every 5-12 s, sometimes twice, never over an expression nor while `quiet`. A view blinks when
    * the count moves, so every view of the session blinks together.
    */
   blinks(now: number, quiet = false): number {

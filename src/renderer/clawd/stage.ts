@@ -258,7 +258,7 @@ export class StageView {
     if (!this.visible || this.canvas.width === 0 || this.canvas.height === 0) return Infinity;
     const quiet = this.stage.quiet;
     const pose = this.mind.pose(now, quiet);
-    if (this.dress(pose)) this.dirty = true;
+    const dressed = this.dress(pose);
     // Closed, or reduced motion: one frame per change, of the base loop.
     if (pose.still || this.stage.reduced) {
       const clip = pose.still ? pose.clip : pose.base;
@@ -271,7 +271,7 @@ export class StageView {
       return Infinity;
     }
     this.drawn = '';
-    if (this.dirty) {
+    if (this.dirty || dressed) {
       this.dirty = false;
       this.settle(t, 0);
       this.nextAt = 0;
@@ -291,12 +291,19 @@ export class StageView {
       this.settle(t, CLIPS.eyes_blink.duration / this.mind.speed);
     }
     if (resting && t >= this.settleUntil) {
-      this.last = 0; // The next move starts from here, not from a long dt.
+      // Coming to rest: one last frame with the move run to its end, even if the timer fired late or the view was
+      // off screen meanwhile; then the next move starts from here, not from a long dt.
+      if (this.last) {
+        this.mixer.update((t - this.last) / 1000);
+        this.release();
+        this.draw();
+        this.last = 0;
+      }
       return t + Math.max(0, Math.min(REST_CHECK_MS, this.mind.nextChange(now) - now));
     }
     if (t < this.nextAt - TIMER_SLACK_MS) return this.nextAt;
-    // On a grid shared by every view (12 fps is every other 24 fps frame), so the timer wakes once for all. Blinks
-    // and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the full rate.
+    // Frames fall on a grid per rate, so views at the same pace share the timer's wake-ups (12 fps is every other
+    // 24 fps frame). Blinks and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the full rate.
     const slow = quiet || CALM.has(pose.clip) || REST.has(pose.clip) || FIDGETS.has(pose.clip);
     const step = 1000 / (slow ? SLOW_FPS : this.fps);
     this.nextAt = (Math.floor(t / step) + 1) * step;
@@ -422,10 +429,13 @@ export class StageView {
     // is taken now, before the next view draws over the shared canvas.
     const source = renderer.domElement;
     const frame = ++this.sent;
-    void createImageBitmap(source, 0, source.height - height, width, height).then((bitmap) => {
-      if (this.disposed || frame !== this.sent) bitmap.close();
-      else this.ctx.transferFromImageBitmap(bitmap);
-    });
+    createImageBitmap(source, 0, source.height - height, width, height).then(
+      (bitmap) => {
+        if (this.disposed || frame !== this.sent) bitmap.close();
+        else this.ctx.transferFromImageBitmap(bitmap);
+      },
+      () => undefined, // Context lost meanwhile: that handler switches the mascots to SVG; this frame just goes.
+    );
   }
 }
 
