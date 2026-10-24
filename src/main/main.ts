@@ -32,7 +32,9 @@ import {
   type PermissionDecision,
   type SettingsPatch,
   type SettingsView,
+  type TeamRole,
 } from '../shared/types';
+import { agentFiles } from './agents';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
 import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { errorCode } from './errors';
@@ -208,6 +210,7 @@ class Hub {
       dataDir: this.dataDir,
       executable: () => this.executable,
       sessionEnv: () => this.sessionEnv(),
+      persist: () => this.save(),
     });
   }
 
@@ -356,6 +359,23 @@ class Hub {
       this.save();
       return { ...this.view(), ok: true, error: '' };
     });
+    // The team, one post at a time, with the checks of the master's tools (sessions.ts); the master hears of it next.
+    handle('team:save', (role) => {
+      const r = mgr.saveRole(role, 'user');
+      if (!('error' in r)) return { ...this.view(), ok: true, error: '', field: '' };
+      return r.error === 'working'
+        ? { ...this.view(), ok: false, error: 'working', field: '' }
+        : { ...this.view(), ok: false, error: r.error.problem, field: r.error.field };
+    });
+    handle('team:delete', (id) => {
+      const ok = isStr(id) && mgr.deleteRole(id);
+      return { ...this.view(), ok, error: ok ? '' : 'working' };
+    });
+    handle('team:move', (id, delta) => {
+      if (isStr(id) && (delta === -1 || delta === 1)) mgr.moveRole(id, delta);
+      return this.view();
+    });
+    handle('team:agents', () => agentFiles(this.cfg));
     handle('claude:check', async () => {
       const status = await claudeStatus(this.cfg, mgr.environment());
       this.executable = status.executable;
@@ -493,6 +513,7 @@ async function start(): Promise<void> {
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
+  mgr.on('team', (team: TeamRole[]) => send('hub:team', team));
   mgr.on('attention', () => {
     if (win && !win.isFocused()) win.flashFrame(true);
   });

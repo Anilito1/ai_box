@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus } from '../shared/types';
+import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, TeamRole } from '../shared/types';
 
 const api: HubApi = {
   onSnapshot: (cb) => {
@@ -16,6 +16,9 @@ const api: HubApi = {
   },
   onRepos: (cb) => {
     ipcRenderer.on('hub:repos', (_e, paths: string[]) => cb(paths));
+  },
+  onTeam: (cb) => {
+    ipcRenderer.on('hub:team', (_e, team: TeamRole[]) => cb(team));
   },
   ready: () => ipcRenderer.send('hub:ready'),
   repoGraph: (path, filter, limit) => ipcRenderer.invoke('repo:graph', path, filter, limit),
@@ -49,6 +52,10 @@ const api: HubApi = {
   scanRepos: (roots) => ipcRenderer.invoke('repos:scan', roots),
   githubRepos: () => ipcRenderer.invoke('github:repos'),
   cloneRepo: (slug, root) => ipcRenderer.invoke('repos:clone', slug, root),
+  saveRole: (role) => ipcRenderer.invoke('team:save', role),
+  deleteRole: (id) => ipcRenderer.invoke('team:delete', id),
+  moveRole: (id, delta) => ipcRenderer.invoke('team:move', id, delta),
+  agentFiles: () => ipcRenderer.invoke('team:agents'),
   finishSetup: () => ipcRenderer.invoke('setup:finish'),
   relaunch: () => ipcRenderer.send('app:relaunch'),
 };

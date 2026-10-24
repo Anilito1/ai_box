@@ -65,6 +65,8 @@ export class ChatView {
     /** Given for a panel that can be hidden: adds a close button to its header. */
     onClose?: () => void,
     mascot = false,
+    /** Takes the place of the folder chip at the end of the header; the folder moves to the name's tooltip. */
+    private readonly action?: HTMLElement,
   ) {
     this.mascot = mascot ? new Avatar('stage') : null;
     const head = h('div', this.mascot ? 'pane-head portrait' : 'pane-head');
@@ -77,7 +79,7 @@ export class ChatView {
       text.append(title, this.head.mission);
       head.append(this.mascot.root, text);
     } else {
-      head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, this.head.cwd);
+      head.append(this.head.dot, this.head.name, this.head.status, this.head.mission, action ?? this.head.cwd);
     }
     if (onClose) {
       const close = h('button', 'icon-btn ph-close');
@@ -286,10 +288,11 @@ export class ChatView {
     this.head.mission.title = s.mission;
     this.head.cwd.textContent = s.cwd.split(/[\\/]/).filter(Boolean).pop() ?? s.cwd;
     this.head.cwd.title = s.cwd;
+    this.head.name.title = this.action ? t('chat.cwdTitle', { cwd: s.cwd }) : '';
 
     this.input.placeholder =
       s.status === 'exited'
-        ? t('chat.closedPlaceholder')
+        ? t(s.post ? 'chat.asleepPlaceholder' : 'chat.closedPlaceholder')
         : s.role === 'master'
           ? t('chat.masterPlaceholder')
           : t('chat.workerPlaceholder');

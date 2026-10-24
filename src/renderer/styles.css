@@ -141,6 +141,9 @@ button {
   overflow-y: auto;
   padding-bottom: 12px;
 }
+.side-group + .side-group {
+  margin-top: 12px;
+}
 .card-list {
   display: flex;
   flex-direction: column;
@@ -1096,6 +1099,20 @@ button {
   display: none;
 }
 .card.closed .card-sub {
+  margin-top: 3px;
+  -webkit-line-clamp: 1;
+}
+.card.asleep {
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.card.asleep .card-meta,
+.card.asleep .meter {
+  display: none;
+}
+.card.asleep .card-sub {
   margin-top: 3px;
   -webkit-line-clamp: 1;
 }
@@ -2192,7 +2209,8 @@ button {
   height: 48px;
   cursor: pointer;
 }
-.card.closed .avatar {
+.card.closed .avatar,
+.card.asleep .avatar {
   width: 32px;
   height: 32px;
 }
@@ -2655,27 +2673,23 @@ button {
   }
 }
 
-/* ---------- settings button, platform tweaks ---------- */
-.title-btn {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 24px;
-  margin-left: 10px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-3);
+/* ---------- settings button (end of the master's header), platform tweaks ---------- */
+.ph-settings {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--raise);
+  color: var(--text-2);
+  font-size: 12px;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
-.title-btn:hover {
+.ph-settings:hover {
   background: var(--hover);
   color: var(--text);
-}
-.title-btn .ico {
-  width: 15px;
-  height: 15px;
 }
 /* macOS draws its window buttons at the top left of a hidden title bar. */
 .platform-darwin .titlebar {
@@ -3158,6 +3172,109 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 20px;
+}
+.setup-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.setup-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--chat);
+  cursor: pointer;
+}
+.setup-check:hover {
+  border-color: var(--line-strong);
+}
+.setup-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.setup-field.invalid .setup-input,
+.setup-field.invalid .setup-textarea,
+.setup-field.invalid .setup-select,
+.setup-field.invalid .setup-folders {
+  border-color: var(--danger);
+}
+.team-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.team-empty {
+  margin: 0;
+  padding: 12px;
+}
+.team-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.team-row:last-child {
+  border-bottom: 0;
+}
+.team-row-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.team-row-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.team-row-session {
+  color: var(--text-3);
+  font: 11px var(--font-mono);
+}
+.team-row-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.team-row.off .team-row-title b,
+.team-row.off .team-row-desc {
+  color: var(--text-3);
+}
+.team-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.team-row-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 50%;
+}
+.team-row-actions .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.team-ignored {
+  color: var(--text-3);
+  font-size: 11px;
+}
+.team-editor-actions {
+  margin: 18px 0 0;
 }
 .setup-note {
   margin: 0 30px 10px;

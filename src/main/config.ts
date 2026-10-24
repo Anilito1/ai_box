@@ -1,8 +1,10 @@
+import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isLang, type Lang } from '../shared/i18n';
-import { EFFORTS, PROVIDERS, type Effort, type HubSettings, type Mode, type SettingsPatch } from '../shared/types';
+import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
+import { EFFORTS, PROVIDERS, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
 
 export type HubConfig = HubSettings;
 
@@ -38,6 +40,8 @@ function defaults(lang: Lang): HubConfig {
     master: { model: '', effort: '' },
     worker: { model: '', effort: '' },
     workerModels: ['opus', 'sonnet'],
+    workerMaxEffort: 'xhigh',
+    team: [],
     permissionMode: '',
     masterInstructions: '',
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
@@ -89,6 +93,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     (v): v is string[] => Array.isArray(v) && v.length > 0 && v.length <= 10 && v.every((m) => isStr(m, 80, MODEL) && m !== ''),
     (v) => (cfg.workerModels = v),
   );
+  take('workerMaxEffort', raw.workerMaxEffort, (v): v is Effort => EFFORTS.includes(v as Effort), (v) => (cfg.workerMaxEffort = v));
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
   if (raw.github !== undefined) {
@@ -99,9 +104,20 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   return bad;
 }
 
-/** Fields only the main process sets: the executable sessions run, the setup state and the GitHub sign-in. */
+export const ROLE_ID = /^r-[a-z0-9]{8}$/;
+
+/** Fields only the main process sets: the executable sessions run, the setup state, the GitHub sign-in and the team. */
 function mergeOwn(cfg: HubConfig, raw: Raw): void {
   if (typeof raw.onboarded === 'boolean') cfg.onboarded = raw.onboarded;
+  // Read post by post: one that a hand edit broke is left out, the others stay.
+  if (Array.isArray(raw.team)) {
+    const team: TeamRole[] = [];
+    for (const r of raw.team.slice(0, TEAM_MAX)) {
+      const role = normalizeRole(r);
+      if (ROLE_ID.test(role.id) && !team.some((o) => o.id === role.id) && !checkRole(role, team)) team.push(role);
+    }
+    cfg.team = team;
+  }
   if (raw.claudePath === '' || isPath(raw.claudePath)) cfg.claudePath = raw.claudePath;
   const g = obj(raw.github);
   if (['none', 'oauth', 'token', 'gh'].includes(g.source as string)) cfg.github.source = g.source as HubConfig['github']['source'];
@@ -171,6 +187,23 @@ export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null 
   if (added(next.workspaces, cfg.workspaces).some((p) => !isDir(p))) return 'workspaces';
   Object.assign(cfg, next);
   return null;
+}
+
+export type RoleCheck = { role: TeamRole } | { error: RoleError };
+
+/**
+ * A post to save, normalized and checked against the rest of the team; a new one (no id, or one the team does not
+ * know) gets a fresh id. Its folders must exist.
+ */
+export function prepareRole(cfg: HubConfig, raw: unknown): RoleCheck {
+  const role = normalizeRole(raw);
+  if (!cfg.team.some((r) => r.id === role.id)) role.id = '';
+  const error = checkRole(role, cfg.team);
+  if (error) return { error };
+  if (!role.folders.every(isDir)) return { error: { field: 'folders', problem: 'format' } };
+  role.folders = role.folders.map((f) => resolve(f));
+  if (!role.id) role.id = `r-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
+  return { role };
 }
 
 /** The master's folder: the first working folder. */

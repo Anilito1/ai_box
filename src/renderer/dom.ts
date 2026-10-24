@@ -5,8 +5,10 @@ export const displayName = (s: SessionView) => (s.role === 'master' ? t('master'
 
 /** Closed on an error (its last start or run failed), not closed on purpose. */
 export const failed = (s: SessionView) => s.status === 'exited' && s.error !== '';
-/** The state's word, with "stopped on an error" for a failed session. */
-export const statusLabel = (s: SessionView) => (failed(s) ? t('status.failed') : t(`status.${s.status}`));
+/** A permanent worker with nothing to do: closed on purpose, a message wakes it. */
+export const asleep = (s: SessionView) => s.post !== null && s.status === 'exited' && s.error === '';
+/** The state's word, with "stopped on an error" for a failed session and "asleep" for a resting permanent one. */
+export const statusLabel = (s: SessionView) => (failed(s) ? t('status.failed') : asleep(s) ? t('status.asleep') : t(`status.${s.status}`));
 /** Class of its status dot. */
 export const statusDot = (s: SessionView) => `dot s-${failed(s) ? 'failed' : s.status}`;
 
@@ -58,6 +60,12 @@ export const ICONS = {
   external: 'M9 2.5h4.5V7M13.5 2.5L7.5 8.5M11.5 9.5v4h-9v-9h4',
   undo: 'M5.5 3.5l-3 3 3 3M2.5 6.5h7a3.5 3.5 0 0 1 0 7H7',
   filter: 'M2.5 3.5h11l-4.3 5v4.5l-2.4 1V8.5z',
+  gear:
+    'M8 1.8v1.6M8 12.6v1.6M14.2 8h-1.6M3.4 8H1.8M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1M12.4 12.4l-1.1-1.1M4.7 4.7L3.6 3.6M8 4.6a3.4 3.4 0 1 0 0 6.8a3.4 3.4 0 1 0 0-6.8M8 5.8a2.2 2.2 0 1 0 0 4.4a2.2 2.2 0 1 0 0-4.4',
+  up: 'M8 12.5v-9M4.5 7L8 3.5L11.5 7',
+  down: 'M8 3.5v9M4.5 9L8 12.5L11.5 9',
+  edit: 'M10.5 3l2.5 2.5l-7 7H3.5V10z',
+  moon: 'M12.5 9.6A5 5 0 0 1 6.4 3.5a5 5 0 1 0 6.1 6.1z',
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */

@@ -21,6 +21,19 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import {
+  capEffort,
+  fromTemplate,
+  needsFreshStart,
+  resolveChoice,
+  roleKey,
+  sessionNameOf,
+  slugify,
+  TEMPLATE_IDS,
+  type ChoiceNote,
+  type RoleError,
+} from '../shared/team';
+import {
+  EFFORTS,
   type ChatItem,
   type Effort,
   type HubEventKind,
@@ -33,10 +46,25 @@ import {
   type RateLimits,
   type Role,
   type SessionView,
+  type TeamRole,
 } from '../shared/types';
-import { mainRepoPath, masterCwd, type HubConfig } from './config';
-import { t } from './i18n';
-import { defaultMasterName, IDLE_CLOSE_MIN, masterName, masterPrompt, setMasterName, tags, workerPrompt } from './prompts';
+import { mainRepoPath, masterCwd, prepareRole, type HubConfig } from './config';
+import { lang, t } from './i18n';
+import {
+  defaultMasterName,
+  handoffRequest,
+  IDLE_CLOSE_MIN,
+  inside,
+  masterName,
+  masterPrompt,
+  PERMANENT_SLEEP_MIN,
+  postUpdate,
+  rosterBlock,
+  rosterKey,
+  setMasterName,
+  tags,
+  workerPrompt,
+} from './prompts';
 import { findRepos, repoRootOf } from './repos';
 import {
   assistantItems,
@@ -49,6 +77,7 @@ import {
   toolLabel,
   toolSummary,
   userTextItem,
+  visibleText,
 } from './transcript';
 
 /** Push-based prompt stream: keeps a query in streaming-input mode so it can receive messages and controls. */
@@ -84,7 +113,7 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-interface Session extends Omit<SessionView, 'idleSince'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post'> {
   sessionId: string;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
@@ -115,6 +144,22 @@ interface Session extends Omit<SessionView, 'idleSince'> {
   agentTasks: Set<string>;
   /** When it last turned idle; unlike activeAt, frames arriving meanwhile (tasks, limits) leave it alone. */
   idleAt: number;
+  /** Id of the post of a permanent worker, else null. */
+  roleId: string | null;
+  /** Handoff note a permanent worker wrote before its context was renewed: its next sessions start with it. */
+  note: string;
+  /** The note was written after the last work of this conversation: closing it now starts the next one afresh. */
+  noteFresh: boolean;
+  /** Writing its handoff note; work that arrives meanwhile makes the note stale. */
+  handoff: boolean;
+  handoffStale: boolean;
+  /** Asked for a note since its last work: asked once, even when the answer was unusable. */
+  handoffDone: boolean;
+  /** What it was last told of its post (permanent) or of the team (master): a change is added to its next message. */
+  seen: string;
+  /** The user picked its model or effort by hand: the master's choices leave them alone. */
+  userModel: boolean;
+  userEffort: boolean;
 }
 
 type Persisted = {
@@ -137,6 +182,11 @@ type Persisted = {
   | 'started'
   | 'fixedModel'
   | 'fixedEffort'
+  | 'roleId'
+  | 'note'
+  | 'noteFresh'
+  | 'userModel'
+  | 'userEffort'
 >;
 
 export interface ManagerOptions {
@@ -147,13 +197,29 @@ export interface ManagerOptions {
   executable(): string;
   /** Variables added to (set) or removed from (unset) the environment of every session: Claude access, GitHub. */
   sessionEnv(): { set: Record<string, string>; unset: string[] };
+  /** Writes the settings: the master's tools change the team. */
+  persist(): void;
 }
+
+export type RoleSave = { role: TeamRole; before: TeamRole | null } | { error: RoleError | 'working' };
 
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
-const HUB_TOOLS = ['spawn_worker', 'message_worker', 'list_workers', 'list_repos', 'worker_report', 'close_worker'];
-const WORKER_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
+const HUB_TOOLS = [
+  'spawn_worker',
+  'message_worker',
+  'list_workers',
+  'list_repos',
+  'worker_report',
+  'close_worker',
+  'list_roles',
+  'create_role',
+  'update_role',
+  'delete_role',
+];
+/** A handoff note longer than this is cut: it goes into every later prompt of the post. */
+const NOTE_MAX = 6000;
 const ITEMS_MAX = 1500;
 const ITEMS_TRIM = 300;
 const HISTORY_MAX = 400;
@@ -175,6 +241,8 @@ interface Prompt {
   from?: string;
   /** Text shown in the user bubble when it differs from what the model receives. */
   shown?: string;
+  /** The hub asking a permanent worker for its handoff note. */
+  handoff?: boolean;
 }
 
 // Tool calls that send a message to another session (worker ↔ worker, worker → master, master → worker).
@@ -213,6 +281,7 @@ const oneLine = (text: string, max: number): string => {
 };
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const minutesSince = (at: number) => Math.max(1, Math.round((Date.now() - at) / 60_000));
+const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
@@ -228,6 +297,8 @@ export class SessionManager extends EventEmitter {
   private quitting = false;
   private readonly stateFile: string;
   private readonly attachDir: string;
+  /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
+  private readonly shownPosts = new Set<string>();
   /** Workers to relaunch at start, from the state saved when the hub last closed. */
   private readonly resumeOnStart = new Map<string, 'mission' | 'work'>();
 
@@ -236,6 +307,7 @@ export class SessionManager extends EventEmitter {
     this.stateFile = join(opts.dataDir, 'state.json');
     this.attachDir = join(opts.dataDir, 'attachments');
     this.restore();
+    this.syncTeam();
   }
 
   // ---------- lifecycle ----------
@@ -274,12 +346,12 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(MASTER_ID);
     if (!s) return;
     if (cfg.master.model !== s.fixedModel) {
-      if (cfg.master.model) this.setModel(s.id, cfg.master.model);
+      if (cfg.master.model) this.setModel(s.id, cfg.master.model, false);
       else s.fixedModel = '';
     }
     const effort = cfg.master.effort || null;
     if (effort !== s.fixedEffort) {
-      if (effort) this.setEffort(s.id, effort);
+      if (effort) this.setEffort(s.id, effort, false);
       else s.fixedEffort = null;
     }
     const cwd = masterCwd(cfg);
@@ -336,6 +408,13 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
+  /** A permanent worker that wrote its handoff note: its next launch is a new conversation, seeded with the note. */
+  private freshStart(s: Session): void {
+    Object.assign(s, { sessionId: randomUUID(), started: false, historyLoad: null, noteFresh: false });
+    if (s.metrics) s.metrics = { ...s.metrics, contextTokens: 0, contextPct: 0 };
+    this.notice(s, t('notice.freshStart'), 'info');
+  }
+
   resume(id: string): void {
     const s = this.sessions.get(id);
     if (s && !s.inbox) void this.launch(s, s.started);
@@ -347,9 +426,10 @@ export class SessionManager extends EventEmitter {
     if (s && !s.inbox && s.started) void this.loadHistory(s);
   }
 
+  /** Only an ad-hoc worker: a permanent one goes with its post (Settings › Team). */
   remove(id: string): void {
     const s = this.sessions.get(id);
-    if (!s || s.role !== 'worker' || s.inbox) return;
+    if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
     this.changed();
   }
@@ -375,9 +455,11 @@ export class SessionManager extends EventEmitter {
 
   // ---------- live controls (composer) ----------
 
-  setModel(id: string, model: string): void {
+  /** `byUser`: picked by hand in the composer, so the master's later choices leave it alone. */
+  setModel(id: string, model: string, byUser = true): void {
     const s = this.sessions.get(id);
     if (!s) return;
+    if (byUser) s.userModel = true;
     s.fixedModel = model;
     s.model = model;
     s.modelLabel = this.labelFor(model, model);
@@ -393,9 +475,10 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
-  setEffort(id: string, effort: Effort): void {
+  setEffort(id: string, effort: Effort, byUser = true): void {
     const s = this.sessions.get(id);
     if (!s) return;
+    if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
     s.query?.applyFlagSettings({ effortLevel: effort }).catch((err: unknown) => this.notice(s, t('notice.effortRefused', { error: errorText(err) }), 'error'));
@@ -420,11 +503,13 @@ export class SessionManager extends EventEmitter {
   // ---------- views ----------
 
   snapshot(): HubSnapshot {
-    const sessions = [...this.sessions.values()]
+    const { team } = this.opts.cfg;
+    const sessions = this.visible()
       .sort((a, b) => (a.role === b.role ? a.createdAt - b.createdAt : a.role === 'master' ? -1 : 1))
       .map((s) => ({
         id: s.id,
         role: s.role,
+        post: s.roleId ? { id: s.roleId, order: team.findIndex((r) => r.id === s.roleId), description: this.roleOf(s)?.description ?? '' } : null,
         name: s.name,
         mission: s.mission,
         cwd: s.cwd,
@@ -448,7 +533,16 @@ export class SessionManager extends EventEmitter {
   }
 
   allItems(): [string, ChatItem[]][] {
-    return [...this.sessions.values()].map((s) => [s.id, [...s.items.values()]]);
+    return this.visible().map((s) => [s.id, [...s.items.values()]]);
+  }
+
+  /** Sessions shown and reachable: the master, ad-hoc workers and the permanent workers of enabled posts. */
+  private visible(): Session[] {
+    return [...this.sessions.values()].filter((s) => !s.roleId || this.roleOf(s)?.enabled);
+  }
+
+  private roleOf(s: Session): TeamRole | null {
+    return s.roleId ? (this.opts.cfg.team.find((r) => r.id === s.roleId) ?? null) : null;
   }
 
   // ---------- SDK session ----------
@@ -489,14 +583,20 @@ export class SessionManager extends EventEmitter {
     if (this.quitting || s.inbox !== inbox) return; // Hub closing, or the session was closed while launching.
 
     const isMaster = s.role === 'master';
+    const post = this.roleOf(s);
     // Every launch starts in the configured mode (a composer change lasts as long as the process). None configured:
     // Claude Code picks its own default, which system/init reports.
-    const mode = this.hubMode();
+    const mode = this.modeOf(s);
     s.mode = mode ?? (await this.settingsMode(s.cwd));
     if (this.quitting || s.inbox !== inbox) return;
     const executable = this.opts.executable();
+    // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
+    // never the copy recorded with the conversation. Changes made while they run come with their next message.
+    s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
+    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ? { role: post, note: s.note } : undefined);
     const options: Options = {
       cwd: s.cwd,
+      ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
       ...(s.fixedModel ? { model: s.fixedModel } : {}),
       ...(s.fixedEffort ? { effort: s.fixedEffort } : {}),
@@ -504,7 +604,7 @@ export class SessionManager extends EventEmitter {
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
       allowDangerouslySkipPermissions: true,
       ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: isMaster ? masterPrompt(cfg) : workerPrompt(cfg) },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append, ...(isMaster || post ? { snapshot: false } : {}) },
       // Workers talk to the master and to each other through native cross-session messaging (SendMessage). The master
       // writes to workers through the hub (message_worker), which delivers its words as a user turn: a peer message
       // carries no user authority, so a "go" sent that way would not unblock a commit or a push.
@@ -525,7 +625,8 @@ export class SessionManager extends EventEmitter {
     if (firstPrompt) this.pushUser(s, firstPrompt);
     const q = query({ prompt: inbox, options });
     s.query = q;
-    s.costBase = resume ? (s.metrics?.costUsd ?? 0) : 0;
+    // A post's cost runs on across its conversations.
+    s.costBase = resume || post ? (s.metrics?.costUsd ?? 0) : 0;
     this.changed();
     void this.onReady(s, q);
     await this.consume(s, q);
@@ -564,7 +665,9 @@ export class SessionManager extends EventEmitter {
     for (const finish of [...s.pending.values()]) finish({ behavior: 'deny', message: t('perm.sessionStopped') });
     s.status = 'exited';
     s.busySince = null;
+    s.handoff = false;
     this.resetActivity(s);
+    if (s.noteFresh && !this.quitting) this.freshStart(s);
   }
 
   /** Background tasks, subagents, compaction and retries belong to one CLI process. */
@@ -707,7 +810,12 @@ export class SessionManager extends EventEmitter {
           s.busySince = null;
           s.idleAt = Date.now();
         }
-        if (msg.subtype === 'success') {
+        if (s.handoff) {
+          // The handoff note: kept for the next conversation unless new work came in while it was written.
+          s.handoff = false;
+          const note = msg.subtype === 'success' ? msg.result.trim().slice(0, NOTE_MAX) : '';
+          if (note && !s.handoffStale) Object.assign(s, { note, noteFresh: true });
+        } else if (msg.subtype === 'success') {
           if (msg.result.trim()) s.lastMessage = msg.result;
           this.event(s, 'turn_done');
         } else {
@@ -732,6 +840,11 @@ export class SessionManager extends EventEmitter {
 
   private hubMode(): Mode | null {
     return this.opts.cfg.permissionMode || null;
+  }
+
+  /** A post's own mode, else the hub's. */
+  private modeOf(s: Session): Mode | null {
+    return this.roleOf(s)?.mode || this.hubMode();
   }
 
   /**
@@ -899,13 +1012,27 @@ export class SessionManager extends EventEmitter {
 
   /** Into the running session, or resumes a closed one with its conversation. */
   private deliver(s: Session, prompt: Prompt): void {
-    if (s.inbox) return this.pushUser(s, prompt);
-    // A worker closed before its CLI took the mission gets it back, ahead of the new message.
-    const lostMission = s.role === 'worker' && !s.started && s.mission;
+    if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
+    // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
+    const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission;
     void this.launch(s, s.started, lostMission ? { ...prompt, text: `${tags().mission(s.name)}\n${s.mission}\n\n${prompt.text}` } : prompt);
   }
 
-  private pushUser(s: Session, { text, images, from, shown }: Prompt): void {
+  /**
+   * A running master whose team changed, or a permanent worker whose post changed, learns it with its next message.
+   * (A launch renders its prompt afresh: start() marks it up to date.)
+   */
+  private withNews(s: Session, prompt: Prompt): Prompt {
+    const { cfg } = this.opts;
+    const post = this.roleOf(s);
+    const key = s.role === 'master' ? rosterKey(cfg) : post ? roleKey(post) : '';
+    if (key === s.seen || !s.query) return prompt;
+    s.seen = key;
+    const news = s.role === 'master' ? rosterBlock(cfg) : post ? postUpdate(post) : '';
+    return { ...prompt, text: `${prompt.text}\n\n${news}` };
+  }
+
+  private pushUser(s: Session, { text, images, from, shown, handoff }: Prompt): void {
     const content =
       images.length === 0
         ? text
@@ -913,8 +1040,11 @@ export class SessionManager extends EventEmitter {
             ...images.map((img) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: img.mediaType, data: img.data } })),
             ...(text ? [{ type: 'text' as const, text }] : []),
           ];
+    // Work after the handoff note makes it stale: the conversation goes on, the note waits for the next sleep.
+    if (handoff) Object.assign(s, { handoff: true, handoffStale: false, handoffDone: true });
+    else Object.assign(s, { noteFresh: false, handoffDone: false, handoffStale: s.handoff });
     if (from) {
-      this.upsert(s, { kind: 'peer', id: `peer-${randomUUID()}`, from, text: taggedSender(text)?.text ?? text });
+      this.upsert(s, { kind: 'peer', id: `peer-${randomUUID()}`, from, text: taggedSender(text)?.text ?? visibleText(text) });
     } else {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
       this.upsert(s, { kind: 'user', id: `user-${randomUUID()}`, text: shown ?? text, images: urls });
@@ -1043,24 +1173,50 @@ export class SessionManager extends EventEmitter {
       setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
       return;
     }
+    if (s.roleId) {
+      this.sleep(s);
+      return;
+    }
     this.stop(s.id);
     this.notice(s, t('notice.closedByMaster'), 'info');
   }
 
-  /** Idle workers are closed: their conversation stays on disk and the next message resumes them. */
+  /** Idle workers are closed, permanent ones sooner: their conversation stays on disk and the next message resumes them. */
   private closeIdle(): void {
     for (const s of this.sessions.values()) {
       if (s.role !== 'worker' || !s.query || !this.settled(s)) continue;
-      if (Date.now() - s.activeAt < IDLE_CLOSE_MIN * 60_000) continue;
+      if (Date.now() - s.activeAt < (s.roleId ? PERMANENT_SLEEP_MIN : IDLE_CLOSE_MIN) * 60_000) continue;
+      if (s.roleId) {
+        this.sleep(s, PERMANENT_SLEEP_MIN);
+        continue;
+      }
       this.event(s, 'idle_closed');
       this.stop(s.id);
       this.notice(s, t('notice.closedIdle', { min: IDLE_CLOSE_MIN }), 'info');
     }
   }
 
+  /**
+   * A settled permanent worker goes to sleep. With a well-filled context it first writes its handoff note: the hub
+   * asks for it once, closes the worker when the note is in, and its next mission starts in a fresh conversation
+   * seeded with the note. False while it writes the note. `idleMin`: it falls asleep for lack of work.
+   */
+  private sleep(s: Session, idleMin?: number): boolean {
+    if (s.query && !s.handoffDone && needsFreshStart(s.metrics)) {
+      s.owesReport = false;
+      s.closeWhenDone = true;
+      this.pushUser(s, { text: handoffRequest(), images: [], from: 'hub', handoff: true });
+      return false;
+    }
+    this.event(s, 'idle_closed');
+    this.stop(s.id);
+    this.notice(s, idleMin ? t('notice.asleepIdle', { min: idleMin }) : t('notice.asleep'), 'info');
+    return true;
+  }
+
   // ---------- hub tools (in-process MCP server) ----------
 
-  /** Master: spawn/message/list/report/close workers + repos. Workers: read-only list_workers + list_repos, to coordinate. */
+  /** Master: workers, posts and repos. Workers: read-only list_workers + list_repos, to coordinate. */
   private hubServer(role: Role) {
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -1074,11 +1230,30 @@ export class SessionManager extends EventEmitter {
     const byName = z.string().describe(t('tool.byName'));
     const listWorkers = tool('list_workers', t('tool.listWorkers'), {}, () => run(() => this.listWorkers()));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
-    if (role === 'worker') return createSdkMcpServer({ name: 'hub', version: '0.4.0', tools: [listWorkers, listRepos] });
+    if (role === 'worker') return createSdkMcpServer({ name: 'hub', version: '0.5.0', tools: [listWorkers, listRepos] });
 
+    // Models and effort are checked against the settings at each call (they may change while the master runs).
+    // nullish: models often send null for an optional field they mean to leave out.
+    const model = z.string().nullish().describe(t('tool.model'));
+    const effort = z
+      .enum(EFFORTS as [Effort, ...Effort[]])
+      .nullish()
+      .describe(t('tool.effort'));
+    const byPost = z.string().describe(t('tool.role.byName'));
+    const postFields = {
+      description: z.string().nullish().describe(t('tool.role.description')),
+      instructions: z.string().nullish().describe(t('tool.role.instructions')),
+      folders: z.array(z.string()).nullish().describe(t('tool.role.folders')),
+      model: z.string().nullish().describe(t('tool.role.model')),
+      effort: z
+        .enum(['auto', ...EFFORTS] as [string, ...string[]])
+        .nullish()
+        .describe(t('tool.role.effort')),
+      enabled: z.boolean().nullish().describe(t('tool.role.enabled')),
+    };
     return createSdkMcpServer({
       name: 'hub',
-      version: '0.4.0',
+      version: '0.5.0',
       tools: [
         tool(
           'spawn_worker',
@@ -1086,13 +1261,9 @@ export class SessionManager extends EventEmitter {
           {
             name: z.string().describe(t('tool.spawn.name')),
             mission: z.string().describe(t('tool.spawn.mission')),
-            // nullish: models often send null for an optional field they mean to leave out.
             cwd: z.string().nullish().describe(t('tool.spawn.cwd', { cwd: masterCwd(cfg) })),
-            model: z
-              .enum(cfg.workerModels as [string, ...string[]])
-              .nullish()
-              .describe(t('tool.spawn.model')),
-            effort: z.enum(WORKER_EFFORTS).nullish().describe(t('tool.spawn.effort')),
+            model,
+            effort,
           },
           (args) => run(() => this.spawnWorker(args)),
         ),
@@ -1103,6 +1274,8 @@ export class SessionManager extends EventEmitter {
             name: byName,
             message: z.string().describe(t('tool.message.message')),
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
+            model,
+            effort,
           },
           (args) => run(() => this.messageWorker(args)),
         ),
@@ -1116,15 +1289,37 @@ export class SessionManager extends EventEmitter {
           ({ name, force }) =>
             run(() => {
               const s = this.findWorker(name);
-              if (!s.query) return t('close.already', { name: s.name });
+              if (!s.query) return t(s.roleId ? 'close.alreadyAsleep' : 'close.already', { name: s.name });
               if (this.isWorking(s) && !force) {
                 s.closeWhenDone = true;
                 const what = s.background.length > 0 ? t('close.tasks', { list: s.background.join(' ; ') }) : t('close.turn');
                 return t('close.later', { name: s.name, what });
               }
+              if (s.roleId && !force) return t(this.sleep(s) ? 'close.asleep' : 'close.note', { name: s.name });
               this.stop(s.id);
-              return t('close.done', { name: s.name });
+              return t(s.roleId ? 'close.asleep' : 'close.done', { name: s.name });
             }),
+        ),
+        tool('list_roles', t('tool.listRoles'), {}, () => run(() => this.listRoles())),
+        tool(
+          'create_role',
+          t('tool.createRole'),
+          { name: z.string().describe(t('tool.role.name')), template: z.enum(TEMPLATE_IDS).nullish().describe(t('tool.role.template')), ...postFields },
+          (args) => run(() => this.createRole(args)),
+        ),
+        tool(
+          'update_role',
+          t('tool.updateRole'),
+          {
+            name: byPost,
+            new_name: z.string().nullish().describe(t('tool.role.newName')),
+            append_instructions: z.string().nullish().describe(t('tool.role.append')),
+            ...postFields,
+          },
+          (args) => run(() => this.updateRole(args)),
+        ),
+        tool('delete_role', t('tool.deleteRole'), { name: byPost }, ({ name }, extra) =>
+          run(() => this.deleteAsked(name, (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal)),
         ),
       ],
     });
@@ -1136,16 +1331,23 @@ export class SessionManager extends EventEmitter {
     if (!mission) throw new Error(t('spawn.empty'));
     const cwd = args.cwd?.trim() || masterCwd(cfg);
     if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error(t('spawn.badDir', { cwd }));
-    const model = args.model ?? cfg.worker.model;
-    const effort = args.effort ?? (cfg.worker.effort || null);
+    const choice = this.choose(null, args);
+    const model = choice.model ?? cfg.worker.model;
+    const effort = choice.effort ?? (cfg.worker.effort || null);
 
     // Compared by checkout root, so a worker in a subfolder of the same folder counts too.
     const rootKey = (dir: string) => (repoRootOf(dir) ?? resolve(dir)).toLowerCase();
-    const notes: string[] = [];
-    const sameRepo = [...this.sessions.values()]
-      .filter((w) => w.role === 'worker' && w.inbox && rootKey(w.cwd) === rootKey(cwd))
+    const notes = this.choiceNotes(choice.notes);
+    const sameRepo = this.visible()
+      .filter((w) => w.role === 'worker' && !w.roleId && w.inbox && rootKey(w.cwd) === rootKey(cwd))
       .map((w) => w.name);
     if (sameRepo.length > 0) notes.push(t('spawn.sameRepo', { names: sameRepo.join(', ') }));
+    // A post that works in this folder, or bears this name, is the one to hand the task to.
+    const slug = slugify(args.name, 28);
+    const posts = this.visible()
+      .filter((w) => w.roleId && (rootKey(w.cwd) === rootKey(cwd) || w.name === `hub-${slug}`))
+      .map((w) => w.name);
+    if (posts.length > 0) notes.push(t('spawn.post', { names: posts.join(', ') }));
     if (!repoRootOf(cwd)) notes.push(t('spawn.noRepo', { cwd }));
 
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', this.uniqueName(args.name), mission, cwd, model, effort);
@@ -1158,23 +1360,273 @@ export class SessionManager extends EventEmitter {
     ].join('\n');
   }
 
-  private async messageWorker(args: { name: string; message: string; interrupt?: boolean | null }): Promise<string> {
+  private async messageWorker(args: { name: string; message: string; interrupt?: boolean | null; model?: string | null; effort?: Effort | null }): Promise<string> {
     const s = this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
+    const choice = this.choose(s, args);
     const wasClosed = !s.inbox;
     const wasWorking = !wasClosed && this.isWorking(s);
+    // A permanent worker handed work while it had none starts a new mission: its card and list_workers show it, and
+    // the mission's first line gives it its name (it may be a fresh conversation).
+    const newMission = !!s.roleId && !wasWorking && !s.owesReport;
+    if (newMission) s.mission = message;
+    if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
+    if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
     if (args.interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
     s.owesReport = true;
     s.closeWhenDone = false;
-    this.deliver(s, { text: `${tags().master}\n${message}`, images: [], from: masterName() });
-    if (wasClosed) return t('message.wasClosed', { name: s.name });
-    if (args.interrupt && wasWorking) return t('message.interrupted', { name: s.name });
-    return t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
+    this.deliver(s, { text: `${newMission ? tags().mission(s.name) : tags().master}\n${message}`, images: [], from: masterName() });
+    const state = wasClosed
+      ? t(s.roleId ? 'message.woken' : 'message.wasClosed', { name: s.name })
+      : args.interrupt && wasWorking
+        ? t('message.interrupted', { name: s.name })
+        : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
+    const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
+    return [state, ...runs, ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   private missionPrompt(s: Session): Prompt {
     return { text: `${tags().mission(s.name)}\n${s.mission}`, images: [], from: masterName() };
+  }
+
+  /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
+  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }) {
+    const { cfg } = this.opts;
+    const post = s ? this.roleOf(s) : null;
+    const choice = resolveChoice({
+      requested,
+      post: post ? { model: post.model, effort: post.effort } : null,
+      locked: { model: !!s?.userModel, effort: !!s?.userEffort },
+      allowed: cfg.workerModels,
+      maxEffort: cfg.workerMaxEffort,
+    });
+    if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: cfg.workerModels.join(', ') }));
+    return choice;
+  }
+
+  private choiceNotes(notes: ChoiceNote[]): string[] {
+    return notes.map((n) => t(`choice.${n}`, { max: this.opts.cfg.workerMaxEffort }));
+  }
+
+  // ---------- team ----------
+
+  /**
+   * Sessions follow the team: one per post, created asleep; a post removed takes its session along. Its name and main
+   * folder change while it sleeps (saveRole makes sure of it); a disabled post's worker is closed and hidden.
+   */
+  private syncTeam(): void {
+    const { cfg } = this.opts;
+    for (const s of [...this.sessions.values()]) {
+      if (!s.roleId) continue;
+      const role = this.roleOf(s);
+      if (!role || !role.enabled) {
+        if (s.inbox) this.stop(s.id);
+        this.shownPosts.delete(s.id);
+        if (!role) this.sessions.delete(s.id);
+        continue;
+      }
+      // Hidden while its post was off: its conversation is sent again.
+      if (!this.shownPosts.has(s.id)) {
+        this.shownPosts.add(s.id);
+        this.emit('items', s.id, [...s.items.values()], true);
+      }
+      if (!s.inbox) {
+        s.name = sessionNameOf(role);
+        // A conversation belongs to its folder: a new main folder starts a new one (the handoff note goes along).
+        if (!samePath(s.cwd, role.folders[0])) Object.assign(s, { cwd: role.folders[0], sessionId: randomUUID(), started: false, historyLoad: null });
+      }
+      if (role.model && role.model !== s.fixedModel) this.setModel(s.id, role.model, false);
+      if (role.effort && role.effort !== s.fixedEffort) this.setEffort(s.id, role.effort, false);
+      if (s.query && role.mode && role.mode !== s.mode) this.setMode(s.id, role.mode);
+    }
+    for (const role of cfg.team) {
+      if (this.sessions.has(role.id)) continue;
+      const s = this.create(role.id, 'worker', sessionNameOf(role), '', role.folders[0], role.model, role.effort || null);
+      Object.assign(s, { roleId: role.id, status: 'exited' });
+      if (role.enabled) this.shownPosts.add(s.id);
+    }
+    this.changed();
+  }
+
+  /**
+   * Creates (no known id) or replaces a post. The master's tools cannot change a post's permission mode. A post's
+   * name, main folder and switching it off apply while its worker sleeps: an idle one is put to sleep, one at work
+   * refuses ("working").
+   */
+  saveRole(raw: unknown, by: 'user' | 'master'): RoleSave {
+    const { cfg } = this.opts;
+    const check = prepareRole(cfg, raw);
+    if ('error' in check) return check;
+    const role = check.role;
+    const before = cfg.team.find((r) => r.id === role.id) ?? null;
+    if (by === 'master') role.mode = before?.mode ?? '';
+    const name = sessionNameOf(role);
+    if ([...this.sessions.values()].some((s) => s.name === name && s.roleId !== role.id)) return { error: { field: 'name', problem: 'taken' } };
+    const s = before ? this.sessions.get(before.id) : undefined;
+    const structural = !!before && (before.name !== role.name || !samePath(before.folders[0], role.folders[0]) || (before.enabled && !role.enabled));
+    if (structural && s?.inbox) {
+      if (!this.settled(s)) return { error: 'working' };
+      this.stop(s.id);
+    }
+    cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
+    this.teamChanged();
+    return { role, before };
+  }
+
+  /** False when its worker is in the middle of something. */
+  deleteRole(id: string): boolean {
+    const { cfg } = this.opts;
+    const s = this.sessions.get(id);
+    if (s?.inbox && !this.settled(s)) return false;
+    if (s?.inbox) this.stop(id);
+    cfg.team = cfg.team.filter((r) => r.id !== id);
+    this.teamChanged();
+    return true;
+  }
+
+  moveRole(id: string, delta: -1 | 1): void {
+    const team = [...this.opts.cfg.team];
+    const i = team.findIndex((r) => r.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= team.length) return;
+    [team[i], team[j]] = [team[j], team[i]];
+    this.opts.cfg.team = team;
+    this.teamChanged();
+  }
+
+  private teamChanged(): void {
+    this.opts.persist();
+    this.syncTeam();
+    this.emit('team', this.opts.cfg.team);
+  }
+
+  private findRole(name: string): TeamRole {
+    const wanted = slugify(name, 40);
+    const role = this.opts.cfg.team.find((r) => r.name === wanted);
+    if (!role) throw new Error(t('role.notFound', { name }));
+    return role;
+  }
+
+  private roleErrorText(error: RoleError | 'working', name: string): string {
+    if (error === 'working') return t('role.working', { name });
+    return t('role.invalid', { field: error.field, problem: t(`role.problem.${error.problem}`) });
+  }
+
+  /** A post as the master reads it: every field, the instructions between tags. */
+  private roleText(r: TeamRole): string {
+    const s = this.sessions.get(r.id);
+    const state = !r.enabled ? t('role.off') : s?.query ? t(`status.${s.status}`) : t('status.asleep');
+    return [
+      `- ${r.name} (${sessionNameOf(r)}) · ${state}`,
+      t('role.line.description', { text: r.description }),
+      t('role.line.folders', { list: r.folders.join(', ') }),
+      t('role.line.run', { model: r.model || 'auto', effort: r.effort || 'auto', mode: r.mode || t('role.hubMode') }),
+      t('role.line.instructions', { text: inside(r.instructions) || t('report.none') }),
+    ].join('\n');
+  }
+
+  private listRoles(): string {
+    const { team } = this.opts.cfg;
+    return team.length === 0 ? t('role.none') : team.map((r) => this.roleText(r)).join('\n\n');
+  }
+
+  /** The master's fields for a post: "auto" (or empty) leaves the choice to it, a model must be an allowed one. */
+  private postValues(args: { model?: string | null; effort?: string | null }): Partial<TeamRole> {
+    const { cfg } = this.opts;
+    const out: Partial<TeamRole> = {};
+    if (args.model != null) {
+      const model = args.model.trim().toLowerCase();
+      if (model && model !== 'auto' && !cfg.workerModels.includes(model)) throw new Error(t('choice.badModel', { model, allowed: cfg.workerModels.join(', ') }));
+      out.model = model === 'auto' ? '' : model;
+    }
+    if (args.effort != null) out.effort = args.effort === 'auto' ? '' : capEffort(args.effort as Effort, cfg.workerMaxEffort);
+    return out;
+  }
+
+  private createRole(args: {
+    name: string;
+    template?: (typeof TEMPLATE_IDS)[number] | null;
+    description?: string | null;
+    instructions?: string | null;
+    folders?: string[] | null;
+    model?: string | null;
+    effort?: string | null;
+    enabled?: boolean | null;
+  }): string {
+    const known = rosterKey(this.opts.cfg);
+    const folders = args.folders ?? [];
+    const base = args.template ? fromTemplate(args.template, lang(), folders[0] ?? '') : null;
+    const given = Object.fromEntries(
+      Object.entries({ description: args.description, instructions: args.instructions, folders: args.folders, enabled: args.enabled }).filter(([, v]) => v != null),
+    );
+    const r = this.saveRole({ ...base, ...given, ...this.postValues(args), id: '', name: args.name, mode: '' }, 'master');
+    if ('error' in r) throw new Error(this.roleErrorText(r.error, args.name));
+    this.masterSaw(known);
+    return `${t('role.created', { name: r.role.name, session: sessionNameOf(r.role) })}\n${this.roleText(r.role)}`;
+  }
+
+  private updateRole(args: {
+    name: string;
+    new_name?: string | null;
+    description?: string | null;
+    instructions?: string | null;
+    append_instructions?: string | null;
+    folders?: string[] | null;
+    model?: string | null;
+    effort?: string | null;
+    enabled?: boolean | null;
+  }): string {
+    const known = rosterKey(this.opts.cfg);
+    const before = this.findRole(args.name);
+    const next: TeamRole = { ...before, ...this.postValues(args) };
+    if (args.new_name != null) next.name = args.new_name;
+    if (args.description != null) next.description = args.description;
+    if (args.instructions != null) next.instructions = args.instructions;
+    if (args.append_instructions?.trim()) next.instructions = [next.instructions.trim(), args.append_instructions.trim()].filter(Boolean).join('\n');
+    if (args.folders != null) next.folders = args.folders;
+    if (args.enabled != null) next.enabled = args.enabled;
+    const r = this.saveRole(next, 'master');
+    if ('error' in r) throw new Error(this.roleErrorText(r.error, before.name));
+    this.masterSaw(known);
+    const after = r.role;
+    const changed = (['name', 'description', 'folders', 'model', 'effort', 'enabled'] as const)
+      .filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
+      .map((k) => `- ${k}: ${JSON.stringify(before[k])} → ${JSON.stringify(after[k])}`);
+    // The former instructions in full: nothing the master replaces is lost.
+    if (before.instructions !== after.instructions) changed.push(t('role.instructionsWere', { text: inside(before.instructions) || t('report.none') }));
+    if (changed.length === 0) return t('role.unchanged', { name: after.name });
+    return [t('role.updated', { name: after.name }), ...changed, this.roleText(after)].join('\n');
+  }
+
+  /** The user confirms a deletion the master asks for, in the master's conversation, whatever the permission mode. */
+  private async deleteAsked(name: string, signal: AbortSignal): Promise<string> {
+    const known = rosterKey(this.opts.cfg);
+    const role = this.findRole(name);
+    const master = this.sessions.get(MASTER_ID);
+    if (!master) throw new Error(t('role.notFound', { name }));
+    const item: PermissionItem = {
+      kind: 'permission',
+      id: `perm-${randomUUID()}`,
+      tool: toolLabel('mcp__hub__delete_role'),
+      summary: t('role.deleteAsk', { name: role.name }),
+      detail: this.roleText(role),
+      diff: false,
+      reason: '',
+      canAlways: false,
+      state: 'pending',
+    };
+    const d = await this.ask(master, item, signal);
+    if (!d || d.behavior === 'deny') return t('role.deleteRefused', { name: role.name, reason: d?.message ? ` (${d.message})` : '' });
+    if (!this.deleteRole(role.id)) throw new Error(t('role.working', { name: role.name }));
+    this.masterSaw(known);
+    return t('role.deleted', { name: role.name });
+  }
+
+  /** The master changed the team itself: it knows, unless the user had changed it too since it last heard. */
+  private masterSaw(known: string): void {
+    const master = this.sessions.get(MASTER_ID);
+    if (master && master.seen === known) master.seen = rosterKey(this.opts.cfg);
   }
 
   /** Cached 30 s: the scan is synchronous and every worker may call it. */
@@ -1208,21 +1660,34 @@ export class SessionManager extends EventEmitter {
     const ctx = m?.contextPct != null ? `ctx ${Math.round(m.contextPct)}%` : 'ctx —';
     const cost = m ? `$${m.costUsd.toFixed(2)}` : '$—';
     const model = `${s.modelLabel || s.model || t('spawn.usualModel')}/${s.effort ?? t('spawn.usualEffort')}`;
+    const mine = [s.userModel ? t('workers.userModel') : '', s.userEffort ? t('workers.userEffort') : ''].filter(Boolean);
     const since = s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '';
-    return `${s.name} · ${t(`status.${s.status}`)}${since} · ${model} · ${ctx} · ${cost} · ${s.cwd}`;
+    const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : t(`status.${s.status}`);
+    return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''} · ${ctx} · ${cost} · ${s.cwd}`;
   }
 
   private listWorkers(): string {
-    const workers = [...this.sessions.values()].filter((s) => s.role === 'worker');
+    const workers = this.visible().filter((s) => s.role === 'worker');
     if (workers.length === 0) return t('workers.none');
-    return workers
-      .map((s) => {
-        const lines = [`- ${this.workerLine(s)}`, t('workers.mission', { text: oneLine(s.mission, 160) })];
-        if (s.background.length > 0) lines.push(t('workers.background', { text: oneLine(s.background.join(' ; '), 200) }));
-        if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
-        return lines.join('\n');
-      })
-      .join('\n');
+    const block = (s: Session) => {
+      const post = this.roleOf(s);
+      const lines = [`- ${this.workerLine(s)}`];
+      if (post) lines.push(t('workers.post', { text: oneLine(post.description, 160), model: post.model || 'auto', effort: post.effort || 'auto' }));
+      if (s.mission) lines.push(t('workers.mission', { text: oneLine(s.mission, 160) }));
+      if (s.background.length > 0) lines.push(t('workers.background', { text: oneLine(s.background.join(' ; '), 200) }));
+      if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
+      return lines.join('\n');
+    };
+    const { team } = this.opts.cfg;
+    const order = (s: Session) => team.findIndex((r) => r.id === s.roleId);
+    const posts = workers.filter((s) => s.roleId).sort((a, b) => order(a) - order(b));
+    const adhoc = workers.filter((s) => !s.roleId);
+    return [
+      posts.length > 0 ? `${t('workers.team')}\n${posts.map(block).join('\n')}` : '',
+      adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   private async workerReport(name: string): Promise<string> {
@@ -1260,24 +1725,18 @@ export class SessionManager extends EventEmitter {
       .join('\n');
   }
 
+  /** A worker by its session name, with or without "hub-"; a disabled post's worker cannot be reached. */
   private findWorker(name: string): Session {
     const wanted = name.trim().toLowerCase();
-    const s = [...this.sessions.values()].find((x) => x.role === 'worker' && (x.name === wanted || x.name === `hub-${wanted}`));
+    const s = this.visible().find((x) => x.role === 'worker' && (x.name === wanted || x.name === `hub-${wanted}`));
     if (!s) throw new Error(t('worker.notFound', { name }));
     return s;
   }
 
+  /** "hub-<slug>", numbered when taken; the names of every post are taken, even a disabled one's. */
   private uniqueName(raw: string): string {
-    const slug =
-      raw
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[̀-ͯ]/g, '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .replace(/^hub-/, '')
-        .slice(0, 28) || 'worker';
-    const taken = new Set([...this.sessions.values()].map((s) => s.name));
+    const slug = slugify(raw, 28) || 'worker';
+    const taken = new Set([...[...this.sessions.values()].map((s) => s.name), ...this.opts.cfg.team.map(sessionNameOf)]);
     let name = `hub-${slug}`;
     for (let i = 2; taken.has(name); i++) name = `hub-${slug}-${i}`;
     return name;
@@ -1366,6 +1825,15 @@ export class SessionManager extends EventEmitter {
       activeAt: Date.now(),
       agentTasks: new Set(),
       idleAt: Date.now(),
+      roleId: null,
+      note: '',
+      noteFresh: false,
+      handoff: false,
+      handoffStale: false,
+      handoffDone: false,
+      seen: '',
+      userModel: false,
+      userEffort: false,
     };
     this.sessions.set(id, s);
     return s;
@@ -1427,8 +1895,14 @@ export class SessionManager extends EventEmitter {
       started: s.started,
       fixedModel: s.fixedModel,
       fixedEffort: s.fixedEffort,
+      roleId: s.roleId,
+      note: s.note,
+      noteFresh: s.noteFresh,
+      userModel: s.userModel,
+      userEffort: s.userEffort,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
-      ...(s.inbox && !s.started ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),
+      // A post woken without a mission has none to get back.
+      ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),
     }));
     // Write-then-rename: a crash mid-save can never leave a truncated state.json behind.
     const tmp = `${this.stateFile}.tmp`;

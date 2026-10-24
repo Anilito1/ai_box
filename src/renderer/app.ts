@@ -1,7 +1,7 @@
 import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
-import { displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
+import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
@@ -20,15 +20,22 @@ const masterSlot = $('master-slot');
 const activeList = $('active-list');
 const closedList = $('closed-list');
 const closedGroup = $<HTMLDetailsElement>('closed-group');
+const teamList = $('team-list');
+const teamGroup = $('team-group');
 const reposRoot = $('repos');
 
 translateDom();
 document.body.classList.add(`platform-${PLATFORM}`);
 
-const masterView = new ChatView($('pane-master'), hub, t('master.empty'));
+// Settings open from the end of the master's header, where its folder chip was (the folder is in its name's tooltip).
+const settingsButton = h('button', 'ph-settings');
+settingsButton.id = 'open-settings';
+settingsButton.setAttribute('aria-haspopup', 'dialog');
+settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
+const masterView = new ChatView($('pane-master'), hub, t('master.empty'), undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models);
-$('open-settings').addEventListener('click', () => void setup.open('settings'));
+settingsButton.addEventListener('click', () => void setup.open('settings'));
 
 interface Card {
   root: HTMLDivElement;
@@ -68,10 +75,15 @@ function actionButton(label: string, path: string, run: () => void): HTMLButtonE
 }
 
 function renderActions(c: Card, s: SessionView): void {
-  const key = `${s.role}:${isClosed(s)}`;
+  const key = `${s.role}:${isClosed(s)}:${s.post !== null}`;
   if (c.actionsKey === key) return;
   c.actionsKey = key;
   c.actions.replaceChildren();
+  // A permanent worker sleeps and wakes; it goes away with its post, in the settings.
+  if (s.post) {
+    c.actions.append(isClosed(s) ? actionButton(t('card.wake'), ICONS.resume, () => hub.resume(s.id)) : actionButton(t('card.sleep'), ICONS.moon, () => hub.stop(s.id)));
+    return;
+  }
   if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.close'), ICONS.stop, () => hub.stop(s.id)));
   if (isClosed(s)) c.actions.append(actionButton(t('card.resume'), ICONS.resume, () => hub.resume(s.id)));
   if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
@@ -126,6 +138,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
   }
   if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: oneLine(s.background[0]) }), cls: 'live' };
   if (failed(s)) return { text: t('card.failed', { error: s.error }), cls: 'error' };
+  if (s.post && asleep(s)) return { text: oneLine(s.post.description), cls: '' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
   if (s.mission) return { text: oneLine(s.mission), cls: '' };
   return { text: s.role === 'master' ? t('master.yourConversation') : t(`status.${s.status}`), cls: '' };
@@ -136,7 +149,9 @@ function renderCard(s: SessionView): void {
   const m = s.metrics;
   const last = lastOf(store.get(s.id));
   c.root.classList.toggle('selected', s.id === opened);
-  c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker');
+  // A resting permanent worker gets the compact card of a closed one, without its faded look.
+  c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker' && !s.post);
+  c.root.classList.toggle('asleep', isClosed(s) && s.post !== null);
   c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
   c.name.textContent = displayName(s);
   c.cost.textContent = fmtCost(m?.costUsd);
@@ -235,11 +250,15 @@ function render(): void {
   if (opened && !ids.has(opened)) opened = null;
 
   for (const s of sessions) renderCard(s);
-  const workers = sessions.filter((s) => s.role === 'worker');
+  const workers = sessions.filter((s) => s.role === 'worker' && !s.post);
+  const posts = sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
   const active = workers.filter((s) => !isClosed(s));
   // Newest first: the latest missions are the ones worth a look.
   const closed = workers.filter(isClosed).reverse();
   const nodeOf = (s: SessionView) => (cards.get(s.id) as Card).root;
+  syncList(teamList, posts.map(nodeOf));
+  teamGroup.hidden = posts.length === 0;
+  $('team-count').textContent = posts.length ? String(posts.length) : '';
   syncList(activeList, active.map(nodeOf));
   syncList(closedList, closed.map(nodeOf));
   closedGroup.hidden = closed.length === 0;
@@ -313,6 +332,8 @@ hub.onItems((id, items, reset) => {
 hub.onEvent((id, kind) => clawdEvent(id, kind));
 reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
+// The master changed the team: an open Team section shows it.
+hub.onTeam(() => setup.teamChanged());
 // A notice that points to a section of the settings (Claude Code missing, for one).
 window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;

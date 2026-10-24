@@ -1,7 +1,7 @@
 import type { ChatItem, SessionView } from '../shared/types';
 import { clawdStage, type StageView } from './clawd/stage';
 import { hash, Mind, signalsOf, type MindEvent } from './clawd/state';
-import { h, statusDot } from './dom';
+import { h, statusDot, statusLabel } from './dom';
 import { t } from './i18n';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -142,7 +142,7 @@ export class Avatar {
     this.root.classList.toggle('waiting', s.status === 'attention');
     this.root.classList.toggle('off', s.status === 'exited');
     if (this.badge) this.badge.className = `${statusDot(s)} avatar-badge`;
-    const status = t(`status.${s.status}`);
+    const status = statusLabel(s);
     this.root.title = s.background.length > 0 && s.status !== 'busy' ? t('avatar.background', { status }) : status;
   }
 

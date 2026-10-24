@@ -9,10 +9,12 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 ## What it does
 
 - **Master and workers.** The master is a Claude Code session with a few extra tools (`spawn_worker`, `message_worker`, `list_workers`, `worker_report`, `close_worker`, `list_repos`). It writes a self-contained brief for each mission and starts a worker in the right folder. Workers report to the master; the master summarizes for you. Independent missions run in parallel; workers that touch the same thing talk to each other.
+- **A team of permanent workers.** In **Settings › Team**, give workers a post (backend, frontend, QA, DevOps, docs… from ready-made posts or your own `.claude/agents` subagents): a description that tells the master when to use it, standing instructions, working folders, a model and effort or "auto", a permission mode. The master hands a post the tasks of its scope first and starts ad-hoc workers for the rest. A permanent worker keeps its conversation from one mission to the next, sleeps when it has nothing to do (nothing runs), and wakes when the master writes to it. When its context is well filled, it writes a handoff note before falling asleep and its next mission starts a fresh conversation with that note. You can also ask the master to add or change a post (`list_roles`, `create_role`, `update_role`, `delete_role`); a deletion waits for your confirmation, and only you change a post's permission mode.
+- **Model and effort per mission.** The master rates each task (ambiguity, scope, production risk, security, reasoning, duration) and picks the model and effort that are good enough at the lowest cost, among the models you allow (Opus and Sonnet by default) and up to the effort you allow. It says its choice in one line. A model or effort you set on a post, or pick by hand on a worker, always wins.
 - **Every session is a real Claude Code session.** Same model, effort, `CLAUDE.md` files, plugins and MCP servers as when you run `claude` yourself. You can open any worker beside the master and write to it directly.
 - **Live view.** Status, context use, cost, background tasks, permission requests, and an animated mascot per session that reacts to what the session is doing.
 - **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
-- **Closed sessions resume.** Idle workers close after 15 minutes; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
+- **Closed sessions resume.** Idle ad-hoc workers close after 15 minutes, permanent ones fall asleep after 5; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
 - **English and French**, for the interface and for the instructions the sessions receive.
 
 ## Requirements
@@ -51,14 +53,14 @@ On macOS, closing the window keeps the hub and its sessions running (the Dock ic
 
 ## First run
 
-A short setup opens the first time, and every choice stays editable later in **Settings** (the gear next to the title):
+A short setup opens the first time, and every choice stays editable later in **Settings** (the gear at the top right of the master’s conversation):
 
 1. **General**: language.
 2. **Claude**: where the sessions get Claude from. The hub checks that Claude Code is installed and has access, and tells you what to do if not.
 3. **GitHub** (optional): sign in so the git panel can fetch, pull and push without prompts.
 4. **Workspace**: the folders that hold your repos. The master runs in the first one.
 5. **Repos**: the repos the git panel follows and the master knows best. Your local repos and, once GitHub is connected, your GitHub repos, with search. Nothing is picked for you; a repo that is only on GitHub is cloned into your first working folder.
-6. **Sessions**: permission mode, default models and effort, and your own instructions for the master (which repo a request is usually about, when to commit or deploy, how to report…).
+6. **Sessions**: permission mode, default models and effort, the models the master may pick for a mission, and your own instructions for the master (which repo a request is usually about, when to commit or deploy, how to report…).
 
 ![First-run setup: Claude access](docs/screenshots/setup-claude.png)
 

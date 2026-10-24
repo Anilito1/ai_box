@@ -123,14 +123,17 @@ const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from t
 export const capturedLine = (path: string) => (lang() === 'fr' ? `[Capture jointe : ${path}]` : `[Attached image: ${path}]`);
 const CAPTURED = /^\[(?:Capture jointe :|Attached image:) [^\]\n]+\]\n?/gm;
 
-/** Text as the user sees it: without the saved-image lines the model alone needs. */
-export const visibleText = (text: string) => text.replace(CAPTURED, '').trim();
+/** What the hub adds to a message about a changed team or post (prompts.ts). */
+const HUB_BLOCK = /\s*<hub-(roster|post)>[\s\S]*?<\/hub-\1>/g;
+
+/** Text as the user sees it: without the saved-image lines and the hub's blocks, which the model alone needs. */
+export const visibleText = (text: string) => text.replace(CAPTURED, '').replace(HUB_BLOCK, '').trim();
 
 /** Sender of a hub-delivered message (the master, or "hub"), and its text without the tag; null for a user message. */
 export function taggedSender(text: string): { from: string; text: string } | null {
   const m = TAGGED.exec(text);
   if (!m) return null;
-  return { from: m[1] === 'Hub' ? 'hub' : masterName(), text: text.slice(m[0].length) };
+  return { from: m[1] === 'Hub' ? 'hub' : masterName(), text: visibleText(text.slice(m[0].length)) };
 }
 
 /** data: URLs of the base64 images of a user message. */

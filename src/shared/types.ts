@@ -43,9 +43,42 @@ export interface RateLimits {
   sevenDayResetsAt: number | null;
 }
 
+/**
+ * A permanent worker with a set post (backend, front, QA…): it keeps its conversation from one mission to the next,
+ * sleeps when it has nothing to do, and the master hands it the tasks of its post first.
+ */
+export interface TeamRole {
+  /** Stable id, made by the main process ("r-" + 8 characters). */
+  id: string;
+  /** Its session is "hub-<name>": lowercase letters, digits and dashes. */
+  name: string;
+  /** When the master should use it: read by the master to route a task. */
+  description: string;
+  /** Added to its system prompt. Configuration data: it grants nothing the permission mode does not. */
+  instructions: string;
+  /** Working folders: the first one is its cwd (its CLAUDE.md), the others are added directories. */
+  folders: string[];
+  /** Empty = auto: the master picks the model (or effort) of each mission. */
+  model: string;
+  effort: Effort | '';
+  /** Empty = the mode of the other sessions. */
+  mode: Mode | '';
+  enabled: boolean;
+}
+
+/** What the sidebar shows of a permanent worker's post. */
+export interface RoleBadge {
+  id: string;
+  /** Position in the team, as ordered in the settings. */
+  order: number;
+  description: string;
+}
+
 export interface SessionView {
   id: string;
   role: Role;
+  /** Set for a permanent worker. */
+  post: RoleBadge | null;
   name: string;
   mission: string;
   cwd: string;
@@ -306,8 +339,12 @@ export interface HubSettings {
   /** Empty model/effort = exactly like a normal Claude Code session (settings.json: model, effortLevel). */
   master: { model: string; effort: Effort | '' };
   worker: { model: string; effort: Effort | '' };
-  /** Models the master may pick explicitly for a worker (default: inherit). */
+  /** Models the master may pick for a mission (ad-hoc worker, or permanent one in auto). */
   workerModels: string[];
+  /** Highest effort the master may pick for a mission. */
+  workerMaxEffort: Effort;
+  /** Permanent workers, in the order the settings show them. */
+  team: TeamRole[];
   /** Permission mode of every session at launch; empty = Claude Code's own default (settings, else auto or manual). */
   permissionMode: Mode | '';
   /** The user's own guidance, appended to the master's system prompt. */
@@ -335,8 +372,20 @@ export interface SettingsView {
   version: string;
 }
 
-/** Sections the renderer may replace; the main process validates each field. */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath'>> & { github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>> };
+/** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'team'>> & {
+  github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
+};
+
+/** A Claude Code subagent file (.claude/agents/*.md) offered as a starting point for a post. */
+export interface AgentFile {
+  /** "user" (~/.claude/agents) or the name of the followed repo it was found in. */
+  scope: string;
+  path: string;
+  role: Omit<TeamRole, 'id'>;
+  /** Frontmatter fields a post does not carry (tools, a bypass mode…), named so the user knows. */
+  ignored: string[];
+}
 
 export interface ClaudeStatus {
   /** Executable the sessions will run, or empty when none is found. */
@@ -422,6 +471,15 @@ export interface HubApi {
   githubRepos(): Promise<Result & { repos: GithubRepo[] }>;
   /** Clones owner/name into one of the working folders and adds it to the main repos. */
   cloneRepo(slug: string, root: string): Promise<SettingsView & Result>;
+  /** Creates a post (empty id) or replaces the one with this id; `field` names the field refused. */
+  saveRole(role: TeamRole): Promise<SettingsView & Result & { field: string }>;
+  /** `error` is "working" when its worker is in the middle of a turn. */
+  deleteRole(id: string): Promise<SettingsView & Result>;
+  moveRole(id: string, delta: -1 | 1): Promise<SettingsView>;
+  /** Subagent files of ~/.claude/agents and of the followed repos. */
+  agentFiles(): Promise<AgentFile[]>;
+  /** The team changed outside the settings screen (the master's tools). */
+  onTeam(cb: (team: TeamRole[]) => void): void;
   /** Ends the first-run setup and starts the master. */
   finishSetup(): Promise<void>;
   relaunch(): void;

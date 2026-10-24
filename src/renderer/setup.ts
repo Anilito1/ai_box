@@ -1,7 +1,9 @@
 import { LANG_NAMES, LANGS } from '../shared/i18n';
+import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
   APP_NAME,
   EFFORTS,
+  type AgentFile,
   type ClaudeStatus,
   type Effort,
   type FoundRepo,
@@ -14,18 +16,20 @@ import {
   type Provider,
   type SettingsPatch,
   type SettingsView,
+  type TeamRole,
 } from '../shared/types';
 import { copyButton, h, icon, ICONS } from './dom';
-import { effortLabel, t, type Key } from './i18n';
+import { effortLabel, LANG, t, type Key } from './i18n';
 
-type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'about';
+type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
 type Row = { name: string; path: string; slug: string; detail: string; private: boolean; pushedAt: number };
 
 const STEPS: Section[] = ['general', 'claude', 'github', 'workspace', 'repos', 'sessions'];
-const SECTIONS: Section[] = [...STEPS, 'about'];
+// The team is never part of the first run: it starts empty, nothing imposed.
+const SECTIONS: Section[] = [...STEPS, 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const PROVIDER_OPTIONS: Provider[] = ['claude-code', 'api-key', 'bedrock', 'vertex'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
@@ -90,6 +94,17 @@ export class SetupView {
   /** Start pressed while Claude has no access yet: the next press starts anyway. */
   private startAnyway = false;
   private device: GithubDevice | null = null;
+  /** Post being edited (a copy; empty id for a new one), else null for the team list. */
+  private draft: TeamRole | null = null;
+  private draftDirty = false;
+  /** Field the last check refused, outlined until it changes. */
+  private draftError: { field: string; text: string } | null = null;
+  /** "Allow everything" picked for the post being edited, waiting for its confirmation. */
+  private confirmPostBypass = false;
+  /** Post whose deletion waits for the confirmation shown in its row. */
+  private confirmDelete = '';
+  /** Subagent files offered for import: null = list closed, [] = loading or none. */
+  private agents: AgentFile[] | null = null;
   private note: { text: string; tone: 'ok' | 'error' } | null = null;
   private busy = false;
 
@@ -156,7 +171,7 @@ export class SetupView {
 
   /** Saves what was typed first: a refused value keeps the dialog open with its message. */
   async close(): Promise<void> {
-    if (!(await this.flush(false))) return;
+    if (!(await this.flush(false)) || !(await this.saveDraft())) return;
     if (this.device) this.hub.githubCancel();
     this.device = null;
     this.root.hidden = true;
@@ -225,6 +240,14 @@ export class SetupView {
   }
 
   private go(section: Section): void {
+    // A post being edited is saved first; a refused one keeps the editor open with its message.
+    if (this.draft && this.draftDirty) {
+      void this.saveDraft().then((ok) => ok && this.go(section));
+      return;
+    }
+    this.draft = null;
+    this.agents = null;
+    this.confirmDelete = '';
     void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
@@ -276,6 +299,8 @@ export class SetupView {
         return this.repos(el, v);
       case 'sessions':
         return this.sessions(el, v.settings);
+      case 'team':
+        return this.team(el, v);
       case 'about':
         return this.about(el, v);
     }
@@ -847,7 +872,7 @@ export class SetupView {
     const grid = h('div', 'setup-grid');
     grid.append(this.modelField(t('setup.sessions.master'), s.master, (v) => void this.save({ master: v })));
     grid.append(this.modelField(t('setup.sessions.worker'), s.worker, (v) => void this.save({ worker: v })));
-    el.append(grid);
+    el.append(grid, this.autoChoice(s));
 
     const f = this.field(t('setup.sessions.instructions'), t('setup.sessions.instructions.hint'));
     const area = h('textarea', 'setup-textarea');
@@ -883,6 +908,39 @@ export class SetupView {
     return box;
   }
 
+  /** Models the master may pick for a mission, and the highest effort it may pick. */
+  private autoChoice(s: HubSettings): HTMLElement {
+    const grid = h('div', 'setup-grid');
+    const f = this.field(t('setup.sessions.auto'), t('setup.sessions.auto.hint'));
+    const checks = h('div', 'setup-checks');
+    const models = [...new Set([...AUTO_MODELS, ...s.workerModels])];
+    for (const m of models) {
+      const label = h('label', 'setup-check');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.checked = s.workerModels.includes(m);
+      // One model at least stays allowed.
+      box.disabled = this.busy || (box.checked && s.workerModels.length === 1);
+      box.addEventListener('change', () => {
+        const next = models.filter((x) => (x === m ? box.checked : s.workerModels.includes(x)));
+        void this.save({ workerModels: next });
+      });
+      const name = this.models().find((x) => x.value === m)?.label ?? m.charAt(0).toUpperCase() + m.slice(1);
+      label.append(box, h('span', '', name));
+      checks.append(label);
+    }
+    f.append(checks);
+    const maxField = this.field(t('setup.sessions.maxEffort'), t('setup.sessions.maxEffort.hint'));
+    const max = h('select', 'setup-select');
+    max.setAttribute('aria-label', t('setup.sessions.maxEffort'));
+    max.append(...EFFORTS.map((e) => new Option(effortLabel(e), e)));
+    max.value = s.workerMaxEffort;
+    max.addEventListener('change', () => void this.save({ workerMaxEffort: max.value as Effort }));
+    maxField.append(max);
+    grid.append(f, maxField);
+    return grid;
+  }
+
   private modelField(label: string, value: { model: string; effort: Effort | '' }, set: (v: { model: string; effort: Effort | '' }) => void): HTMLElement {
     const f = this.field(label);
     const model = h('select', 'setup-select');
@@ -899,6 +957,394 @@ export class SetupView {
     row.append(model, effort);
     f.append(row);
     return f;
+  }
+
+  // ---------- team ----------
+
+  /** The master changed the team: the list shows it (a post being edited stays as typed). */
+  async teamChanged(): Promise<void> {
+    if (this.root.hidden || this.section !== 'team' || this.draft) return;
+    this.view = await this.hub.getSettings();
+    this.render();
+  }
+
+  private team(el: HTMLElement, v: SettingsView): void {
+    if (this.draft) return this.postEditor(el, v, this.draft);
+    this.head(el, t('team.title'), t('team.lead'));
+    const team = v.settings.team;
+    const list = h('div', 'team-list');
+    if (team.length === 0) list.append(h('p', 'setup-hint team-empty', t('team.empty')));
+    team.forEach((role, i) => list.append(this.postRow(role, i, team.length)));
+    el.append(list);
+
+    const add = this.field(t('team.add'), team.length >= TEAM_MAX ? t('team.full', { max: TEAM_MAX }) : t('team.add.hint'));
+    const row = h('div', 'setup-row team-templates');
+    const full = team.length >= TEAM_MAX;
+    const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', enabled: true }), full));
+    for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
+    row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
+    add.append(row);
+    el.append(add);
+    if (this.agents) el.append(this.agentList(this.agents));
+    el.append(h('p', 'setup-fine', t('team.fine')));
+  }
+
+  private postRow(role: TeamRole, index: number, count: number): HTMLElement {
+    const row = h('div', `team-row${role.enabled ? '' : ' off'}`);
+    const text = h('div', 'team-row-text');
+    const title = h('div', 'team-row-title');
+    title.append(h('b', '', role.name), h('span', 'team-row-session', sessionNameOf(role)));
+    const tags = h('div', 'team-tags');
+    const tag = (label: string) => tags.append(h('span', 'setup-tag', label));
+    tag(role.folders[0]?.split(/[\\/]/).filter(Boolean).pop() ?? '');
+    tag(this.runLabel(role));
+    if (role.mode) tag(t(`setup.mode.${role.mode}` as Key));
+    if (!role.enabled) tag(t('team.off'));
+    text.append(title, h('div', 'team-row-desc', role.description), tags);
+    row.append(text);
+
+    const actions = h('div', 'team-row-actions');
+    if (this.confirmDelete === role.id) {
+      actions.append(
+        h('span', 'setup-hint', t('team.deleteAsk', { name: role.name })),
+        this.button(t('team.delete'), 'btn danger small', () => void this.deletePost(role)),
+        this.button(t('setup.cancel'), 'btn ghost small', () => {
+          this.confirmDelete = '';
+          this.render();
+        }),
+      );
+    } else {
+      actions.append(
+        this.iconButton(t('team.up', { name: role.name }), ICONS.up, () => void this.movePost(role, -1), index === 0),
+        this.iconButton(t('team.down', { name: role.name }), ICONS.down, () => void this.movePost(role, 1), index === count - 1),
+        this.button(t('team.edit'), 'btn ghost small', () => this.edit(structuredClone(role))),
+        this.button(t('team.delete'), 'btn ghost small', () => {
+          this.confirmDelete = role.id;
+          this.render();
+        }),
+      );
+    }
+    row.append(actions);
+    return row;
+  }
+
+  private iconButton(label: string, path: string, run: () => void, disabled = false): HTMLButtonElement {
+    const b = h('button', 'icon-btn');
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.append(icon(path));
+    b.disabled = disabled || this.busy;
+    b.addEventListener('click', run);
+    return b;
+  }
+
+  /** "Opus · high", or "Auto" when the master picks. */
+  private runLabel(role: Pick<TeamRole, 'model' | 'effort'>): string {
+    if (!role.model && !role.effort) return t('team.auto');
+    const model = role.model ? (this.models().find((m) => m.value === role.model)?.label ?? role.model) : t('team.autoModel');
+    return `${model} · ${role.effort ? effortLabel(role.effort) : t('team.autoEffort')}`;
+  }
+
+  private edit(role: TeamRole): void {
+    this.draft = role;
+    this.draftDirty = !role.id;
+    this.draftError = null;
+    this.confirmPostBypass = false;
+    this.agents = null;
+    this.note = null;
+    this.render();
+  }
+
+  private async openAgents(): Promise<void> {
+    this.agents = [];
+    this.render();
+    this.agents = await this.hub.agentFiles();
+    this.render();
+  }
+
+  private agentList(files: AgentFile[]): HTMLElement {
+    const f = this.field(t('team.agents'), t('team.agents.hint'));
+    const box = h('div', 'setup-repos');
+    if (files.length === 0) box.append(h('div', 'setup-hint', t('team.agents.none')));
+    for (const file of files) {
+      const row = h('div', 'setup-repo remote');
+      row.title = file.path;
+      const text = h('span', 'setup-repo-text');
+      const title = h('span', 'setup-repo-title');
+      title.append(h('b', '', file.role.name), h('span', 'setup-tag', file.scope === 'user' ? t('team.agents.user') : file.scope));
+      text.append(title, h('span', '', file.role.description || file.path));
+      if (file.ignored.length > 0) text.append(h('span', 'team-ignored', t('team.agents.ignored', { list: file.ignored.join(', ') })));
+      row.append(text, this.button(t('team.agents.use'), 'btn ghost small', () => this.edit({ ...file.role, id: '' })));
+      box.append(row);
+    }
+    f.append(box);
+    return f;
+  }
+
+  private async movePost(role: TeamRole, delta: -1 | 1): Promise<void> {
+    this.view = await this.run(() => this.hub.moveRole(role.id, delta));
+    this.render();
+  }
+
+  private async deletePost(role: TeamRole): Promise<void> {
+    const r = await this.run(() => this.hub.deleteRole(role.id));
+    this.view = r;
+    this.confirmDelete = '';
+    this.flash(r.ok ? t('team.deleted', { name: role.name }) : t('team.err.working', { name: role.name }), r.ok ? 'ok' : 'error');
+    this.render();
+  }
+
+  /** Saves the post being edited, if it changed; false (and the editor shows why) when it is refused. */
+  private async saveDraft(): Promise<boolean> {
+    const draft = this.draft;
+    if (!draft || !this.draftDirty) {
+      this.draft = null;
+      return true;
+    }
+    const role = normalizeRole(draft);
+    const others = this.view?.settings.team ?? [];
+    const local = checkRole(role, others);
+    if (local) return this.refuse(local);
+    const r = await this.run(() => this.hub.saveRole(role));
+    this.view = r;
+    if (!r.ok) return this.refuse(r.error === 'working' ? 'working' : { field: r.field as RoleError['field'], problem: r.error as RoleError['problem'] });
+    this.draft = null;
+    this.draftDirty = false;
+    this.flash(t(draft.id ? 'team.saved' : 'team.created', { name: role.name }), 'ok');
+    this.render();
+    return true;
+  }
+
+  private refuse(error: RoleError | 'working'): false {
+    const name = this.draft?.name ?? '';
+    const text =
+      error === 'working'
+        ? t('team.err.working', { name })
+        : t('team.err', { field: t(`team.field.${error.field}`), problem: t(`team.problem.${error.problem}`, { max: error.field === 'team' ? TEAM_MAX : FOLDERS_MAX }) });
+    this.draftError = { field: error === 'working' ? '' : error.field, text };
+    this.note = { text, tone: 'error' };
+    this.render();
+    return false;
+  }
+
+  /** One post's fields; they save with Save, or when the dialog closes or another section opens. */
+  private postEditor(el: HTMLElement, v: SettingsView, d: TeamRole): void {
+    const s = v.settings;
+    this.head(el, d.id ? t('team.editTitle', { name: d.name }) : t('team.newTitle'), t('team.editor.lead'));
+    const changed = () => {
+      this.draftDirty = true;
+      this.draftError = null;
+    };
+    const mark = (field: string, f: HTMLElement, control: HTMLElement) => {
+      const label = f.querySelector<HTMLElement>('.setup-label');
+      const hint = f.querySelector<HTMLElement>('.setup-hint');
+      if (label) control.setAttribute('aria-labelledby', (label.id = `team-${field}-label`));
+      if (hint) control.setAttribute('aria-describedby', (hint.id = `team-${field}-hint`));
+      if (this.draftError?.field === field) {
+        f.classList.add('invalid');
+        control.setAttribute('aria-invalid', 'true');
+      }
+    };
+
+    const nameField = this.field(t('team.field.name'), t('team.name.hint', { session: sessionNameOf({ name: slugify(d.name, ROLE_LIMITS.name) || '…' }) }));
+    const name = this.input(d.name, t('team.name.placeholder'));
+    name.maxLength = 40;
+    name.dataset.autofocus = '';
+    name.addEventListener('input', () => {
+      d.name = name.value;
+      changed();
+      const hint = nameField.querySelector('.setup-hint');
+      if (hint) hint.textContent = t('team.name.hint', { session: sessionNameOf({ name: slugify(d.name, ROLE_LIMITS.name) || '…' }) });
+    });
+    nameField.append(name);
+    mark('name', nameField, name);
+    el.append(nameField);
+
+    const descField = this.field(t('team.field.description'), t('team.description.hint'));
+    const desc = h('textarea', 'setup-textarea');
+    desc.rows = 2;
+    desc.maxLength = ROLE_LIMITS.description;
+    desc.value = d.description;
+    desc.placeholder = t('team.description.placeholder');
+    desc.addEventListener('input', () => {
+      d.description = desc.value;
+      changed();
+    });
+    descField.append(desc);
+    mark('description', descField, desc);
+    el.append(descField);
+
+    const instrField = this.field(t('team.field.instructions'), t('team.instructions.hint'));
+    const instr = h('textarea', 'setup-textarea');
+    instr.rows = 7;
+    instr.maxLength = ROLE_LIMITS.instructions;
+    instr.spellcheck = false;
+    instr.value = d.instructions;
+    instr.placeholder = t('team.instructions.placeholder');
+    instr.addEventListener('input', () => {
+      d.instructions = instr.value;
+      changed();
+    });
+    instrField.append(instr);
+    mark('instructions', instrField, instr);
+    el.append(instrField);
+
+    el.append(this.postFolders(d, s, changed, mark));
+
+    const grid = h('div', 'setup-grid');
+    const runField = this.field(t('team.field.model'), t('team.model.hint'));
+    const model = h('select', 'setup-select');
+    const known = [...new Set([...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES, d.model].filter(Boolean))];
+    model.append(new Option(t('team.autoModelLong'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
+    model.value = d.model;
+    model.setAttribute('aria-label', t('team.field.model'));
+    const effort = h('select', 'setup-select');
+    effort.append(new Option(t('team.autoEffortLong'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
+    effort.value = d.effort;
+    effort.setAttribute('aria-label', t('team.field.effort'));
+    model.addEventListener('change', () => {
+      d.model = model.value;
+      changed();
+    });
+    effort.addEventListener('change', () => {
+      d.effort = effort.value as Effort | '';
+      changed();
+    });
+    const runRow = h('div', 'setup-row');
+    runRow.append(model, effort);
+    runField.append(runRow);
+    mark('model', runField, model);
+    grid.append(runField);
+
+    const modeField = this.field(t('team.field.mode'), this.modeHint(d.mode, s.permissionMode));
+    const mode = h('select', 'setup-select');
+    const hubMode = s.permissionMode ? t(`setup.mode.${s.permissionMode}` as Key) : t('setup.mode.inherit');
+    mode.append(new Option(t('team.mode.inherit', { mode: hubMode }), ''), ...ROLE_MODES.map((m) => new Option(t(`setup.mode.${m}` as Key), m)));
+    mode.value = this.confirmPostBypass ? 'bypassPermissions' : d.mode;
+    mode.addEventListener('change', () => {
+      const picked = mode.value as Mode | '';
+      // Allow everything only once confirmed below, as everywhere else.
+      if (picked === 'bypassPermissions' && d.mode !== picked) {
+        this.confirmPostBypass = true;
+        return this.render();
+      }
+      this.confirmPostBypass = false;
+      d.mode = picked;
+      changed();
+      this.render();
+    });
+    modeField.append(mode);
+    mark('mode', modeField, mode);
+    if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
+    grid.append(modeField);
+    el.append(grid);
+
+    const on = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = d.enabled;
+    box.addEventListener('change', () => {
+      d.enabled = box.checked;
+      changed();
+    });
+    const onText = h('span', 'setup-choice-text');
+    onText.append(h('span', 'setup-choice-title', t('team.enabled')), h('span', 'setup-choice-hint', t('team.enabled.hint')));
+    on.append(box, onText);
+    el.append(on);
+
+    const actions = h('div', 'setup-row team-editor-actions');
+    actions.append(
+      this.button(t('team.save'), 'btn primary', () => {
+        this.draftDirty = true;
+        void this.saveDraft();
+      }),
+      this.button(t('setup.cancel'), 'btn ghost', () => {
+        this.draft = null;
+        this.draftDirty = false;
+        this.note = null;
+        this.render();
+      }),
+    );
+    el.append(actions);
+  }
+
+  private postFolders(d: TeamRole, s: HubSettings, changed: () => void, mark: (field: string, f: HTMLElement, control: HTMLElement) => void): HTMLElement {
+    const f = this.field(t('team.field.folders'), t('team.folders.hint', { max: FOLDERS_MAX }));
+    const list = h('div', 'setup-folders');
+    const set = (folders: string[]) => {
+      d.folders = folders;
+      changed();
+      this.render();
+    };
+    d.folders.forEach((dir, i) => {
+      const row = h('div', 'setup-folder');
+      row.append(h('span', 'setup-folder-path', dir));
+      if (i === 0) row.append(h('span', 'setup-pill', t('team.folders.main')));
+      else row.append(this.button(t('team.folders.makeMain'), 'btn ghost small', () => set([dir, ...d.folders.filter((x) => x !== dir)])));
+      const remove = this.iconButton(t('team.folders.remove', { path: dir }), ICONS.remove, () => set(d.folders.filter((x) => x !== dir)));
+      row.append(remove);
+      list.append(row);
+    });
+    const row = h('div', 'setup-row');
+    const free = s.mainRepos.filter((r) => !d.folders.includes(r));
+    const full = d.folders.length >= FOLDERS_MAX;
+    if (free.length > 0) {
+      const pick = h('select', 'setup-select');
+      pick.setAttribute('aria-label', t('team.folders.repo'));
+      pick.append(new Option(t('team.folders.repo'), ''), ...free.map((r) => new Option(r.split(/[\\/]/).filter(Boolean).pop() ?? r, r)));
+      pick.disabled = full;
+      pick.addEventListener('change', () => pick.value && set([...d.folders, pick.value]));
+      row.append(pick);
+    }
+    row.append(
+      this.button(
+        t('team.folders.add'),
+        'btn',
+        async () => {
+          const dir = await this.hub.pickFolder();
+          if (dir && !d.folders.includes(dir)) set([...d.folders, dir]);
+        },
+        full,
+      ),
+    );
+    f.append(list, row);
+    mark('folders', f, list);
+    return f;
+  }
+
+  /** What the chosen mode means next to the other sessions: a bypass mismatch holds their messages. */
+  private modeHint(mode: Mode | '', hub: Mode | ''): string {
+    const bypass = (m: Mode | '') => m === 'bypassPermissions';
+    return mode && bypass(mode) !== bypass(hub) ? t('team.mode.mismatch') : t('team.mode.hint');
+  }
+
+  private postBypassConfirm(d: TeamRole, changed: () => void): HTMLElement {
+    const box = h('div', 'setup-confirm');
+    const label = h('label', 'setup-toggle');
+    const check = h('input');
+    check.type = 'checkbox';
+    label.append(check, h('span', 'setup-choice-hint', t('team.mode.bypassConfirm', { name: d.name || '…' })));
+    const enable = this.button(
+      t('setup.mode.bypassEnable'),
+      'btn danger',
+      () => {
+        this.confirmPostBypass = false;
+        d.mode = 'bypassPermissions';
+        changed();
+        this.render();
+      },
+      true,
+    );
+    check.addEventListener('change', () => (enable.disabled = !check.checked));
+    const cancel = this.button(t('setup.cancel'), 'btn ghost', () => {
+      this.confirmPostBypass = false;
+      this.render();
+    });
+    const row = h('div', 'setup-row');
+    row.append(enable, cancel);
+    box.append(label, row);
+    return box;
   }
 
   private about(el: HTMLElement, v: SettingsView): void {
