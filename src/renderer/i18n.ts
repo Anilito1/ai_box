@@ -440,6 +440,7 @@ const en = {
   'team.field.effort': 'Effort',
   'team.field.mode': 'Permission mode',
   'team.field.team': 'Team',
+  'team.field.enabled': 'Active',
   'team.name.hint': 'Its worker will be called {session}.',
   'team.name.placeholder': 'e.g. backend',
   'team.description.hint': 'Read by the master to route a task: write it as a rule (“anything that touches the API, the database or the migrations”).',
@@ -464,7 +465,7 @@ const en = {
   'team.saved': 'Post {name} saved.',
   'team.created': 'Post {name} created. It sleeps until its first mission.',
   'team.err': '{field}: {problem}',
-  'team.err.working': '{name} is at work: its name, main folder or switching it off can change once it is asleep.',
+  'team.err.working': '{name} is at work: its name, folders or switching it off can change once it is asleep.',
   'team.problem.required': 'required.',
   'team.problem.tooLong': 'too long.',
   'team.problem.format': 'not valid (an existing folder, a model name).',
@@ -472,6 +473,7 @@ const en = {
   'team.problem.taken': 'already taken by another post or worker.',
   'team.problem.tooMany': '{max} at most.',
   'team.problem.duplicate': 'the same folder is listed twice.',
+  'team.problem.locked': 'only you can change it on a post with its own permission mode.',
 };
 
 export type Key = keyof typeof en;
@@ -918,6 +920,7 @@ const fr: Record<Key, string> = {
   'team.field.effort': 'Effort',
   'team.field.mode': 'Mode de permissions',
   'team.field.team': 'Équipe',
+  'team.field.enabled': 'Actif',
   'team.name.hint': 'Son worker s’appellera {session}.',
   'team.name.placeholder': 'ex. backend',
   'team.description.hint': 'Lue par le maître pour router une tâche : écris-la comme une règle (« tout ce qui touche l’API, la base ou les migrations »).',
@@ -942,7 +945,7 @@ const fr: Record<Key, string> = {
   'team.saved': 'Poste {name} enregistré.',
   'team.created': 'Poste {name} créé. Il dort jusqu’à sa première mission.',
   'team.err': '{field} : {problem}',
-  'team.err.working': '{name} est au travail : son nom, son dossier principal ou sa désactivation changeront une fois endormi.',
+  'team.err.working': '{name} est au travail : son nom, ses dossiers ou sa désactivation changeront une fois endormi.',
   'team.problem.required': 'obligatoire.',
   'team.problem.tooLong': 'trop long.',
   'team.problem.format': 'non valide (un dossier existant, un nom de modèle).',
@@ -950,6 +953,7 @@ const fr: Record<Key, string> = {
   'team.problem.taken': 'déjà pris par un autre poste ou worker.',
   'team.problem.tooMany': '{max} au plus.',
   'team.problem.duplicate': 'le même dossier apparaît deux fois.',
+  'team.problem.locked': 'toi seul peux le changer sur un poste qui a son propre mode de permissions.',
 };
 
 const query = new URLSearchParams(location.search);

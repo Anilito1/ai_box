@@ -11,7 +11,8 @@ export const ROLE_LIMITS = { name: 24, description: 400, instructions: 8000 } as
 export const ROLE_MODES: Mode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
 /** Models the settings offer for the master's choice, strongest first. */
 export const AUTO_MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
-const MODEL = /^[\w.:[\]-]{1,80}$/;
+/** Never a leading dash: the name goes on Claude Code's command line. */
+const MODEL = /^\w[\w.:[\]-]{0,79}$/;
 const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/;
 /** The master's session is "hub-maitre" or "hub-master"; "hub" and "worker" would read as the hub itself. */
 const RESERVED = new Set(['master', 'maitre', 'hub', 'worker']);
@@ -49,8 +50,9 @@ export function normalizeRole(raw: unknown): TeamRole {
   };
 }
 
-export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'team';
-export type RoleProblem = 'required' | 'tooLong' | 'format' | 'reserved' | 'taken' | 'tooMany' | 'duplicate';
+export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'enabled' | 'team';
+/** `locked`: the master may not move a post that has a permission mode of its own. */
+export type RoleProblem = 'required' | 'tooLong' | 'format' | 'reserved' | 'taken' | 'tooMany' | 'duplicate' | 'locked';
 export interface RoleError {
   field: RoleField;
   problem: RoleProblem;
@@ -211,8 +213,12 @@ export function resolveChoice(i: {
   if (wanted) {
     if (i.locked.model) notes.push('modelLocked');
     else if (i.post?.model) notes.push('modelFixed');
-    else if (!i.allowed.includes(wanted)) return { error: 'model' };
-    else model = wanted;
+    else {
+      // As the settings spell it: an allowed model may carry capitals.
+      const allowed = i.allowed.find((a) => a.toLowerCase() === wanted);
+      if (!allowed) return { error: 'model' };
+      model = allowed;
+    }
   }
   const asked = i.requested.effort;
   if (asked) {

@@ -810,11 +810,13 @@ export class SessionManager extends EventEmitter {
           s.busySince = null;
           s.idleAt = Date.now();
         }
-        if (s.handoff) {
-          // The handoff note: kept for the next conversation unless new work came in while it was written.
-          s.handoff = false;
+        // The handoff note, kept for the next conversation. Work that came in while it was written may share its
+        // turn: then the result answers that work, and goes where any result goes.
+        const handoff = s.handoff && !s.handoffStale;
+        s.handoff = false;
+        if (handoff) {
           const note = msg.subtype === 'success' ? msg.result.trim().slice(0, NOTE_MAX) : '';
-          if (note && !s.handoffStale) Object.assign(s, { note, noteFresh: true });
+          if (note) Object.assign(s, { note, noteFresh: true });
         } else if (msg.subtype === 'success') {
           if (msg.result.trim()) s.lastMessage = msg.result;
           this.event(s, 'turn_done');
@@ -1412,8 +1414,8 @@ export class SessionManager extends EventEmitter {
   // ---------- team ----------
 
   /**
-   * Sessions follow the team: one per post, created asleep; a post removed takes its session along. Its name and main
-   * folder change while it sleeps (saveRole makes sure of it); a disabled post's worker is closed and hidden.
+   * Sessions follow the team: one per post, created asleep; a post removed takes its session along. Its name and
+   * folders change while it sleeps (saveRole makes sure of it); a disabled post's worker is closed and hidden.
    */
   private syncTeam(): void {
     const { cfg } = this.opts;
@@ -1436,13 +1438,11 @@ export class SessionManager extends EventEmitter {
         // A conversation belongs to its folder: a new main folder starts a new one (the handoff note goes along).
         if (!samePath(s.cwd, role.folders[0])) Object.assign(s, { cwd: role.folders[0], sessionId: randomUUID(), started: false, historyLoad: null });
       }
-      if (role.model && role.model !== s.fixedModel) this.setModel(s.id, role.model, false);
-      if (role.effort && role.effort !== s.fixedEffort) this.setEffort(s.id, role.effort, false);
-      if (s.query && role.mode && role.mode !== s.mode) this.setMode(s.id, role.mode);
     }
     for (const role of cfg.team) {
       if (this.sessions.has(role.id)) continue;
-      const s = this.create(role.id, 'worker', sessionNameOf(role), '', role.folders[0], role.model, role.effort || null);
+      // A post in auto starts with the usual worker model and effort, until the master picks some.
+      const s = this.create(role.id, 'worker', sessionNameOf(role), '', role.folders[0], role.model || cfg.worker.model, role.effort || cfg.worker.effort || null);
       Object.assign(s, { roleId: role.id, status: 'exited' });
       if (role.enabled) this.shownPosts.add(s.id);
     }
@@ -1450,9 +1450,10 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * Creates (no known id) or replaces a post. The master's tools cannot change a post's permission mode. A post's
-   * name, main folder and switching it off apply while its worker sleeps: an idle one is put to sleep, one at work
-   * refuses ("working").
+   * Creates (no known id) or replaces a post. The master's tools cannot change a post's permission mode, nor the
+   * folders of a post that has a mode of its own (that would carry its permissions elsewhere). A post's name, folders
+   * and switching it off apply while its worker sleeps (they are fixed at launch): an idle one is put to sleep, one
+   * at work refuses ("working").
    */
   saveRole(raw: unknown, by: 'user' | 'master'): RoleSave {
     const { cfg } = this.opts;
@@ -1460,18 +1461,45 @@ export class SessionManager extends EventEmitter {
     if ('error' in check) return check;
     const role = check.role;
     const before = cfg.team.find((r) => r.id === role.id) ?? null;
-    if (by === 'master') role.mode = before?.mode ?? '';
+    const moved = !!before && before.folders.map((f) => f.toLowerCase()).join('\n') !== role.folders.map((f) => f.toLowerCase()).join('\n');
+    if (by === 'master') {
+      role.mode = before?.mode ?? '';
+      if (moved && before?.mode) return { error: { field: 'folders', problem: 'locked' } };
+      // Nor turn such a post back on once the user switched it off.
+      if (before?.mode && !before.enabled && role.enabled) return { error: { field: 'enabled', problem: 'locked' } };
+    }
     const name = sessionNameOf(role);
     if ([...this.sessions.values()].some((s) => s.name === name && s.roleId !== role.id)) return { error: { field: 'name', problem: 'taken' } };
     const s = before ? this.sessions.get(before.id) : undefined;
-    const structural = !!before && (before.name !== role.name || !samePath(before.folders[0], role.folders[0]) || (before.enabled && !role.enabled));
+    const structural = !!before && (before.name !== role.name || moved || (before.enabled && !role.enabled));
     if (structural && s?.inbox) {
       if (!this.settled(s)) return { error: 'working' };
       this.stop(s.id);
     }
     cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
+    if (s && before) this.applyRun(s, before, role);
     this.teamChanged();
     return { role, before };
+  }
+
+  /**
+   * A post's model, effort or mode changed: its worker takes the new value now, over one picked by hand before. Back
+   * to auto, it takes the usual worker values at its next launch, until the master picks some.
+   */
+  private applyRun(s: Session, before: TeamRole, role: TeamRole): void {
+    const { cfg } = this.opts;
+    if (role.model !== before.model) {
+      s.userModel = false;
+      if (role.model) this.setModel(s.id, role.model, false);
+      else s.fixedModel = cfg.worker.model;
+    }
+    if (role.effort !== before.effort) {
+      s.userEffort = false;
+      if (role.effort) this.setEffort(s.id, role.effort, false);
+      else s.fixedEffort = cfg.worker.effort || null;
+    }
+    const mode = role.mode || this.hubMode();
+    if (role.mode !== before.mode && s.query && mode) this.setMode(s.id, mode);
   }
 
   /** False when its worker is in the middle of something. */
@@ -1537,8 +1565,9 @@ export class SessionManager extends EventEmitter {
     const out: Partial<TeamRole> = {};
     if (args.model != null) {
       const model = args.model.trim().toLowerCase();
-      if (model && model !== 'auto' && !cfg.workerModels.includes(model)) throw new Error(t('choice.badModel', { model, allowed: cfg.workerModels.join(', ') }));
-      out.model = model === 'auto' ? '' : model;
+      const allowed = cfg.workerModels.find((a) => a.toLowerCase() === model);
+      if (model && model !== 'auto' && !allowed) throw new Error(t('choice.badModel', { model, allowed: cfg.workerModels.join(', ') }));
+      out.model = model === 'auto' ? '' : (allowed ?? '');
     }
     if (args.effort != null) out.effort = args.effort === 'auto' ? '' : capEffort(args.effort as Effort, cfg.workerMaxEffort);
     return out;
@@ -1857,6 +1886,8 @@ export class SessionManager extends EventEmitter {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
+        // Its note written, the hub closed before the worker did: the next conversation starts afresh all the same.
+        if (s.noteFresh) this.freshStart(s);
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
       }
     } catch {

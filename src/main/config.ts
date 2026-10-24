@@ -198,10 +198,12 @@ export type RoleCheck = { role: TeamRole } | { error: RoleError };
 export function prepareRole(cfg: HubConfig, raw: unknown): RoleCheck {
   const role = normalizeRole(raw);
   if (!cfg.team.some((r) => r.id === role.id)) role.id = '';
+  // Resolved before the check, so the same folder written two ways counts as a duplicate; a relative one stays as
+  // is and is refused.
+  role.folders = role.folders.map((f) => (isAbsolute(f) ? resolve(f) : f));
   const error = checkRole(role, cfg.team);
   if (error) return { error };
   if (!role.folders.every(isDir)) return { error: { field: 'folders', problem: 'format' } };
-  role.folders = role.folders.map((f) => resolve(f));
   if (!role.id) role.id = `r-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
   return { role };
 }

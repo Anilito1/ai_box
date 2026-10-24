@@ -74,7 +74,7 @@ const en = {
   'tool.createRole':
     'Creates a post (a permanent worker), only when the user asks. Refused if the name is taken: change an existing post with update_role. Its permission mode is the one of the other sessions; only the user changes it, in the settings.',
   'tool.updateRole':
-    'Changes the fields given of a post, only when the user asks; the others stay. Returns each change with its former value (the former instructions in full). Its name and main folder change while its worker sleeps.',
+    'Changes the fields given of a post, only when the user asks; the others stay. Returns each change with its former value (the former instructions in full). Its name and folders change while its worker sleeps; the folders of a post with a permission mode of its own are the user’s to change.',
   'tool.deleteRole':
     'Deletes a post, only when the user asks. The user confirms it in the hub before anything happens. Its conversation stays on disk but the post and its handoff note are gone.',
   'tool.role.byName': 'Name of the post (e.g. "backend")',
@@ -148,7 +148,7 @@ const en = {
   'report.none': '(none)',
   'worker.notFound': 'Worker not found: "{name}". Use list_workers.',
   'role.notFound': 'Post not found: "{name}". Use list_roles.',
-  'role.working': '{name} is at work: change its name or main folder, or switch it off, once it is asleep (close_worker when it is done).',
+  'role.working': '{name} is at work: change its name or folders, or switch it off, once it is asleep (close_worker when it is done).',
   'role.invalid': 'Post not saved: {field} {problem}.',
   'role.problem.required': 'is missing',
   'role.problem.tooLong': 'is too long',
@@ -157,6 +157,7 @@ const en = {
   'role.problem.taken': 'is already taken by another post or worker',
   'role.problem.tooMany': 'has too many entries',
   'role.problem.duplicate': 'lists the same folder twice',
+  'role.problem.locked': 'is the user’s to change: this post has a permission mode of its own',
   'role.none': 'No post yet. The user can create some in Settings › Team, or ask you to (create_role).',
   'role.off': 'off',
   'role.hubMode': 'same as the other sessions',
@@ -271,7 +272,7 @@ const fr: Record<Key, string> = {
   'tool.createRole':
     "Crée un poste (un worker permanent), seulement à la demande de l'utilisateur. Refusé si le nom est pris : modifie un poste existant avec update_role. Son mode de permission est celui des autres sessions ; seul l'utilisateur le change, dans les Réglages.",
   'tool.updateRole':
-    "Change les champs donnés d'un poste, seulement à la demande de l'utilisateur ; les autres restent. Renvoie chaque changement avec l'ancienne valeur (les anciennes consignes en entier). Son nom et son dossier principal changent pendant que son worker dort.",
+    "Change les champs donnés d'un poste, seulement à la demande de l'utilisateur ; les autres restent. Renvoie chaque changement avec l'ancienne valeur (les anciennes consignes en entier). Son nom et ses dossiers changent pendant que son worker dort ; les dossiers d’un poste qui a son propre mode de permission reviennent à l’utilisateur.",
   'tool.deleteRole':
     "Supprime un poste, seulement à la demande de l'utilisateur. L'utilisateur le confirme dans le hub avant que rien ne se passe. Sa conversation reste sur le disque mais le poste et sa note de passation disparaissent.",
   'tool.role.byName': 'Nom du poste (ex. "backend")',
@@ -346,7 +347,7 @@ const fr: Record<Key, string> = {
   'report.none': '(aucun)',
   'worker.notFound': 'Worker introuvable : "{name}". Utilise list_workers.',
   'role.notFound': 'Poste introuvable : "{name}". Utilise list_roles.',
-  'role.working': '{name} est au travail : change son nom ou son dossier principal, ou désactive-le, une fois endormi (close_worker quand il a fini).',
+  'role.working': '{name} est au travail : change son nom ou ses dossiers, ou désactive-le, une fois endormi (close_worker quand il a fini).',
   'role.invalid': 'Poste non enregistré : {field} {problem}.',
   'role.problem.required': 'manque',
   'role.problem.tooLong': 'est trop long',
@@ -355,6 +356,7 @@ const fr: Record<Key, string> = {
   'role.problem.taken': 'est déjà pris par un autre poste ou worker',
   'role.problem.tooMany': 'a trop d’éléments',
   'role.problem.duplicate': 'contient deux fois le même dossier',
+  'role.problem.locked': 'se change seulement par l’utilisateur : ce poste a un mode de permission à lui',
   'role.none': "Aucun poste pour l'instant. L'utilisateur peut en créer dans Réglages › Équipe, ou te le demander (create_role).",
   'role.off': 'désactivé',
   'role.hubMode': 'comme les autres sessions',

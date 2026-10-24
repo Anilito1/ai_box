@@ -1048,7 +1048,8 @@ export class SetupView {
 
   private edit(role: TeamRole): void {
     this.draft = role;
-    this.draftDirty = !role.id;
+    // Untouched, a new post is dropped on leaving; once typed in, it is saved like any other setting.
+    this.draftDirty = false;
     this.draftError = null;
     this.confirmPostBypass = false;
     this.agents = null;

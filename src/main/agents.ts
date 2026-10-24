@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { agentToRole, parseAgentFile } from '../shared/team';
@@ -28,7 +28,9 @@ export function agentFiles(cfg: HubConfig): AgentFile[] {
     for (const name of names.slice(0, FILES_MAX)) {
       const path = join(dir, name);
       try {
-        if (!statSync(path).isFile() || statSync(path).size > FILE_BYTES_MAX) continue;
+        // A plain file only: a link in a cloned repo could point anywhere on this computer.
+        const info = lstatSync(path);
+        if (!info.isFile() || info.size > FILE_BYTES_MAX) continue;
         const parsed = parseAgentFile(readFileSync(path, 'utf8'));
         if (!parsed) continue;
         const { role, ignored } = agentToRole(parsed, folder);
