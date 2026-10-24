@@ -205,7 +205,7 @@ const en = {
   'setup.github.token.hint': 'Fine-grained (Contents: read and write) or classic (repo).',
   'setup.github.share': 'Let the sessions use this account (git push, gh)',
   'setup.github.share.hint':
-    'With a token, the sessions receive it in GH_TOKEN: a session can read it. With the GitHub CLI, no token goes into their environment. Otherwise sessions use your own git setup.',
+    'Off by default. With a token, the sessions receive it in GH_TOKEN: a session can read it. With the GitHub CLI, no token goes into their environment. Left off, sessions use your own git setup.',
   'setup.github.advanced': 'Advanced',
   'setup.github.other': 'Use another account or method',
   'setup.err.cloneDenied': 'GitHub refused access to this repo: connect GitHub with an account that can read it.',
@@ -472,7 +472,7 @@ const fr: Record<Key, string> = {
   'setup.github.token.hint': 'Fine-grained (Contents : lecture et écriture) ou classique (repo).',
   'setup.github.share': 'Laisser les sessions utiliser ce compte (git push, gh)',
   'setup.github.share.hint':
-    'Avec un token, les sessions le reçoivent dans GH_TOKEN : une session peut le lire. Avec le CLI GitHub, aucun token ne passe dans leur environnement. Sinon, elles utilisent ta propre config git.',
+    'Désactivé par défaut. Avec un token, les sessions le reçoivent dans GH_TOKEN : une session peut le lire. Avec le CLI GitHub, aucun token ne passe dans leur environnement. Désactivé, elles utilisent ta propre config git.',
   'setup.github.advanced': 'Avancé',
   'setup.github.other': 'Utiliser un autre compte ou une autre méthode',
   'setup.err.cloneDenied': 'GitHub a refusé l’accès à ce repo : connecte GitHub avec un compte qui peut le lire.',

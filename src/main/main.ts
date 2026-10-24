@@ -47,6 +47,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
 const DECISIONS = ['allow', 'always', 'deny'];
 const API_KEY = /^sk-ant-[\w-]{20,300}$/;
+const MODEL = /^[\w.:[\]-]{1,80}$/;
 const GITHUB_TOKEN = /^(gh[pousr]_[A-Za-z0-9_]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
 
 // One folder whatever the build is named (a packaged build takes its productName): settings and conversations follow.
@@ -147,7 +148,18 @@ function parseImages(value: unknown): ImageInput[] | null {
 }
 
 /** The hub's own window, showing its own page: nothing else may drive sessions, settings or secrets. */
-const trusted = (e: IpcMainEvent | IpcMainInvokeEvent) => !!win && e.sender === win.webContents && e.senderFrame?.url.startsWith('file://') === true;
+const PAGE = join(here, 'renderer', 'index.html');
+/** Compared as file paths: URL encoding (spaces in an install folder) and drive-letter case may differ. */
+function isPage(url: string | undefined): boolean {
+  if (!url?.startsWith('file:')) return false;
+  try {
+    const path = fileURLToPath(url.split(/[?#]/)[0]);
+    return process.platform === 'win32' ? path.toLowerCase() === PAGE.toLowerCase() : path === PAGE;
+  } catch {
+    return false;
+  }
+}
+const trusted = (e: IpcMainEvent | IpcMainInvokeEvent) => !!win && e.sender === win.webContents && isPage(e.senderFrame?.url);
 const on = (channel: string, fn: (...args: unknown[]) => void) =>
   ipcMain.on(channel, (e, ...args: unknown[]) => {
     if (trusted(e)) fn(...args);
@@ -259,7 +271,7 @@ class Hub {
       else mgr.refuse(id, text, t('images.invalid'));
     });
     on('session:interrupt', (id) => isStr(id) && mgr.interrupt(id));
-    on('session:model', (id, model) => isStr(id) && isStr(model) && mgr.setModel(id, model));
+    on('session:model', (id, model) => isStr(id) && isStr(model) && MODEL.test(model) && mgr.setModel(id, model));
     on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
     on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
     on('session:decide', (id, requestId, decision) => {

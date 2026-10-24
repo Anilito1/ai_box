@@ -40,7 +40,7 @@ function defaults(lang: Lang): HubConfig {
     workerModels: ['opus', 'sonnet'],
     permissionMode: '',
     masterInstructions: '',
-    github: { clientId: '', source: 'none', login: '', shareWithSessions: true },
+    github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
   };
 }
 

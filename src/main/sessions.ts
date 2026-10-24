@@ -152,6 +152,7 @@ export interface ManagerOptions {
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
+const HUB_TOOLS = ['spawn_worker', 'message_worker', 'list_workers', 'list_repos', 'worker_report', 'close_worker'];
 const WORKER_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
 const ITEMS_MAX = 1500;
 const ITEMS_TRIM = 300;
@@ -471,7 +472,8 @@ export class SessionManager extends EventEmitter {
       includePartialMessages: true,
       disallowedTools: isMaster ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'] : ['AskUserQuestion'],
       mcpServers: { hub: this.hubServer(s.role) },
-      allowedTools: ['mcp__hub'],
+      // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
+      allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
       canUseTool: (name, input, o) => this.askPermission(s, name, input, o),
       onElicitation: (req, o) => this.answerElicitation(s, req, o.signal),
       env: this.environment(),
