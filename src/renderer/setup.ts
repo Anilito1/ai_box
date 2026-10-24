@@ -530,12 +530,12 @@ export class SetupView {
       this.render();
       return;
     }
-    this.device = r;
+    const flow = (this.device = r);
     this.note = null;
     this.render();
     this.hub.openExternal(r.verificationUri);
     const done = await this.hub.githubDeviceWait();
-    if (!this.device) return; // Cancelled meanwhile.
+    if (this.device !== flow) return; // Cancelled, or replaced by a newer sign-in, meanwhile.
     this.device = null;
     this.view = done;
     this.ghRepos = null;

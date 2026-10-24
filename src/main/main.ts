@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -32,13 +32,13 @@ import {
   type SettingsView,
 } from '../shared/types';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
-import { applyPatch, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
+import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { errorCode } from './errors';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
 import { setGitSignIn } from './git';
 import { RepoWatcher } from './repoStatus';
-import { findRepos } from './repos';
+import { findRepos, remoteOf } from './repos';
 import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
@@ -307,13 +307,14 @@ class Hub {
 
     handle('settings:get', () => this.view());
     handle('settings:save', (patch) => {
-      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n') };
+      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
       const bad = applyPatch(this.cfg, (patch ?? {}) as SettingsPatch);
       if (bad) return { ...this.view(), ok: false, error: bad };
       this.save();
       setLang(this.cfg.language);
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
+      if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
       // The page is built in one language: it is reloaded in the new one.
       if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
       return { ...this.view(), ok: true, error: '' };
@@ -321,6 +322,8 @@ class Hub {
     handle('settings:api-key', async (key) => {
       if (key === null) {
         await this.secrets.set('anthropicApiKey', null);
+        if (this.cfg.provider === 'api-key') this.cfg.provider = 'claude-code';
+        this.save();
         return { ...this.view(), ok: true, error: '' };
       }
       if (!isStr(key) || !API_KEY.test(key.trim())) return { ...this.view(), ok: false, error: 'format' };
@@ -333,8 +336,9 @@ class Hub {
       return { ...this.view(), ok: true, error: '' };
     });
     handle('claude:check', async () => {
-      this.executable = await claudeExecutable(this.cfg);
-      return claudeStatus(this.cfg, mgr.environment());
+      const status = await claudeStatus(this.cfg, mgr.environment());
+      this.executable = status.executable;
+      return status;
     });
     handle('github:gh-login', () => ghLogin());
     // Whether the saved sign-in still works: a token may have expired or been revoked, gh may be signed out.
@@ -416,7 +420,7 @@ class Hub {
       if (!isStr(slug) || !SLUG.test(slug) || !isStr(root) || !this.cfg.workspaces.includes(root)) return { ...this.view(), ok: false, error: 'format' };
       const dest = join(root, slug.split('/')[1]);
       // Already cloned there: it is only added. Any other folder of that name is left alone.
-      if (existsSync(dest) && !existsSync(join(dest, '.git'))) return { ...this.view(), ok: false, error: 'exists' };
+      if (existsSync(dest) && remoteOf(dest).toLowerCase() !== `github.com/${slug}`.toLowerCase()) return { ...this.view(), ok: false, error: 'exists' };
       if (!existsSync(dest)) {
         try {
           await cloneRepo(slug, root, dest);
@@ -454,14 +458,6 @@ class Hub {
     return { ...this.view(), ok: true, error: '' };
   }
 }
-
-const isDir = (p: string) => {
-  try {
-    return statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
-};
 
 async function start(): Promise<void> {
   const hub = new Hub();

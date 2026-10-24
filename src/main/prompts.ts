@@ -5,8 +5,14 @@ import { lang } from './i18n';
 /** A worker idle this long (no turn, no background task) is closed; a message resumes it with its conversation. */
 export const IDLE_CLOSE_MIN = 15;
 
+/** Name a new master gets in a language. */
+export const defaultMasterName = (l: Lang = lang()) => (l === 'fr' ? 'hub-maitre' : 'hub-master');
+
+let activeMaster = '';
+/** The running master keeps its name across language changes: workers must address the session that exists. */
+export const setMasterName = (name: string) => (activeMaster = name);
 /** The master's session name: workers address it with SendMessage. */
-export const masterName = (l: Lang = lang()) => (l === 'fr' ? 'hub-maitre' : 'hub-master');
+export const masterName = () => activeMaster || defaultMasterName();
 
 /** First line of a message the hub delivers on someone's behalf as a user turn. */
 export function tags(l: Lang = lang()) {

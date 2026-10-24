@@ -42,9 +42,9 @@ function installedExecutable(): Promise<string> {
 }
 
 /** Executable the sessions run: the configured one, else the SDK's own binary, else the user's install. */
-export async function claudeExecutable(cfg: HubConfig): Promise<string> {
+export async function claudeExecutable(cfg: HubConfig, installed?: string): Promise<string> {
   if (cfg.claudePath && existsSync(cfg.claudePath)) return cfg.claudePath;
-  return bundledExecutable() || (await installedExecutable());
+  return bundledExecutable() || (installed ?? (await installedExecutable()));
 }
 
 /**
@@ -97,7 +97,8 @@ export async function checkApiKey(key: string): Promise<string | null> {
  * credentials it would use. The hub only reads this summary: the sign-in itself stays inside Claude Code.
  */
 export async function claudeStatus(cfg: HubConfig, env: Record<string, string>): Promise<ClaudeStatus> {
-  const [executable, installed] = await Promise.all([claudeExecutable(cfg), installedExecutable()]);
+  const installed = await installedExecutable();
+  const executable = await claudeExecutable(cfg, installed);
   const status: ClaudeStatus = { executable, installed, account: null, error: '' };
   if (!executable) return status;
   // A cloud provider authenticates with its own credentials, which Claude Code only tries on the first request (and

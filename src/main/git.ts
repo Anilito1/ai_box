@@ -8,6 +8,9 @@ export const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_
 /** Set by the main process: the GitHub sign-in of the hub, as a credential helper in git's environment. */
 let signIn: () => Record<string, string> = () => ({});
 export const setGitSignIn = (env: () => Record<string, string>) => (signIn = env);
+const NETWORK = new Set(['fetch', 'pull', 'push', 'clone', 'ls-remote']);
+/** The git subcommand of an argument list: its first word that is not an option or the value of a `-c`. */
+const subcommand = (args: string[]) => args.find((a, i) => !a.startsWith('-') && args[i - 1] !== '-c') ?? '';
 
 export interface GitOptions {
   timeout?: number;
@@ -30,7 +33,7 @@ const stripCredentials = (text: string) => text.replace(/\/\/[^/\s]*@/g, '//');
 
 /** The single place where the main process runs git: always an argument list, never a shell. */
 export function git(cwd: string, args: string[], { timeout = 15_000, interactive = false }: GitOptions = {}): Promise<string> {
-  const env = { ...GIT_ENV, ...signIn(), ...(interactive ? {} : { GCM_INTERACTIVE: 'never' }) };
+  const env = { ...GIT_ENV, ...(NETWORK.has(subcommand(args)) ? signIn() : {}), ...(interactive ? {} : { GCM_INTERACTIVE: 'never' }) };
   return new Promise((resolve, reject) => {
     // fsmonitor would run a program named in the repo's own config, which a session may have written.
     execFile('git', ['-c', 'core.fsmonitor=false', '-C', cwd, ...args], { env, timeout, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {

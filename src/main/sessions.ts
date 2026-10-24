@@ -36,7 +36,7 @@ import {
 } from '../shared/types';
 import { mainRepoPath, masterCwd, type HubConfig } from './config';
 import { t } from './i18n';
-import { IDLE_CLOSE_MIN, masterName, masterPrompt, tags, workerPrompt } from './prompts';
+import { defaultMasterName, IDLE_CLOSE_MIN, masterName, masterPrompt, setMasterName, tags, workerPrompt } from './prompts';
 import { findRepos, repoRootOf } from './repos';
 import {
   assistantItems,
@@ -244,8 +244,8 @@ export class SessionManager extends EventEmitter {
     const { cfg } = this.opts;
     const master =
       this.sessions.get(MASTER_ID) ??
-      this.create(MASTER_ID, 'master', masterName(), '', masterCwd(cfg), cfg.master.model, cfg.master.effort || null);
-    master.name = masterName(); // Follows the language: the workers' prompt gives them this name.
+      this.create(MASTER_ID, 'master', defaultMasterName(), '', masterCwd(cfg), cfg.master.model, cfg.master.effort || null);
+    setMasterName(master.name);
     void this.launch(master, master.started);
     // Idle workers stay closed: a message resumes them on demand. Only cut work is picked up again.
     for (const [id, why] of this.resumeOnStart) {
@@ -263,6 +263,34 @@ export class SessionManager extends EventEmitter {
     this.resumeOnStart.clear();
     this.sweepTimer = setInterval(() => this.closeIdle(), 60_000);
     this.pruneAttachments();
+  }
+
+  /**
+   * The master's settings changed: its model and effort apply now when given (else at its next launch, from
+   * settings.json), and a new folder starts a new conversation there (a conversation belongs to its folder).
+   */
+  updateMaster(): void {
+    const { cfg } = this.opts;
+    const s = this.sessions.get(MASTER_ID);
+    if (!s) return;
+    if (cfg.master.model !== s.fixedModel) {
+      if (cfg.master.model) this.setModel(s.id, cfg.master.model);
+      else s.fixedModel = '';
+    }
+    const effort = cfg.master.effort || null;
+    if (effort !== s.fixedEffort) {
+      if (effort) this.setEffort(s.id, effort);
+      else s.fixedEffort = null;
+    }
+    const cwd = masterCwd(cfg);
+    if (resolve(cwd).toLowerCase() === resolve(s.cwd).toLowerCase()) return this.changed();
+    const running = !!s.inbox;
+    if (running) this.stop(s.id);
+    Object.assign(s, { cwd, sessionId: randomUUID(), started: false, historyLoad: null, metrics: null, lastMessage: '' });
+    s.items.clear();
+    this.emit('items', s.id, [], true);
+    if (running) void this.launch(s, false);
+    this.changed();
   }
 
   /** A message the main process could not accept: kept visible in the conversation so its text is not lost. */
@@ -828,7 +856,7 @@ export class SessionManager extends EventEmitter {
       this.notice(s, t('notice.formDeclined', { server: req.serverName, message }), 'error');
       return Promise.resolve({ action: 'decline' });
     }
-    if (this.hubMode() === 'bypassPermissions') {
+    if (s.mode === 'bypassPermissions') {
       this.notice(s, t('notice.confirmAccepted', { server: req.serverName, message }), 'info');
       return Promise.resolve({ action: 'accept', content });
     }

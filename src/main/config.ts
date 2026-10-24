@@ -11,7 +11,7 @@ const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissi
 /** Usual homes of source checkouts, offered as working folders on a first run when they exist. */
 const USUAL_ROOTS = ['code', 'dev', 'projects', 'Projects', 'src', 'repos', 'workspace', join('Documents', 'GitHub'), 'Desktop'];
 
-const isDir = (p: string) => {
+export const isDir = (p: string) => {
   try {
     return statSync(p).isDirectory();
   } catch {
@@ -155,10 +155,11 @@ export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null 
   const next: HubConfig = structuredClone(cfg);
   const bad = merge(next, obj(patch));
   if (bad) return bad;
-  // Only folders that are git checkouts can be pinned: the git panel runs git in them.
-  const notRepo = next.mainRepos.find((p) => !existsSync(join(p, '.git')));
-  if (notRepo) return 'mainRepos';
-  if (next.workspaces.some((p) => !isDir(p))) return 'workspaces';
+  // Only git checkouts can be added to the main repos (the git panel runs git in them), and only existing folders
+  // to the working folders. Entries already there are kept even if their folder went away.
+  const added = (list: string[], before: string[]) => list.filter((p) => !before.includes(p));
+  if (added(next.mainRepos, cfg.mainRepos).some((p) => !existsSync(join(p, '.git')))) return 'mainRepos';
+  if (added(next.workspaces, cfg.workspaces).some((p) => !isDir(p))) return 'workspaces';
   Object.assign(cfg, next);
   return null;
 }

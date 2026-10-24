@@ -42,6 +42,15 @@ export function findRepos(root: string): RepoInfo[] {
   return repos;
 }
 
+/** host/path of the origin remote of a checkout (credentials removed), or empty. */
+export function remoteOf(dir: string): string {
+  try {
+    return describe(dir, join(dir, '.git')).remote;
+  } catch {
+    return '';
+  }
+}
+
 /** Root of the git repository containing `dir`, or null. */
 export function repoRootOf(dir: string): string | null {
   for (let d = resolve(dir); ; d = dirname(d)) {
