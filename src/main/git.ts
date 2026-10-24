@@ -66,7 +66,8 @@ function servedBy(url: string, prefix: string): boolean {
  */
 function credential(sign: NonNullable<GitSignIn>, once: boolean): { args: string[]; cleanup: () => void } {
   const key = `credential.${sign.prefix}.helper`;
-  const reset = ['-c', `${key}=`, '-c', 'core.askPass='];
+  // TLS stays verified for that host: a repo's config cannot point the request through an intercepting proxy.
+  const reset = ['-c', `${key}=`, '-c', 'core.askPass=', '-c', `http.${sign.prefix}/.sslVerify=true`];
   if ('helper' in sign) return { args: [...reset, '-c', `${key}=${sign.helper}`], cleanup: () => {} };
   if (!tokenDir) {
     // Left by a hub that crashed during a command: a folder in use is touched by every command, so it stays recent.
