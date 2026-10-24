@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   createSdkMcpServer,
   getSessionInfo,
@@ -50,9 +50,10 @@ import {
 } from '../shared/types';
 import { mainRepoPath, masterCwd, prepareRole, type HubConfig } from './config';
 import { assistantError, humanError } from './errors';
-import { lang, t } from './i18n';
+import { lang, t, tn } from './i18n';
 import {
   defaultMasterName,
+  handoffBlock,
   handoffRequest,
   IDLE_CLOSE_MIN,
   inside,
@@ -161,6 +162,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post'> {
   /** The user picked its model or effort by hand: the master's choices leave them alone. */
   userModel: boolean;
   userEffort: boolean;
+  /** Its handoff note went with the first message of the new conversation: once that conversation exists, it is used. */
+  noteSent: boolean;
 }
 
 type Persisted = {
@@ -202,12 +205,14 @@ export interface ManagerOptions {
   persist(): void;
 }
 
-export type RoleSave = { role: TeamRole; before: TeamRole | null } | { error: RoleError | 'working' };
+/** `notes`: the master's changes that a choice the user made by hand kept from applying. */
+export type RoleSave = { role: TeamRole; before: TeamRole | null; notes: ChoiceNote[] } | { error: RoleError | 'working' };
 
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
 const HUB_TOOLS = [
+  'message_master',
   'spawn_worker',
   'message_worker',
   'list_workers',
@@ -265,7 +270,7 @@ function modelHint(value: string, label: string): string {
 }
 
 // Tool calls that send a message to another session (worker ↔ worker, worker → master, master → worker).
-const OUTGOING = /^(SendMessage|mcp__hub__(message_worker|spawn_worker))$/;
+const OUTGOING = /^(SendMessage|mcp__hub__(message_worker|spawn_worker|message_master))$/;
 
 const AFFIRMATIVE = /^(yes|oui|ok|confirm(ed)?|accept(ed)?|approve(d)?|proceed|continue)$/i;
 const CONFIRM_FIELD = /confirm|proceed|accept|approve|continue|agree/i;
@@ -612,7 +617,7 @@ export class SessionManager extends EventEmitter {
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
-    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ? { role: post, note: s.note } : undefined);
+    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined);
     const options: Options = {
       cwd: s.cwd,
       ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
@@ -631,7 +636,7 @@ export class SessionManager extends EventEmitter {
       extraArgs: { name: s.name, 'replay-user-messages': null },
       includePartialMessages: true,
       disallowedTools: isMaster ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'] : ['AskUserQuestion'],
-      mcpServers: { hub: this.hubServer(s.role) },
+      mcpServers: { hub: this.hubServer(s) },
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
       allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
       canUseTool: (name, input, o) => this.askPermission(s, name, input, o),
@@ -720,6 +725,8 @@ export class SessionManager extends EventEmitter {
       case 'system':
         if (msg.subtype === 'init') {
           s.started = true;
+          // The note is in this conversation now: it leaves the hub.
+          if (s.noteSent) Object.assign(s, { note: '', noteSent: false });
           s.sessionId = msg.session_id;
           s.mode = msg.permissionMode;
           if (msg.effort) s.effort = msg.effort;
@@ -842,6 +849,8 @@ export class SessionManager extends EventEmitter {
         if (handoff) {
           const note = msg.subtype === 'success' ? msg.result.trim().slice(0, NOTE_MAX) : '';
           if (note) Object.assign(s, { note, noteFresh: true });
+          // Not written: the worker keeps its conversation as it is, and a note is asked again at its next sleep after work.
+          else this.notice(s, t('notice.noteFailed'), 'info', msg.subtype === 'success' ? '' : msg.subtype);
         } else if (msg.subtype === 'success') {
           // A turn that ended on an error carries Claude Code's wording as its result: the notice already said it, and
           // the previous turn's text would pass for this one's.
@@ -1044,10 +1053,18 @@ export class SessionManager extends EventEmitter {
 
   /** Into the running session, or resumes a closed one with its conversation. */
   private deliver(s: Session, prompt: Prompt): void {
+    prompt = this.withNote(s, prompt);
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
     const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission;
     void this.launch(s, s.started, lostMission ? { ...prompt, text: `${tags().mission(s.name)}\n${s.mission}\n\n${prompt.text}` } : prompt);
+  }
+
+  /** The first message of a post's conversation after a context renewal carries its handoff note. */
+  private withNote(s: Session, prompt: Prompt): Prompt {
+    if (!s.roleId || !s.note || s.started || prompt.handoff) return prompt;
+    s.noteSent = true;
+    return { ...prompt, text: `${prompt.text}\n\n${handoffBlock(s.note)}` };
   }
 
   /**
@@ -1259,8 +1276,13 @@ export class SessionManager extends EventEmitter {
 
   // ---------- hub tools (in-process MCP server) ----------
 
-  /** Master: workers, posts and repos. Workers: read-only list_workers + list_repos, to coordinate. */
-  private hubServer(role: Role) {
+  /**
+   * Master: workers, posts and repos. Workers: read-only list_workers + list_repos to coordinate, and message_master:
+   * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
+   * hub's own channel always reaches this hub's master.
+   */
+  private hubServer(s: Session) {
+    const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
     const run = async (fn: () => string | Promise<string>) => {
@@ -1273,7 +1295,13 @@ export class SessionManager extends EventEmitter {
     const byName = z.string().describe(t('tool.byName'));
     const listWorkers = tool('list_workers', t('tool.listWorkers'), {}, () => run(() => this.listWorkers()));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
-    if (role === 'worker') return createSdkMcpServer({ name: 'hub', version: '0.5.0', tools: [listWorkers, listRepos] });
+    if (role === 'worker') {
+      const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
+        run(() => this.messageMaster(s, message)),
+      );
+      return createSdkMcpServer({ name: 'hub', version: '0.6.0', tools: [listWorkers, listRepos, toMaster] });
+    }
+    const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
     // Models and effort are checked against the settings at each call (they may change while the master runs).
     // nullish: models often send null for an optional field they mean to leave out.
@@ -1296,7 +1324,7 @@ export class SessionManager extends EventEmitter {
     };
     return createSdkMcpServer({
       name: 'hub',
-      version: '0.5.0',
+      version: '0.6.0',
       tools: [
         tool(
           'spawn_worker',
@@ -1348,7 +1376,7 @@ export class SessionManager extends EventEmitter {
           'create_role',
           t('tool.createRole'),
           { name: z.string().describe(t('tool.role.name')), template: z.enum(TEMPLATE_IDS).nullish().describe(t('tool.role.template')), ...postFields },
-          (args) => run(() => this.createRole(args)),
+          (args, extra) => run(() => this.createRole(args, signalOf(extra))),
         ),
         tool(
           'update_role',
@@ -1359,11 +1387,9 @@ export class SessionManager extends EventEmitter {
             append_instructions: z.string().nullish().describe(t('tool.role.append')),
             ...postFields,
           },
-          (args) => run(() => this.updateRole(args)),
+          (args, extra) => run(() => this.updateRole(args, signalOf(extra))),
         ),
-        tool('delete_role', t('tool.deleteRole'), { name: byPost }, ({ name }, extra) =>
-          run(() => this.deleteAsked(name, (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal)),
-        ),
+        tool('delete_role', t('tool.deleteRole'), { name: byPost }, ({ name }, extra) => run(() => this.deleteAsked(name, signalOf(extra)))),
       ],
     });
   }
@@ -1497,6 +1523,20 @@ export class SessionManager extends EventEmitter {
    * at work refuses ("working").
    */
   saveRole(raw: unknown, by: 'user' | 'master'): RoleSave {
+    const check = this.checkRole(raw, by);
+    if ('error' in check) return check;
+    const { role, before } = check;
+    const s = before ? this.sessions.get(before.id) : undefined;
+    if (check.structural && s?.inbox) this.stop(s.id);
+    const { cfg } = this.opts;
+    cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
+    const notes = s && before ? this.applyRun(s, before, role, by) : [];
+    this.teamChanged();
+    return { role, before, notes };
+  }
+
+  /** Every check of saveRole, nothing changed: the master's tools ask the user what needs it before saving. */
+  private checkRole(raw: unknown, by: 'user' | 'master'): { role: TeamRole; before: TeamRole | null; structural: boolean } | { error: RoleError | 'working' } {
     const { cfg } = this.opts;
     const check = prepareRole(cfg, raw);
     if ('error' in check) return check;
@@ -1513,34 +1553,37 @@ export class SessionManager extends EventEmitter {
     if ([...this.sessions.values()].some((s) => s.name === name && s.roleId !== role.id)) return { error: { field: 'name', problem: 'taken' } };
     const s = before ? this.sessions.get(before.id) : undefined;
     const structural = !!before && (before.name !== role.name || moved || (before.enabled && !role.enabled));
-    if (structural && s?.inbox) {
-      if (!this.settled(s)) return { error: 'working' };
-      this.stop(s.id);
-    }
-    cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
-    if (s && before) this.applyRun(s, before, role);
-    this.teamChanged();
-    return { role, before };
+    if (structural && s?.inbox && !this.settled(s)) return { error: 'working' };
+    return { role, before, structural };
   }
 
   /**
-   * A post's model, effort or mode changed: its worker takes the new value now, over one picked by hand before. Back
-   * to auto, it takes the usual worker values at its next launch, until the master picks some.
+   * A post's model, effort or mode changed: its worker takes the new value now. Changed by the user (settings), it
+   * replaces a value picked by hand before; changed by the master, a value the user picked by hand stays. Back to
+   * auto, the worker takes the usual worker values at its next launch, until the master picks some.
    */
-  private applyRun(s: Session, before: TeamRole, role: TeamRole): void {
+  private applyRun(s: Session, before: TeamRole, role: TeamRole, by: 'user' | 'master'): ChoiceNote[] {
     const { cfg } = this.opts;
+    const notes: ChoiceNote[] = [];
     if (role.model !== before.model) {
-      s.userModel = false;
-      if (role.model) this.setModel(s.id, role.model, false);
-      else s.fixedModel = cfg.worker.model;
+      if (by === 'master' && s.userModel) notes.push('modelLocked');
+      else {
+        s.userModel = false;
+        if (role.model) this.setModel(s.id, role.model, false);
+        else s.fixedModel = cfg.worker.model;
+      }
     }
     if (role.effort !== before.effort) {
-      s.userEffort = false;
-      if (role.effort) this.setEffort(s.id, role.effort, false);
-      else s.fixedEffort = cfg.worker.effort || null;
+      if (by === 'master' && s.userEffort) notes.push('effortLocked');
+      else {
+        s.userEffort = false;
+        if (role.effort) this.setEffort(s.id, role.effort, false);
+        else s.fixedEffort = cfg.worker.effort || null;
+      }
     }
     const mode = role.mode || this.hubMode();
     if (role.mode !== before.mode && s.query && mode) this.setMode(s.id, mode);
+    return notes;
   }
 
   /** False when its worker is in the middle of something. */
@@ -1614,39 +1657,48 @@ export class SessionManager extends EventEmitter {
     return out;
   }
 
-  private createRole(args: {
-    name: string;
-    template?: (typeof TEMPLATE_IDS)[number] | null;
-    description?: string | null;
-    instructions?: string | null;
-    folders?: string[] | null;
-    model?: string | null;
-    effort?: string | null;
-    enabled?: boolean | null;
-  }): string {
+  private async createRole(
+    args: {
+      name: string;
+      template?: (typeof TEMPLATE_IDS)[number] | null;
+      description?: string | null;
+      instructions?: string | null;
+      folders?: string[] | null;
+      model?: string | null;
+      effort?: string | null;
+      enabled?: boolean | null;
+    },
+    signal: AbortSignal,
+  ): Promise<string> {
     const known = rosterKey(this.opts.cfg);
     const folders = args.folders ?? [];
     const base = args.template ? fromTemplate(args.template, lang(), folders[0] ?? '') : null;
     const given = Object.fromEntries(
       Object.entries({ description: args.description, instructions: args.instructions, folders: args.folders, enabled: args.enabled }).filter(([, v]) => v != null),
     );
-    const r = this.saveRole({ ...base, ...given, ...this.postValues(args), id: '', name: args.name, mode: '' }, 'master');
+    const raw = { ...base, ...given, ...this.postValues(args), id: '', name: args.name, mode: '' };
+    const refused = await this.allowFolders(raw, args.name, signal);
+    if (refused) return refused;
+    const r = this.saveRole(raw, 'master');
     if ('error' in r) throw new Error(this.roleErrorText(r.error, args.name));
     this.masterSaw(known);
     return `${t('role.created', { name: r.role.name, session: sessionNameOf(r.role) })}\n${this.roleText(r.role)}`;
   }
 
-  private updateRole(args: {
-    name: string;
-    new_name?: string | null;
-    description?: string | null;
-    instructions?: string | null;
-    append_instructions?: string | null;
-    folders?: string[] | null;
-    model?: string | null;
-    effort?: string | null;
-    enabled?: boolean | null;
-  }): string {
+  private async updateRole(
+    args: {
+      name: string;
+      new_name?: string | null;
+      description?: string | null;
+      instructions?: string | null;
+      append_instructions?: string | null;
+      folders?: string[] | null;
+      model?: string | null;
+      effort?: string | null;
+      enabled?: boolean | null;
+    },
+    signal: AbortSignal,
+  ): Promise<string> {
     const known = rosterKey(this.opts.cfg);
     const before = this.findRole(args.name);
     const next: TeamRole = { ...before, ...this.postValues(args) };
@@ -1656,6 +1708,8 @@ export class SessionManager extends EventEmitter {
     if (args.append_instructions?.trim()) next.instructions = [next.instructions.trim(), args.append_instructions.trim()].filter(Boolean).join('\n');
     if (args.folders != null) next.folders = args.folders;
     if (args.enabled != null) next.enabled = args.enabled;
+    const refused = await this.allowFolders(next, before.name, signal);
+    if (refused) return refused;
     const r = this.saveRole(next, 'master');
     if ('error' in r) throw new Error(this.roleErrorText(r.error, before.name));
     this.masterSaw(known);
@@ -1666,31 +1720,126 @@ export class SessionManager extends EventEmitter {
     // The former instructions in full: nothing the master replaces is lost.
     if (before.instructions !== after.instructions) changed.push(t('role.instructionsWere', { text: inside(before.instructions) || t('report.none') }));
     if (changed.length === 0) return t('role.unchanged', { name: after.name });
-    return [t('role.updated', { name: after.name }), ...changed, this.roleText(after)].join('\n');
+    return [t('role.updated', { name: after.name }), ...changed, ...this.choiceNotes(r.notes), this.roleText(after)].join('\n');
   }
 
   /** The user confirms a deletion the master asks for, in the master's conversation, whatever the permission mode. */
   private async deleteAsked(name: string, signal: AbortSignal): Promise<string> {
     const known = rosterKey(this.opts.cfg);
     const role = this.findRole(name);
+    const answer = await this.confirm(
+      {
+        tool: t('ask.delete.tool', { name: role.name }),
+        title: t('ask.delete.title', { name: role.name }),
+        summary: t('ask.delete.summary'),
+        facts: this.postFacts(role),
+        allow: t('ask.delete.allow'),
+        deny: t('ask.delete.deny'),
+      },
+      signal,
+    );
+    if (!answer.ok) return t('role.deleteRefused', { name: role.name, reason: answer.reason ? ` (${answer.reason})` : '' });
+    if (!this.deleteRole(role.id)) throw new Error(t('role.working', { name: role.name }));
+    this.masterSaw(known);
+    return t('role.deleted', { name: role.name });
+  }
+
+  /**
+   * A post the master wants to work outside the user's working folders and followed repos: the user says yes first
+   * (folders the post already had are not asked again). Returns the refusal for the master, else ''. An invalid post
+   * is refused before anything is asked.
+   */
+  private async allowFolders(raw: unknown, name: string, signal: AbortSignal): Promise<string> {
+    const check = this.checkRole(raw, 'master');
+    if ('error' in check) throw new Error(this.roleErrorText(check.error, name));
+    const { role, before } = check;
+    const outside = role.folders.filter((f) => !this.inScope(f) && !before?.folders.some((b) => samePath(b, f)));
+    if (outside.length === 0) return '';
+    const answer = await this.confirm(
+      {
+        tool: t('ask.folder.tool', { name: role.name }),
+        title: t('ask.folder.title', { name: role.name }),
+        summary: t('ask.folder.summary', { list: outside.map((f) => basename(f) || f).join(', ') }),
+        facts: [t('ask.fact.paths', { list: outside.join(' · ') }), ...this.postFacts(role)],
+        allow: t('ask.folder.allow'),
+        deny: t('ask.folder.deny'),
+      },
+      signal,
+    );
+    return answer.ok ? '' : t('role.folderRefused', { name: role.name, reason: answer.reason ? ` (${answer.reason})` : '' });
+  }
+
+  /** Inside one of the working folders or followed repos: where the user lets the hub's sessions work. */
+  private inScope(folder: string): boolean {
+    const { cfg } = this.opts;
+    const path = resolve(folder).toLowerCase();
+    return [...cfg.workspaces, ...cfg.mainRepos].some((root) => {
+      const r = resolve(root).toLowerCase();
+      return path === r || path.startsWith(r.endsWith(sep) ? r : `${r}${sep}`);
+    });
+  }
+
+  /**
+   * A question the hub puts to the user in the master's conversation, whatever the permission mode: the master cannot
+   * answer it. Its own sentence and buttons; the facts fold under "Details".
+   */
+  private async confirm(
+    q: { tool: string; title: string; summary: string; facts: string[]; allow: string; deny: string },
+    signal: AbortSignal,
+  ): Promise<{ ok: boolean; reason: string }> {
     const master = this.sessions.get(MASTER_ID);
-    if (!master) throw new Error(t('role.notFound', { name }));
+    if (!master) return { ok: false, reason: '' };
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,
-      tool: toolLabel('mcp__hub__delete_role'),
-      summary: t('role.deleteAsk', { name: role.name }),
-      detail: this.roleText(role),
+      tool: q.tool,
+      title: q.title,
+      allowLabel: q.allow,
+      denyLabel: q.deny,
+      summary: q.summary,
+      detail: q.facts.join('\n'),
       diff: false,
       reason: '',
       canAlways: false,
       state: 'pending',
     };
     const d = await this.ask(master, item, signal);
-    if (!d || d.behavior === 'deny') return t('role.deleteRefused', { name: role.name, reason: d?.message ? ` (${d.message})` : '' });
-    if (!this.deleteRole(role.id)) throw new Error(t('role.working', { name: role.name }));
-    this.masterSaw(known);
-    return t('role.deleted', { name: role.name });
+    return { ok: !!d && d.behavior !== 'deny', reason: d?.message?.trim() ?? '' };
+  }
+
+  /** A post as the user reads it in a question: no path, no tag. */
+  private postFacts(r: TeamRole): string[] {
+    const lines = r.instructions.trim() ? r.instructions.trim().split('\n').length : 0;
+    const run =
+      r.model || r.effort
+        ? t('ask.fact.run', {
+            // Claude Code's own name for it once a session reported the models ("Opus 5.5"), else the alias, capitalized.
+            model: r.model ? this.labelFor(r.model, r.model).replace(/^\w/, (c) => c.toUpperCase()) : t('ask.fact.byMaster'),
+            effort: r.effort ? t(`post.effort.${r.effort}`) : t('ask.fact.byMaster'),
+          })
+        : t('ask.fact.runAuto');
+    return [
+      t('ask.fact.description', { text: oneLine(r.description, 200) }),
+      t('ask.fact.folders', { list: r.folders.map((f) => basename(f) || f).join(', ') }),
+      run,
+      lines > 0 ? tn('ask.fact.instructions', lines) : t('ask.fact.noInstructions'),
+    ];
+  }
+
+  /**
+   * A worker writes to this hub's master: delivered as a hub message, the worker's words between random tags inside a
+   * note the master reads as data; the bubble shows them as written.
+   */
+  private messageMaster(s: Session, message: string): string {
+    const text = message.trim();
+    if (!text) throw new Error(t('message.empty'));
+    const master = this.sessions.get(MASTER_ID);
+    if (!master) throw new Error(t('master.unreachable'));
+    s.owesReport = false;
+    const tag = `worker-output-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const note = t('hub.workerMessage', { tag, text: text.slice(0, 20_000) });
+    this.deliver(master, { text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: s.name, shown: text });
+    return t('master.delivered');
   }
 
   /** The master changed the team itself: it knows, unless the user had changed it too since it last heard. */
@@ -1904,6 +2053,7 @@ export class SessionManager extends EventEmitter {
       seen: '',
       userModel: false,
       userEffort: false,
+      noteSent: false,
     };
     this.sessions.set(id, s);
     return s;

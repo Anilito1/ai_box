@@ -301,17 +301,24 @@ export function parseAgentFile(text: string): { fields: Record<string, string>; 
 }
 
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
-/** Subagent fields a post carries; any other one present in the file is listed as ignored. */
+/** Subagent fields a post carries; any other one present in the file is named as not carried over. */
 const CARRIED = new Set(['name', 'description', 'model', 'effort', 'permissionMode']);
+/** What the settings say a subagent field is, when a post does not carry it; the rest are "other settings". */
+const NOT_CARRIED: Record<string, AgentDrop> = { tools: 'tools', disallowedTools: 'tools', mcpServers: 'mcp', hooks: 'hooks', skills: 'skills', memory: 'memory' };
+export const AGENT_DROPS = ['tools', 'mcp', 'hooks', 'skills', 'memory', 'bypass', 'mode', 'other'] as const;
+export type AgentDrop = (typeof AGENT_DROPS)[number];
 
 /** A subagent file as a post working in `folder`; bypass is never imported: only the user turns it on. */
-export function agentToRole(file: { fields: Record<string, string>; body: string }, folder: string): { role: Omit<TeamRole, 'id'>; ignored: string[] } {
+export function agentToRole(file: { fields: Record<string, string>; body: string }, folder: string): { role: Omit<TeamRole, 'id'>; ignored: AgentDrop[] } {
   const f = file.fields;
-  const ignored = Object.keys(f).filter((k) => !CARRIED.has(k));
   const model = (f.model ?? '').trim().toLowerCase();
   const mode = (f.permissionMode ?? '').trim();
   const keptMode = ROLE_MODES.includes(mode as Mode) && mode !== 'bypassPermissions' ? (mode as Mode) : '';
-  if (mode && !keptMode) ignored.push(`permissionMode: ${mode}`);
+  const dropped: AgentDrop[] = Object.keys(f)
+    .filter((k) => !CARRIED.has(k))
+    .map((k) => NOT_CARRIED[k] ?? 'other');
+  if (mode && !keptMode) dropped.push(mode === 'bypassPermissions' ? 'bypass' : 'mode');
+  const ignored = AGENT_DROPS.filter((d) => dropped.includes(d));
   return {
     role: {
       name: slugify(f.name ?? '', ROLE_LIMITS.name),

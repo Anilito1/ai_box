@@ -1,4 +1,5 @@
 import type { Lang } from './i18n';
+import type { AgentDrop } from './team';
 
 export { APP_NAME } from './brand';
 
@@ -400,8 +401,8 @@ export interface AgentFile {
   scope: string;
   path: string;
   role: Omit<TeamRole, 'id'>;
-  /** Frontmatter fields a post does not carry (tools, a bypass mode…), named so the user knows. */
-  ignored: string[];
+  /** Subagent settings a post does not carry (its tools, a bypass mode…), named so the user knows. */
+  ignored: AgentDrop[];
 }
 
 export interface ClaudeStatus {
