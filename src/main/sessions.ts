@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   createSdkMcpServer,
@@ -162,8 +162,10 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post'> {
   /** The user picked its model or effort by hand: the master's choices leave them alone. */
   userModel: boolean;
   userEffort: boolean;
-  /** Its handoff note went with the first message of the new conversation: once that conversation exists, it is used. */
-  noteSent: boolean;
+  /** The conversation that got the handoff note with its first message: each new one gets it once. */
+  noteSentTo: string;
+  /** The note is on its way with a first message: until the conversation exists, it is not added again. */
+  noteSending: boolean;
 }
 
 type Persisted = {
@@ -189,6 +191,7 @@ type Persisted = {
   | 'roleId'
   | 'note'
   | 'noteFresh'
+  | 'noteSentTo'
   | 'userModel'
   | 'userEffort'
 >;
@@ -646,7 +649,7 @@ export class SessionManager extends EventEmitter {
     };
 
     // Shown (and queued) before Claude Code starts: a start that fails still leaves the message visible.
-    if (firstPrompt) this.pushUser(s, firstPrompt);
+    if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
     const q = query({ prompt: inbox, options });
     s.query = q;
     // A post's cost runs on across its conversations.
@@ -690,6 +693,7 @@ export class SessionManager extends EventEmitter {
     s.status = 'exited';
     s.busySince = null;
     s.handoff = false;
+    s.noteSending = false;
     this.resetActivity(s);
     if (s.noteFresh && !this.quitting) this.freshStart(s);
   }
@@ -725,8 +729,8 @@ export class SessionManager extends EventEmitter {
       case 'system':
         if (msg.subtype === 'init') {
           s.started = true;
-          // The note is in this conversation now: it leaves the hub.
-          if (s.noteSent) Object.assign(s, { note: '', noteSent: false });
+          // The note is in this conversation now: its later prompts never carry it again.
+          if (s.noteSending) Object.assign(s, { noteSentTo: msg.session_id, noteSending: false });
           s.sessionId = msg.session_id;
           s.mode = msg.permissionMode;
           if (msg.effort) s.effort = msg.effort;
@@ -1062,8 +1066,8 @@ export class SessionManager extends EventEmitter {
 
   /** The first message of a post's conversation after a context renewal carries its handoff note. */
   private withNote(s: Session, prompt: Prompt): Prompt {
-    if (!s.roleId || !s.note || s.started || prompt.handoff) return prompt;
-    s.noteSent = true;
+    if (!s.roleId || !s.note || s.started || prompt.handoff || s.noteSending || s.noteSentTo === s.sessionId) return prompt;
+    s.noteSending = true;
     return { ...prompt, text: `${prompt.text}\n\n${handoffBlock(s.note)}` };
   }
 
@@ -1700,17 +1704,23 @@ export class SessionManager extends EventEmitter {
     signal: AbortSignal,
   ): Promise<string> {
     const known = rosterKey(this.opts.cfg);
-    const before = this.findRole(args.name);
-    const next: TeamRole = { ...before, ...this.postValues(args) };
-    if (args.new_name != null) next.name = args.new_name;
-    if (args.description != null) next.description = args.description;
-    if (args.instructions != null) next.instructions = args.instructions;
-    if (args.append_instructions?.trim()) next.instructions = [next.instructions.trim(), args.append_instructions.trim()].filter(Boolean).join('\n');
-    if (args.folders != null) next.folders = args.folders;
-    if (args.enabled != null) next.enabled = args.enabled;
-    const refused = await this.allowFolders(next, before.name, signal);
+    const changes = (role: TeamRole): TeamRole => {
+      const next: TeamRole = { ...role, ...this.postValues(args) };
+      if (args.new_name != null) next.name = args.new_name;
+      if (args.description != null) next.description = args.description;
+      if (args.instructions != null) next.instructions = args.instructions;
+      if (args.append_instructions?.trim()) next.instructions = [next.instructions.trim(), args.append_instructions.trim()].filter(Boolean).join('\n');
+      if (args.folders != null) next.folders = args.folders;
+      if (args.enabled != null) next.enabled = args.enabled;
+      return next;
+    };
+    const asked = this.findRole(args.name);
+    const refused = await this.allowFolders(changes(asked), asked.name, signal);
     if (refused) return refused;
-    const r = this.saveRole(next, 'master');
+    // Applied to the post as it is now: the user may have changed it while the question waited.
+    const before = this.opts.cfg.team.find((x) => x.id === asked.id);
+    if (!before) throw new Error(t('role.notFound', { name: args.name }));
+    const r = this.saveRole(changes(before), 'master');
     if ('error' in r) throw new Error(this.roleErrorText(r.error, before.name));
     this.masterSaw(known);
     const after = r.role;
@@ -1772,9 +1782,18 @@ export class SessionManager extends EventEmitter {
   /** Inside one of the working folders or followed repos: where the user lets the hub's sessions work. */
   private inScope(folder: string): boolean {
     const { cfg } = this.opts;
-    const path = resolve(folder).toLowerCase();
-    return [...cfg.workspaces, ...cfg.mainRepos].some((root) => {
-      const r = resolve(root).toLowerCase();
+    // Real paths: a link or junction inside a working folder may lead anywhere.
+    const real = (dir: string) => {
+      try {
+        return realpathSync.native(dir);
+      } catch {
+        return resolve(dir);
+      }
+    };
+    const norm = (dir: string) => (process.platform === 'linux' ? real(dir) : real(dir).toLowerCase());
+    const path = norm(folder);
+    return [...cfg.workspaces, ...cfg.mainRepos.map((repo) => mainRepoPath(cfg, repo))].some((root) => {
+      const r = norm(root);
       return path === r || path.startsWith(r.endsWith(sep) ? r : `${r}${sep}`);
     });
   }
@@ -1788,7 +1807,7 @@ export class SessionManager extends EventEmitter {
     signal: AbortSignal,
   ): Promise<{ ok: boolean; reason: string }> {
     const master = this.sessions.get(MASTER_ID);
-    if (!master) return { ok: false, reason: '' };
+    if (!master) throw new Error(t('ask.unanswered'));
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,
@@ -1804,7 +1823,8 @@ export class SessionManager extends EventEmitter {
       state: 'pending',
     };
     const d = await this.ask(master, item, signal);
-    return { ok: !!d && d.behavior !== 'deny', reason: d?.message?.trim() ?? '' };
+    if (!d) throw new Error(t('ask.unanswered'));
+    return { ok: d.behavior !== 'deny', reason: d.message?.trim() ?? '' };
   }
 
   /** A post as the user reads it in a question: no path, no tag. */
@@ -1837,7 +1857,7 @@ export class SessionManager extends EventEmitter {
     if (!master) throw new Error(t('master.unreachable'));
     s.owesReport = false;
     const tag = `worker-output-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
-    const note = t('hub.workerMessage', { tag, text: text.slice(0, 20_000) });
+    const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
     this.deliver(master, { text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: s.name, shown: text });
     return t('master.delivered');
   }
@@ -2053,7 +2073,8 @@ export class SessionManager extends EventEmitter {
       seen: '',
       userModel: false,
       userEffort: false,
-      noteSent: false,
+      noteSentTo: '',
+      noteSending: false,
     };
     this.sessions.set(id, s);
     return s;
@@ -2120,6 +2141,7 @@ export class SessionManager extends EventEmitter {
       roleId: s.roleId,
       note: s.note,
       noteFresh: s.noteFresh,
+      noteSentTo: s.noteSentTo,
       userModel: s.userModel,
       userEffort: s.userEffort,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.

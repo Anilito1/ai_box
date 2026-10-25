@@ -1071,7 +1071,7 @@ export class SetupView {
       const text = h('span', 'setup-repo-text');
       const title = h('span', 'setup-repo-title');
       title.append(h('b', '', file.role.name), h('span', 'setup-tag', file.scope === 'user' ? t('team.agents.user') : file.scope));
-      text.append(title, h('span', 'team-agent-desc', file.role.description));
+      text.append(title, h('span', 'team-agent-desc', file.role.description || folderName(file.path)));
       if (file.ignored.length > 0) text.append(h('span', 'team-ignored', t('team.agents.ignored', { list: file.ignored.map((d) => t(`team.agents.drop.${d}`)).join(', ') })));
       row.append(text, this.button(t('team.agents.use'), 'btn ghost small', () => this.edit({ ...file.role, id: '' })));
       box.append(row);
