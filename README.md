@@ -20,12 +20,10 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 
 ## Requirements
 
-- Windows 10/11, macOS or Linux (developed and tested on Windows 11).
-- [Node.js](https://nodejs.org) 22.12 or later and [git](https://git-scm.com).
-- Access to Claude, one of:
-  - **Claude Code signed in** on this computer (run `claude` once and sign in), or
-  - an **Anthropic API key** from the [Claude Console](https://console.anthropic.com/settings/keys).
-- Optional: a GitHub account, and the [GitHub CLI](https://cli.github.com).
+- Windows 10/11, macOS 12 or later (Apple silicon or Intel) or Linux. Developed and tested on Windows 11; macOS is reviewed but not yet run, see [macOS](#macos).
+- [Node.js](https://nodejs.org) 22.12 or later and [git](https://git-scm.com) (on a Mac: `xcode-select --install`).
+- A Claude subscription or an **Anthropic API key** from the [Claude Console](https://console.anthropic.com/settings/keys). The first-run setup signs Claude Code in for you through Claude Code's own sign-in.
+- Optional: a GitHub account, and the [GitHub CLI](https://cli.github.com) (the easiest way to connect GitHub).
 
 ## Install and run from source
 
@@ -36,7 +34,9 @@ npm install
 npm start
 ```
 
-`npm start` builds the app and opens it. On the first run Electron downloads its binary (about 100 MB). Running from source uses the Claude Code binary that npm installs with the Agent SDK.
+`npm start` builds the app and opens it. On the first run Electron downloads its binary (about 100 MB). Running from source uses the Claude Code binary that npm installs with the Agent SDK: you do not need to install Claude Code separately.
+
+To try the hub without touching your own settings, give it a folder of its own: `npm start -- --user-data-dir=/path/to/test-profile`.
 
 ### Build an installer yourself
 
@@ -47,7 +47,7 @@ npm run dist        # installer for the current platform, in release/
 npm run dist:dir    # unpacked app only, quicker
 ```
 
-Your builds are not code-signed: Windows SmartScreen and macOS Gatekeeper will warn. A built app does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` (on macOS and Linux, the `PATH` of your login shell, even when the app starts from the Finder or a launcher) or in `~/.local/bin`.
+On a Mac, `npm run dist` makes a `.dmg` and a `.zip` for Apple silicon and for Intel (a Mac build is made on a Mac). Your builds are not code-signed: Windows SmartScreen warns, and macOS Gatekeeper refuses a downloaded copy until you open it with right-click › Open (an app you built yourself opens directly). A built app does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` (on macOS and Linux, the `PATH` of your login shell, even when the app starts from the Finder or a launcher) or in `~/.local/bin`.
 
 On macOS, closing the window keeps the hub and its sessions running (the Dock icon brings it back); **Cmd+Q** quits, and asks first if sessions are at work.
 
@@ -56,34 +56,44 @@ On macOS, closing the window keeps the hub and its sessions running (the Dock ic
 A short setup opens the first time, and every choice stays editable later in **Settings** (the gear at the top right of the master’s conversation):
 
 1. **General**: language.
-2. **Claude**: where the sessions get Claude from. The hub checks that Claude Code is installed and has access, and tells you what to do if not.
-3. **GitHub** (optional): sign in so the git panel can fetch, pull and push without prompts.
+2. **Claude**: where the sessions get Claude from. The hub checks that Claude Code has access. If not, **Sign in with Claude Code** opens a terminal window running Claude Code's own sign-in (`claude auth login`): your browser shows Anthropic's page, and the step turns to *Ready* by itself once you are signed in. A built app without Claude Code offers **Install in a terminal** first (Anthropic's installer). Or choose an API key.
+3. **GitHub** (optional): connect so the git panel can fetch, pull and push without prompts. The best way available comes first (see [GitHub](#github)).
 4. **Workspace**: the folders that hold your repos. The master runs in the first one.
 5. **Repos**: the repos the git panel follows and the master knows best. Your local repos and, once GitHub is connected, your GitHub repos, with search. Nothing is picked for you; a repo that is only on GitHub is cloned into your first working folder.
 6. **Sessions**: permission mode, default models and effort, the models the master may pick for a mission, and your own instructions for the master (which repo a request is usually about, when to commit or deploy, how to report…).
 
-![First-run setup: Claude access](docs/screenshots/setup-claude.png)
+![First-run setup: the repos to follow](docs/screenshots/setup-repos.png)
 
 ## Claude access and Anthropic's rules
 
-Claude Hub has **no Claude.ai sign-in of its own**, on purpose. Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) states that third-party developers may not offer Claude.ai login in their own applications, nor collect, store or intermediate Claude.ai credentials; developers should use API keys or a cloud provider. It also says this does not prevent an end user from signing in to the unmodified Claude Code binary with their own subscription.
+Claude Hub has **no Claude.ai sign-in of its own**, on purpose. Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) (section *Authentication and credential use*) says:
 
-So the hub offers:
+> Anthropic does not permit third-party developers to offer Claude.ai login into their own applications, or to route requests through Free, Pro, or Max plan credentials on behalf of their users. Moreover, developers may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to a Claude account must complete through Anthropic's own flow.
+
+and, right after:
+
+> Nor does it prevent an end user from signing in to the unmodified Claude Code binary with their own Claude subscription […]
+
+So the hub never shows a login form and never touches a credential. Its **Sign in with Claude Code** button only opens a terminal window running the unmodified Claude Code binary (`claude auth login`); you sign in there, through Anthropic's own flow in your browser, and Claude Code keeps the result in its own storage. The hub then only asks Claude Code whether it has access (`accountInfo`, no request to the API).
 
 | Choice | What the hub does |
 |---|---|
-| **Claude Code's own sign-in** | Nothing: it runs Claude Code, which uses whatever you set up in it (`claude` → `/login`, Anthropic's own flow, or your environment). The hub never reads those credentials. |
+| **Claude Code's own sign-in** | Nothing: it runs Claude Code, which uses whatever you set up in it (`claude auth login` or `/login`, Anthropic's own flow, or your environment). The hub never reads those credentials. |
 | **Anthropic API key** | Checks the key with Anthropic, stores it encrypted, passes it to the sessions as `ANTHROPIC_API_KEY`. Billed to your Console account. |
+
+![First-run setup: Claude access](docs/screenshots/setup-claude.png)
 
 Running several sessions at once uses your plan or your API budget faster: keep an eye on the cost and limits shown in the status bar.
 
 ## GitHub
 
-Three ways to connect, all optional:
+All optional; the setup shows the best way available first:
 
-- **Sign in with GitHub** (OAuth device flow): you type a short code on github.com. It needs the Client ID of a GitHub OAuth App (see below). The token is stored encrypted.
-- **GitHub CLI**: if `gh` is installed and signed in, the hub lets `gh` answer git's credential requests. No token is copied.
-- **Personal access token**: fine-grained (Contents: read and write) or classic (`repo`).
+- **Sign in with GitHub** (OAuth device flow, one click): you type a short code on github.com. Only offered once a Client ID of a GitHub OAuth App is set (see below); none ships with this repository. The token is stored encrypted.
+- **GitHub CLI**: signed in, the hub lets `gh` answer git's credential requests (no token is copied). Installed but signed out, **Sign in with the GitHub CLI** opens a terminal window with `gh auth login --web`, and the hub connects by itself once you approved it in the browser. Not installed: a link to [cli.github.com](https://cli.github.com).
+- **Personal access token**: **Create a token on GitHub** opens the form with the `repo`, `read:org` and `workflow` scopes ticked (classic token); a fine-grained one with Contents: read and write works too.
+
+![First-run setup: GitHub](docs/screenshots/setup-github.png)
 
 The hub's own git commands get the sign-in through a credential helper set in their environment (`GIT_CONFIG_*`), never through your git config files. **Let the sessions use this account** (off by default) gives the sessions the same helper; with a token, they also receive it as `GH_TOKEN`, which a session can read. Left off, sessions use your own git setup (credential manager, `gh auth setup-git`, SSH keys).
 
@@ -114,6 +124,7 @@ Claude Hub gives AI agents your computer. Read this before using it on anything 
 
 - **Sessions act as you.** Every session can read and change files and run commands with your account's rights, within the permission mode you chose. Content the sessions read (a README, a web page, an issue, another worker's message) can try to steer them: that is prompt injection, and no prompt is a security boundary.
 - **A worker loads its repo's Claude Code configuration**, exactly like `claude` started in that folder: `CLAUDE.md`, `.claude/settings.json` (including hooks, which run commands) and `.mcp.json`. Only let workers into repos you trust, and read a repo you clone from someone else before starting a worker in it.
+- **Folders.** A post, or a worker the master starts, that would work outside your working folders and followed repos waits for your yes in the master's conversation, whatever the permission mode. The master never changes a post's permission mode.
 - **Permission modes.** The default is **Claude Code's own default** (auto mode where your account has it, otherwise it asks). **Ask** shows every approval in the conversation. Approvals and MCP confirmations of a worker appear in its conversation; the master cannot grant them for you.
 - **⚠ "Allow everything" (bypass) removes every approval**: sessions run any command, commit, push, deploy or SQL, and MCP servers' confirmations (before a `DROP` or `DELETE`, for instance) are accepted automatically. Use it only on a machine, accounts and repos you can afford to lose, and keep backups. It is never on unless you turn it on, after an explicit confirmation.
 - **The window is locked down**: sandboxed renderer with context isolation, strict Content-Security-Policy, sanitized Markdown, no navigation or pop-ups, and every message from the window to the hub is checked to come from its own page. Secrets never reach the window.
@@ -121,12 +132,29 @@ Claude Hub gives AI agents your computer. Read this before using it on anything 
 
 Found a vulnerability? Please open a private security advisory on the repository rather than a public issue.
 
+## macOS
+
+The macOS code paths (login-shell `PATH`, Terminal for the sign-ins, app menu, window close and full screen, Keychain, worktrees under `/private` links, `.dmg`/`.zip` for both architectures) were reviewed but have **not run on a Mac yet**. Please go through this list once and report what fails (about 30 minutes, nothing here touches your real settings):
+
+1. **Start from a fresh clone**: `npm install`, then `npm start -- --user-data-dir="$HOME/claude-hub-test"`. The window opens; its three buttons sit at the left, centred in the title bar, clear of the logo; dragging the title bar moves the window.
+2. **Claude, signed in**: the Claude step says *Ready* with your account.
+3. **Claude, signed out**: quit, then `CLAUDE_CONFIG_DIR="$(mktemp -d)" npm start -- --user-data-dir="$HOME/claude-hub-test2"`. **Sign in with Claude Code** opens Terminal with Claude Code's sign-in; once you signed in in the browser, the step turns to *Ready* by itself within a few seconds.
+4. **GitHub CLI signed out**: with `GH_CONFIG_DIR="$(mktemp -d)"` added to the line above, **Sign in with the GitHub CLI** opens Terminal with `gh auth login`; once approved, the step says *Connected* by itself. Without `gh` installed, the token comes first, with **Create a token on GitHub**.
+5. **From the Finder**: `npm run dist:dir`, then open `release/mac-arm64/Claude Hub.app` (`release/mac/` on Intel) by double-clicking. Claude Code, `gh` and `git` are still found (the hub reads your login shell's `PATH`: Homebrew, nvm…).
+6. **Keychain**: save a token or an API key: macOS asks once for the keychain (*Always Allow*); after a restart it is still there. `npm start` and the built app use different keychain entries: a secret saved in one must be entered again in the other.
+7. **Keyboard**: ⌘K opens the commands, ⌘1…9 switch sessions, ⌘, opens the settings, ⌘⇧G folds the git panel; ⌘C, ⌘V, ⌘A and ⌘Z work in every text field; the hints show ⌘, not Ctrl.
+8. **Window**: ⌘W hides the window and the Dock icon brings it back; ⌘M then the Dock icon restores it; in full screen, ⌘W leaves no black Space; ⌘Q while a session works asks first.
+9. **Worktrees**: in a test repo with a remote under your home folder, create a post (Settings › Team), then ask the master for a reinforcement of it on a small task that pushes its branch. A sibling folder `<repo>-<post>-<topic>` appears; after the worker closes, the folder and its local branch are gone (the branch stays on the remote). Do it once more with a repo under `/tmp` (a link to `/private/tmp`).
+10. **Git panel**: fetch, pull, push and commit on a test repo; a rejected push is explained in words.
+11. **Privacy prompts**: when the hub first scans Desktop or Documents, macOS may ask for access; refusing only hides those repos.
+12. **Packaged**: `npm run dist` writes a `.dmg` and a `.zip` for `arm64` and `x64` in `release/`; the app opens.
+
 ## Development
 
 ```sh
 npm run typecheck   # TypeScript
 npm run build       # bundles into dist/
-npm start           # build + run
+npm start           # build + run (add -- --user-data-dir=<folder> for a separate profile)
 ```
 
 The code: `src/main` (Electron main process: sessions, hub tools, settings, GitHub, git), `src/preload` (the bridge the window uses), `src/renderer` (DOM, no framework), `src/shared` (types and i18n helpers). Strings live in `src/main/i18n.ts`, `src/renderer/i18n.ts` and the prompts in `src/main/prompts.ts`.
