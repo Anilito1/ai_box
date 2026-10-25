@@ -851,10 +851,12 @@ export class SessionManager extends EventEmitter {
         const handoff = s.handoff && !s.handoffStale;
         s.handoff = false;
         if (handoff) {
-          const note = msg.subtype === 'success' ? msg.result.trim().slice(0, NOTE_MAX) : '';
+          // A turn that ended on an error carries Claude Code's error text, not a note.
+          const ok = msg.subtype === 'success' && !msg.is_error;
+          const note = ok ? msg.result.trim().slice(0, NOTE_MAX) : '';
           if (note) Object.assign(s, { note, noteFresh: true });
           // Not written: the worker keeps its conversation as it is, and a note is asked again at its next sleep after work.
-          else this.notice(s, t('notice.noteFailed'), 'info', msg.subtype === 'success' ? '' : msg.subtype);
+          else this.notice(s, t('notice.noteFailed'), 'info', ok ? '' : msg.subtype === 'success' ? msg.result.trim() : msg.subtype);
         } else if (msg.subtype === 'success') {
           // A turn that ended on an error carries Claude Code's wording as its result: the notice already said it, and
           // the previous turn's text would pass for this one's.
