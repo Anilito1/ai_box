@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { t } from './i18n';
 
@@ -51,6 +51,21 @@ export function remoteOf(dir: string): string {
   }
 }
 
+/** A folder's real path (links and junctions followed: git prints real paths, /private/var for /var on a Mac), else the path as given. */
+export function realPath(dir: string): string {
+  try {
+    return realpathSync.native(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+/** The same folder, however it is written; case-blind except on Linux. */
+export function samePath(a: string, b: string): boolean {
+  const norm = (dir: string) => (process.platform === 'linux' ? realPath(dir) : realPath(dir).toLowerCase());
+  return norm(a) === norm(b);
+}
+
 /** Root of the git repository containing `dir`, or null. */
 export function repoRootOf(dir: string): string | null {
   for (let d = resolve(dir); ; d = dirname(d)) {
@@ -64,10 +79,12 @@ export function repoRootOf(dir: string): string | null {
  * worktree. Two folders belong to the same repo when their `main` is the same. Null outside any repo.
  */
 export function repoOf(dir: string): { checkout: string; main: string } | null {
-  const checkout = repoRootOf(dir);
-  if (!checkout) return null;
+  const root = repoRootOf(dir);
+  if (!root) return null;
+  // Real paths on both sides: a worktree names its repo by its real path.
+  const checkout = realPath(root);
   try {
-    return { checkout, main: describe(checkout, join(checkout, '.git')).worktreeOf || checkout };
+    return { checkout, main: realPath(describe(root, join(root, '.git')).worktreeOf || root) };
   } catch {
     return { checkout, main: checkout };
   }

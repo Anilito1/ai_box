@@ -202,6 +202,11 @@ const en = {
   'ask.folder.allow': 'Allow this folder',
   'ask.folder.deny': 'Refuse',
   'ask.fact.paths': 'Full path: {list}',
+  'ask.cwd.tool': 'Folder for the worker {name}',
+  'ask.cwd.title': 'The master wants to start the worker “{name}” outside your folders',
+  'ask.cwd.summary': 'Folder: {folder}. It is neither in your working folders nor in your followed repos: the worker could read, change and run commands there.',
+  'ask.cwd.mission': 'Mission: {text}',
+  'spawn.cwdRefused': 'The user refused to let {name} work in that folder{reason}. No worker started: pick a working folder or a followed repo (list_repos).',
   'ask.fact.description': 'Post: {text}',
   'ask.fact.folders': 'Folder: {list}',
   'ask.fact.run': 'Model: {model} · effort: {effort}',
@@ -326,6 +331,7 @@ const en = {
   'workers.readOnly': '  read-only: shares its folder',
   'startup.quit': 'Quit',
   'startup.copy': 'Copy the details',
+  'terminal.close': 'Done. Press Enter to close this window. ',
 };
 
 type Key = keyof typeof en;
@@ -532,6 +538,11 @@ const fr: Record<Key, string> = {
   'ask.folder.allow': 'Autoriser ce dossier',
   'ask.folder.deny': 'Refuser',
   'ask.fact.paths': 'Chemin complet : {list}',
+  'ask.cwd.tool': 'Dossier du worker {name}',
+  'ask.cwd.title': 'Le maître veut lancer le worker « {name} » hors de tes dossiers',
+  'ask.cwd.summary': "Dossier : {folder}. Il n'est ni dans tes dossiers de travail ni dans tes repos suivis : le worker pourra y lire, modifier et lancer des commandes.",
+  'ask.cwd.mission': 'Mission : {text}',
+  'spawn.cwdRefused': "L'utilisateur a refusé que {name} travaille dans ce dossier{reason}. Aucun worker lancé : choisis un dossier de travail ou un repo suivi (list_repos).",
   'ask.fact.description': 'Poste : {text}',
   'ask.fact.folders': 'Dossier : {list}',
   'ask.fact.run': 'Modèle : {model} · effort : {effort}',
@@ -662,6 +673,7 @@ const fr: Record<Key, string> = {
   'workers.readOnly': '  lecture seule : partage son dossier',
   'startup.quit': 'Quitter',
   'startup.copy': 'Copier les détails',
+  'terminal.close': 'Terminé. Appuie sur Entrée pour fermer cette fenêtre. ',
 };
 
 let current: Lang = 'en';

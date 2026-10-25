@@ -4,7 +4,7 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { cleanupVerdict, firstFree, isSafeBranch, treeNames, type KeepReason } from '../shared/parallel';
 import { git } from './git';
-import { repoOf } from './repos';
+import { realPath, repoOf, samePath } from './repos';
 import { parseStatus, repoState, STATUS_ARGS } from './scm';
 
 // Worktrees the hub makes for workers that would otherwise write in a folder another worker writes in: next to the
@@ -104,7 +104,7 @@ export async function makeTree(folder: string, post: string, topic: string): Pro
   if (!isSafeBranch(branch) || !/^[0-9a-f]{40,64}$/.test(baseOid)) throw new Error('bad-name');
   // --no-track: a plain `git push` cannot land on main; the worker pushes its own branch with -u.
   await git(repo, ['worktree', 'add', '--no-track', '-b', branch, path, baseOid], { timeout: CHECKOUT_MS, hooks: false });
-  const sub = relative(where.checkout, resolve(folder));
+  const sub = relative(where.checkout, realPath(folder));
   return {
     tree: { repo, source: where.checkout, path, branch, base: baseOid, baseRef: base?.ref ?? '', state: 'active', kept: [] },
     cwd: sub && !sub.startsWith('..') ? join(path, sub) : path,
@@ -113,17 +113,16 @@ export async function makeTree(folder: string, post: string, topic: string): Pro
 }
 
 /** `git worktree list --porcelain -z`: each worktree's folder, branch and lock. */
-async function listTrees(repo: string): Promise<{ path: string; branch: string; locked: boolean }[]> {
-  const out: { path: string; branch: string; locked: boolean }[] = [];
+async function listTrees(repo: string): Promise<{ path: string; branch: string; locked: boolean; prunable: boolean }[]> {
+  const out: { path: string; branch: string; locked: boolean; prunable: boolean }[] = [];
   for (const line of (await git(repo, ['worktree', 'list', '--porcelain', '-z'])).split('\0')) {
-    if (line.startsWith('worktree ')) out.push({ path: resolve(line.slice(9)), branch: '', locked: false });
+    if (line.startsWith('worktree ')) out.push({ path: resolve(line.slice(9)), branch: '', locked: false, prunable: false });
     else if (line.startsWith('branch ') && out.length) out[out.length - 1].branch = line.slice(7);
     else if ((line === 'locked' || line.startsWith('locked ')) && out.length) out[out.length - 1].locked = true;
+    else if ((line === 'prunable' || line.startsWith('prunable ')) && out.length) out[out.length - 1].prunable = true;
   }
   return out;
 }
-
-const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 /**
  * Removes the worktree of a closed worker when nothing would be lost (shared/parallel.ts decides), after a fetch so
@@ -151,7 +150,8 @@ async function retire(t: WorkTree, canRemove: () => boolean): Promise<{ removed:
   let operation = false;
   let head = '';
   if (exists) {
-    changes = parseStatus(await git(t.path, STATUS_ARGS), 0).total;
+    // New files count whatever the user's status.showUntrackedFiles says: they would be lost with the folder.
+    changes = parseStatus(await git(t.path, [...STATUS_ARGS, '--untracked-files=normal']), 0).total;
     operation = repoState((await git(t.path, ['rev-parse', '--absolute-git-dir'])).trim()) !== '';
     head = (await git(t.path, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).catch(() => '')).trim();
   }
@@ -180,8 +180,13 @@ async function retire(t: WorkTree, canRemove: () => boolean): Promise<{ removed:
       // Git refused before touching anything (a file changed meanwhile): kept, nothing lost.
       return { removed: false, why: ['inUse'] };
     }
-  } else await git(t.repo, ['worktree', 'prune']);
-  if (verdict.deleteBranch) await git(t.repo, ['branch', '-D', t.branch]).catch(() => undefined);
+  } else if (!trees.some((w) => w.prunable && !samePath(w.path, t.path))) {
+    // Prune forgets every worktree whose folder is gone: only when this one is the only such worktree (another one may
+    // sit on a disk that is not plugged in).
+    await git(t.repo, ['worktree', 'prune']);
+  }
+  // Only the branch the hub made for this worktree, still the one it holds.
+  if (verdict.deleteBranch && (!mine || mine.branch === branchRef)) await git(t.repo, ['branch', '-D', t.branch]).catch(() => undefined);
   // Forgotten by git, its work safe, but part of its folder still there: `inUse` says so.
   return { removed: true, why: leftover ? ['inUse'] : verdict.why };
 }
@@ -190,11 +195,13 @@ async function retire(t: WorkTree, canRemove: () => boolean): Promise<{ removed:
  * `git worktree remove`, which refuses a worktree with changes. Once it started deleting, git forgets the worktree
  * even when a file or the folder itself is still open (the worker's processes take a few seconds to let go): what is
  * left is committed or ignored, so the hub finishes the job, retrying for a while. True when part of it stays.
+ * Git may also succeed and leave what it could not delete (a junction in node_modules): finished the same way; a link
+ * is removed, never followed.
  */
 async function removeTree(t: WorkTree): Promise<boolean> {
   try {
     await git(t.repo, ['worktree', 'remove', t.path], { timeout: CHECKOUT_MS });
-    return false;
+    if (!existsSync(t.path)) return false;
   } catch (err) {
     if ((await listTrees(t.repo)).some((w) => samePath(w.path, t.path))) throw err;
   }
@@ -231,8 +238,9 @@ export const planText = (p: InstallPlan) => `${p.tool} ${p.args.join(' ')}`;
 export function runInstall(t: WorkTree, plan: InstallPlan, env: Record<string, string>): { done: Promise<{ ok: boolean; ms: number; output: string }>; kill: () => void } {
   const started = Date.now();
   const win = process.platform === 'win32';
+  // cmd.exe would run an npm.cmd sitting in the worktree itself before the real one: never from the current folder.
   const child = win
-    ? spawn(planText(plan), { cwd: t.path, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: true })
+    ? spawn(planText(plan), { cwd: t.path, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], shell: true })
     : spawn(plan.tool, plan.args, { cwd: t.path, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let output = '';
   const keep = (chunk: Buffer) => (output = (output + chunk.toString()).slice(-4000));

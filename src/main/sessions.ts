@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   createSdkMcpServer,
@@ -70,7 +70,7 @@ import {
   workerPrompt,
   type InstanceInfo,
 } from './prompts';
-import { findRepos, repoOf } from './repos';
+import { findRepos, realPath, repoOf, samePath } from './repos';
 import {
   assistantItems,
   blocksOf,
@@ -342,7 +342,12 @@ const validTree = (t: WorkTree): boolean =>
   Array.isArray(t.kept) &&
   t.kept.every((k) => KEEP_REASONS.includes(k));
 const minutesSince = (at: number) => Math.max(1, Math.round((Date.now() - at) / 60_000));
-const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
+/** A tag no text can guess: what sits between two of them is data the hub wrapped, never the hub's own words. */
+const randomTag = () => randomUUID().replace(/-/g, '');
+/** A folder as a question names it: its parent and its name. */
+const shortPath = (dir: string) => dir.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || dir;
+/** A path on another computer (UNC, device): the master's paths never go there. */
+const isNetworkPath = (dir: string) => /^[\\/]{2}/.test(dir.trim());
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
@@ -1350,7 +1355,7 @@ export class SessionManager extends EventEmitter {
     }
     s.owesReport = false;
     // A random tag the worker's text cannot guess: nothing inside it can pass for the hub's own words.
-    const tag = `worker-output-${randomUUID().slice(0, 8)}`;
+    const tag = `worker-output-${randomTag()}`;
     const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
     this.notifyMaster(t('hub.silent', { name: displayName(s) }), t('hub.silent.note', { name: s.name, tag, last }));
   }
@@ -1450,7 +1455,7 @@ export class SessionManager extends EventEmitter {
       this.changed();
       if (this.quitting || !s.inbox) return;
       const line = r.ok ? t('install.done', { secs: Math.round(r.ms / 1000) }) : t('install.failed');
-      const tag = `install-output-${randomUUID().slice(0, 8)}`;
+      const tag = `install-output-${randomTag()}`;
       const note = r.ok ? t('install.done.note', { command }) : t('install.failed.note', { command, tag, output: inside(r.output.slice(-1500)) });
       // Only while the worker may still need them: an idle one that has reported is not woken for this.
       if (this.isWorking(s) || s.owesReport || s.status === 'starting') {
@@ -1542,8 +1547,11 @@ export class SessionManager extends EventEmitter {
             model,
             effort,
           },
-          (args) =>
-            run(() => {
+          (args, extra) =>
+            run(async () => {
+              // Asked before queuing: the user's answer may take a while, other spawns go on meanwhile.
+              const refused = await this.allowCwd(args, signalOf(extra));
+              if (refused) return refused;
               // One at a time: two parallel calls would pick the same names and both pass the limits.
               const job = this.spawnQueue.then(() => this.spawnWorker(args));
               this.spawnQueue = job.catch(() => undefined);
@@ -1633,7 +1641,7 @@ export class SessionManager extends EventEmitter {
     const post = args.role?.trim() ? this.findRole(args.role) : null;
     if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
     const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
-    if (!isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
+    if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
     const over = this.overCap(post?.id ?? null);
     if (over) throw new Error(over);
     const choice = this.choose(null, args, post);
@@ -1655,6 +1663,12 @@ export class SessionManager extends EventEmitter {
       }
     }
     const cwd = made?.cwd ?? folder;
+    // The limits again, right before the worker exists: a message_worker may have woken one meanwhile.
+    const overNow = this.overCap(post?.id ?? null);
+    if (overNow) {
+      if (made) void retireTree(made.tree, () => true);
+      throw new Error(overNow);
+    }
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
     Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true });
@@ -2050,17 +2064,23 @@ export class SessionManager extends EventEmitter {
    * is refused before anything is asked.
    */
   private async allowFolders(raw: unknown, name: string, signal: AbortSignal): Promise<string> {
+    // Never touched, not even to check it exists: Windows would sign in to that server with the user's account.
+    const folders = (raw as { folders?: unknown }).folders;
+    if (Array.isArray(folders) && folders.some((f) => typeof f === 'string' && isNetworkPath(f))) {
+      throw new Error(this.roleErrorText({ field: 'folders', problem: 'format' }, name));
+    }
     const check = this.checkRole(raw, 'master');
     if ('error' in check) throw new Error(this.roleErrorText(check.error, name));
     const { role, before } = check;
     const outside = role.folders.filter((f) => !this.inScope(f) && !before?.folders.some((b) => samePath(b, f)));
     if (outside.length === 0) return '';
+    const list = outside.map(shortPath).join(', ');
     const answer = await this.confirm(
       {
         tool: t('ask.folder.tool', { name: role.name }),
         title: t('ask.folder.title', { name: role.name }),
-        summary: t('ask.folder.summary', { list: outside.map((f) => basename(f) || f).join(', ') }),
-        done: outside.map((f) => basename(f) || f).join(', '),
+        summary: t('ask.folder.summary', { list }),
+        done: list,
         facts: [t('ask.fact.paths', { list: outside.join(' · ') }), ...this.postFacts(role)],
         allow: t('ask.folder.allow'),
         deny: t('ask.folder.deny'),
@@ -2070,18 +2090,36 @@ export class SessionManager extends EventEmitter {
     return answer.ok ? '' : t('role.folderRefused', { name: role.name, reason: answer.reason ? ` (${answer.reason})` : '' });
   }
 
+  /**
+   * An ad-hoc worker the master wants to start outside the user's working folders and followed repos: the user says
+   * yes first, as for a post. Returns the refusal for the master, else ''.
+   */
+  private async allowCwd(args: { name: string; mission: string; cwd?: string | null; role?: string | null }, signal: AbortSignal): Promise<string> {
+    const folder = args.cwd?.trim();
+    if (args.role?.trim() || !folder) return '';
+    if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
+    if (this.inScope(folder)) return '';
+    const name = slugify(args.name, 28) || 'worker';
+    const answer = await this.confirm(
+      {
+        tool: t('ask.cwd.tool', { name }),
+        title: t('ask.cwd.title', { name }),
+        summary: t('ask.cwd.summary', { folder: shortPath(folder) }),
+        done: shortPath(folder),
+        facts: [t('ask.fact.paths', { list: folder }), t('ask.cwd.mission', { text: oneLine(args.mission, 300) })],
+        allow: t('ask.folder.allow'),
+        deny: t('ask.folder.deny'),
+      },
+      signal,
+    );
+    return answer.ok ? '' : t('spawn.cwdRefused', { name, reason: answer.reason ? ` (${answer.reason})` : '' });
+  }
+
   /** Inside one of the working folders or followed repos: where the user lets the hub's sessions work. */
   private inScope(folder: string): boolean {
     const { cfg } = this.opts;
     // Real paths: a link or junction inside a working folder may lead anywhere.
-    const real = (dir: string) => {
-      try {
-        return realpathSync.native(dir);
-      } catch {
-        return resolve(dir);
-      }
-    };
-    const norm = (dir: string) => (process.platform === 'linux' ? real(dir) : real(dir).toLowerCase());
+    const norm = (dir: string) => (process.platform === 'linux' ? realPath(dir) : realPath(dir).toLowerCase());
     const path = norm(folder);
     return [...cfg.workspaces, ...cfg.mainRepos.map((repo) => mainRepoPath(cfg, repo))].some((root) => {
       const r = norm(root);
@@ -2150,7 +2188,7 @@ export class SessionManager extends EventEmitter {
     const master = this.sessions.get(MASTER_ID);
     if (!master) throw new Error(t('master.unreachable'));
     s.owesReport = false;
-    const tag = `worker-output-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+    const tag = `worker-output-${randomTag()}`;
     const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
     this.deliver(master, { text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: s.name, shown: text });
     return t('master.delivered');
@@ -2400,8 +2438,8 @@ export class SessionManager extends EventEmitter {
     return { ...this.toolEnv(), ...this.opts.sessionEnv().set };
   }
 
-  /** Environment of the hub's own tools (an install): the same, without the Claude access and GitHub sign-in added. */
-  private toolEnv(): Record<string, string> {
+  /** Environment of the hub's own tools (an install, a sign-in terminal): the same, without the Claude access and GitHub sign-in added. */
+  toolEnv(): Record<string, string> {
     const { unset } = this.opts.sessionEnv();
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {

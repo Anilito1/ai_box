@@ -5,12 +5,11 @@ import { basename, resolve } from 'node:path';
 import type { RepoAction, RepoActionResult, RepoStatus, RepoTree } from '../shared/types';
 import { errorMessage, git } from './git';
 import { t } from './i18n';
+import { samePath } from './repos';
 import { fetchRemote, parseStatus, repoState, runAction, STATUS_ARGS } from './scm';
 
 const POLL_MS = 8_000;
 const FETCH_MS = 60_000;
-
-const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
 /** Folders of `git worktree list --porcelain -z` (NUL-separated, so no path is ever quoted), main folder included. */
 const parseWorktrees = (out: string) =>
