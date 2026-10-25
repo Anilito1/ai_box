@@ -47,6 +47,7 @@ import { findRepos, remoteOf } from './repos';
 import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
+import { openTerminal } from './terminal';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
@@ -396,7 +397,23 @@ class Hub {
       this.executable = executable;
       return status;
     });
-    handle('github:gh-login', () => ghLogin());
+    // Claude Code's own sign-in (or Anthropic's installer) in a terminal window: the user signs in there, never here.
+    handle('claude:terminal', async (action) => {
+      if (action === 'install') return openTerminal({ title: 'Claude Code', installer: 'claude' }, mgr.toolEnv());
+      if (action !== 'login') return false;
+      const exe = await claudeExecutable(this.cfg);
+      return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, mgr.toolEnv());
+    });
+    handle('github:gh-status', async () => {
+      const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
+      return { installed: gh !== '', login };
+    });
+    // The GitHub CLI's own sign-in, in a terminal window.
+    handle('github:terminal', async () => {
+      const gh = await ghPath();
+      const args = ['auth', 'login', '--hostname', 'github.com', '--git-protocol', 'https', '--web'];
+      return gh !== '' && openTerminal({ title: 'GitHub CLI', file: gh, args }, mgr.toolEnv());
+    });
     // Whether the saved sign-in still works: a token may have expired or been revoked, gh may be signed out.
     handle('github:check', async () => {
       const { source, login } = this.cfg.github;

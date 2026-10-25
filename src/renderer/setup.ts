@@ -73,6 +73,10 @@ const INSTALL = {
   win32: 'irm https://claude.ai/install.ps1 | iex',
   other: 'curl -fsSL https://claude.ai/install.sh | bash',
 };
+/** A sign-in started in a terminal window is watched this long. */
+const WAIT_MS = 15 * 60_000;
+/** A classic token with the scopes the hub needs, ticked in advance. */
+const NEW_TOKEN = 'https://github.com/settings/tokens/new?description=Claude%20Hub&scopes=repo,read:org,workflow';
 
 /** First-run setup (steps, no way out before the end) and the settings screen (same sections, free navigation). */
 export class SetupView {
@@ -85,7 +89,15 @@ export class SetupView {
   private view: SettingsView | null = null;
   private claude: ClaudeStatus | null = null;
   private checkingClaude = false;
-  private ghUser: string | null = null;
+  /** The GitHub CLI on this computer; null until checked. */
+  private gh: { installed: boolean; login: string } | null = null;
+  private ghChecking = false;
+  /** Until when the step watches a sign-in started in a terminal window (0: not watching). */
+  private claudeWait = 0;
+  private ghWait = 0;
+  private watchTimer = 0;
+  /** No terminal window could be opened: the step shows the command to type instead. */
+  private noTerminal = false;
   private found: FoundRepo[] | null = null;
   private scanned = false;
   private ghRepos: GithubRepo[] | null = null;
@@ -265,6 +277,9 @@ export class SetupView {
     this.device = null;
     this.confirmBypass = false;
     this.startAnyway = false;
+    this.claudeWait = 0;
+    this.ghWait = 0;
+    this.noTerminal = false;
     this.section = section;
     this.note = null;
     if (this.mode === 'onboarding') remember(STEP_KEY, section);
@@ -489,6 +504,26 @@ export class SetupView {
     status.append(this.button(t('setup.check'), 'btn ghost small', () => void this.checkClaude(), this.checkingClaude));
     el.append(status);
 
+    // The way to Claude comes first: Anthropic's installer, then Claude Code's own sign-in, each in a terminal window.
+    if (c && (!c.found || (s.provider === 'claude-code' && !c.account?.ready))) {
+      const guide = h('div', 'setup-guide');
+      const action = c.found ? 'login' : 'install';
+      guide.append(
+        h('div', 'setup-label', c.found ? t('setup.claude.signIn') : t('setup.claude.install')),
+        h('div', 'setup-hint', c.found ? t('setup.claude.signIn.hint') : t('setup.claude.install.hint')),
+      );
+      const row = h('div', 'setup-row');
+      row.append(this.button(c.found ? t('setup.claude.signInBtn') : t('setup.claude.installBtn'), 'btn primary', () => void this.claudeTerminal(action)));
+      guide.append(row);
+      if (this.claudeWait) guide.append(h('div', 'setup-wait', t(action === 'install' ? 'setup.claude.waitingInstall' : 'setup.claude.waiting')));
+      if (this.noTerminal || !c.found) {
+        guide.append(h('div', 'setup-hint', this.noTerminal ? t('setup.claude.noTerminal') : t('setup.claude.orRun')));
+        guide.append(this.command(!c.found ? (v.platform === 'win32' ? INSTALL.win32 : INSTALL.other) : 'claude auth login'));
+      }
+      guide.append(this.link(t('setup.claude.docs'), 'https://code.claude.com/docs/en/setup'));
+      el.append(guide);
+    }
+
     const options = h('div', 'setup-choices');
     for (const p of PROVIDERS) {
       options.append(this.choice('provider', s.provider === p, t(`setup.provider.${p}` as Key), t(`setup.provider.${p}.hint` as Key), () => void this.pickProvider(p)));
@@ -511,19 +546,67 @@ export class SetupView {
       f.append(row, this.link(t('setup.apiKey.console'), 'https://console.anthropic.com/settings/keys'));
       el.append(f);
     }
+  }
 
-    if (c && (!c.found || (s.provider === 'claude-code' && !c.account?.ready))) {
-      const guide = h('div', 'setup-guide');
-      guide.append(h('div', 'setup-label', c.found ? t('setup.claude.signIn') : t('setup.claude.install')));
-      if (!c.found) {
-        guide.append(this.command(v.platform === 'win32' ? INSTALL.win32 : INSTALL.other));
-        guide.append(h('div', 'setup-hint', t('setup.claude.thenSignIn')));
-      } else {
-        guide.append(this.command('claude'), h('div', 'setup-hint', t('setup.claude.signInHint')));
+  /** Opens the terminal window, then watches for the outcome: Claude Code found, then signed in. */
+  private async claudeTerminal(action: 'login' | 'install'): Promise<void> {
+    const opened = await this.run(() => this.hub.claudeTerminal(action));
+    this.noTerminal = !opened;
+    this.note = null;
+    this.claudeWait = opened ? Date.now() + WAIT_MS : 0;
+    this.render();
+    if (opened) this.watch('claude');
+  }
+
+  /**
+   * While the user signs in (or installs) in a terminal window, the step checks again every few seconds and redraws
+   * only when the answer changes; it stops on success, on leaving the step, or after a quarter of an hour.
+   */
+  private watch(what: 'claude' | 'gh'): void {
+    window.clearTimeout(this.watchTimer);
+    this.watchTimer = window.setTimeout(() => void this.watchOnce(what), 4000);
+  }
+
+  private async watchOnce(what: 'claude' | 'gh'): Promise<void> {
+    const deadline = what === 'claude' ? this.claudeWait : this.ghWait;
+    const stop = () => {
+      if (what === 'claude') this.claudeWait = 0;
+      else this.ghWait = 0;
+    };
+    if (!deadline || Date.now() > deadline || this.root.hidden || this.section !== (what === 'claude' ? 'claude' : 'github')) {
+      if (deadline) {
+        stop();
+        if (!this.root.hidden) this.render();
       }
-      guide.append(this.link(t('setup.claude.docs'), 'https://code.claude.com/docs/en/setup'));
-      el.append(guide);
+      return;
     }
+    if (what === 'claude') {
+      const before = JSON.stringify(this.claude);
+      const wasFound = this.claude?.found === true;
+      const c = this.checkingClaude ? this.claude : await this.hub.checkClaude();
+      if (!this.claudeWait || this.section !== 'claude') return;
+      this.claude = c;
+      if (c?.found && c.account?.ready) {
+        stop();
+        this.flash(t('setup.claude.signedIn'), 'ok');
+      } else if (c?.found && !wasFound) {
+        // Installed: the sign-in is the next click.
+        stop();
+        this.flash(t('setup.claude.installed'), 'ok');
+      }
+      if (JSON.stringify(c) !== before || !this.claudeWait) this.render();
+    } else {
+      const gh = await this.hub.ghStatus();
+      if (!this.ghWait || this.section !== 'github') return;
+      const changed = JSON.stringify(gh) !== JSON.stringify(this.gh);
+      this.gh = gh;
+      if (gh.login) {
+        stop();
+        return this.githubResult(this.hub.githubUseGh());
+      }
+      if (changed) this.render();
+    }
+    this.watch(what);
   }
 
   private async checkClaude(): Promise<void> {
@@ -538,6 +621,7 @@ export class SetupView {
   }
 
   private async pickProvider(p: Provider): Promise<void> {
+    this.claudeWait = 0;
     await this.save({ provider: p });
     await this.checkClaude();
   }
@@ -554,13 +638,7 @@ export class SetupView {
   private github(el: HTMLElement, v: SettingsView): void {
     const g = v.settings.github;
     this.head(el, t('setup.github.title'), t('setup.github.lead'));
-    if (this.ghUser === null) {
-      this.ghUser = '';
-      void this.hub.ghLogin().then((login) => {
-        this.ghUser = login;
-        this.render();
-      });
-    }
+    if (this.gh === null && !this.ghChecking) void this.checkGh();
 
     if (g.source !== 'none' && this.githubHealth === null) {
       this.githubHealth = '';
@@ -611,25 +689,22 @@ export class SetupView {
     const healthy = g.source !== 'none' && !broken;
     const other = h('details', 'setup-advanced');
     other.append(h('summary', '', t('setup.github.other')));
-    const device = h('div', 'setup-option');
-    device.append(h('div', 'setup-choice-title', t('setup.github.device')), h('div', 'setup-choice-hint', t('setup.github.device.hint')));
-    if (clientId) device.append(this.button(t('setup.github.signIn'), 'btn primary', () => void this.startDevice(), !v.secureStorage));
-    else device.append(this.clientIdField(g.clientId, v.defaultClientId));
-    if (clientId) options.append(device);
-
-    const gh = h('div', 'setup-option');
-    gh.append(h('div', 'setup-choice-title', t('setup.github.gh')), h('div', 'setup-choice-hint', this.ghUser ? t('setup.github.gh.found', { login: this.ghUser }) : t('setup.github.gh.hint')));
-    gh.append(this.button(t('setup.github.useGh'), 'btn', () => void this.githubResult(this.hub.githubUseGh()), !this.ghUser));
-    options.append(gh);
-
+    // The best way first: GitHub sign-in when this build has a Client ID, then the GitHub CLI when it is installed
+    // (no token to copy), then a token. Without a Client ID, the device flow waits under Advanced.
+    if (clientId) {
+      const device = h('div', 'setup-option');
+      device.append(h('div', 'setup-choice-title', t('setup.github.device')), h('div', 'setup-choice-hint', t('setup.github.device.hint')));
+      device.append(this.button(t('setup.github.signIn'), 'btn primary', () => void this.startDevice(), !v.secureStorage));
+      options.append(device);
+    }
+    const gh = this.ghOption();
     const pat = h('div', 'setup-option');
     pat.append(h('div', 'setup-choice-title', t('setup.github.token')), h('div', 'setup-choice-hint', t('setup.github.token.hint')));
     const tokenInput = this.input('', 'github_pat_… / ghp_…', 'password');
     const row = h('div', 'setup-row');
     row.append(tokenInput, this.button(t('setup.verifySave'), 'btn', () => void this.githubResult(this.hub.githubUseToken(tokenInput.value.trim()), 'pat'), !v.secureStorage));
-    pat.append(row);
-    options.append(pat);
-    if (!clientId) options.append(device);
+    pat.append(row, this.link(t('setup.github.token.create'), NEW_TOKEN));
+    options.append(...(this.gh && !this.gh.installed ? [pat, gh] : [gh, pat]));
     if (healthy) {
       other.append(options);
       el.append(other);
@@ -647,12 +722,54 @@ export class SetupView {
     share.append(box, text);
     el.append(share);
 
-    // With a Client ID set, changing it stays possible under Advanced.
-    if (clientId) {
-      const adv = h('details', 'setup-advanced');
-      adv.append(h('summary', '', t('setup.github.advanced')), this.clientIdField(g.clientId, v.defaultClientId));
-      el.append(adv);
+    // The OAuth App's Client ID, under Advanced: one-click GitHub sign-in once it is set.
+    const adv = h('details', 'setup-advanced');
+    adv.append(h('summary', '', t('setup.github.advanced')));
+    if (!clientId) adv.append(h('p', 'setup-hint', t('setup.github.device.needsId')));
+    adv.append(this.clientIdField(g.clientId, v.defaultClientId));
+    el.append(adv);
+  }
+
+  /** The GitHub CLI's option: use it when signed in, sign in through it when installed, else where to get it. */
+  private ghOption(): HTMLElement {
+    const gh = this.gh;
+    const box = h('div', 'setup-option');
+    const hint = !gh
+      ? t('setup.github.gh.checking')
+      : gh.login
+        ? t('setup.github.gh.found', { login: gh.login })
+        : gh.installed
+          ? t('setup.github.gh.signedOut')
+          : t('setup.github.gh.missing');
+    box.append(h('div', 'setup-choice-title', t('setup.github.gh')), h('div', 'setup-choice-hint', hint));
+    const row = h('div', 'setup-row');
+    if (gh?.login) row.append(this.button(t('setup.github.useGh'), 'btn primary', () => void this.githubResult(this.hub.githubUseGh())));
+    else if (gh?.installed) row.append(this.button(t('setup.github.gh.signIn'), 'btn primary', () => void this.ghTerminal()));
+    else if (gh) row.append(this.link(t('setup.github.gh.install'), 'https://cli.github.com'));
+    if (gh && !gh.login) row.append(this.button(t('setup.check'), 'btn ghost small', () => void this.checkGh()));
+    box.append(row);
+    if (this.ghWait) box.append(h('div', 'setup-wait', t('setup.github.gh.waiting')));
+    if (this.noTerminal) box.append(h('div', 'setup-hint', t('setup.github.noTerminal')));
+    return box;
+  }
+
+  private async checkGh(): Promise<void> {
+    this.ghChecking = true;
+    try {
+      this.gh = await this.hub.ghStatus();
+    } finally {
+      this.ghChecking = false;
     }
+    if (this.section === 'github' && !this.root.hidden) this.render();
+  }
+
+  private async ghTerminal(): Promise<void> {
+    const opened = await this.run(() => this.hub.githubTerminal());
+    this.noTerminal = !opened;
+    this.note = null;
+    this.ghWait = opened ? Date.now() + WAIT_MS : 0;
+    this.render();
+    if (opened) this.watch('gh');
   }
 
   /** The OAuth App's Client ID, saved when the field is left. */

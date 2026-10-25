@@ -493,8 +493,12 @@ export interface HubApi {
   /** Stores (or with null, deletes) the Anthropic API key after checking it with the API. */
   setApiKey(key: string | null): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;
-  /** GitHub CLI signed in on this machine: its login, else empty. */
-  ghLogin(): Promise<string>;
+  /** Opens a terminal window with Claude Code's own sign-in, or Anthropic's installer; false when none could open. */
+  claudeTerminal(action: 'login' | 'install'): Promise<boolean>;
+  /** The GitHub CLI on this machine: installed or not, and the login it is signed in with (else empty). */
+  ghStatus(): Promise<{ installed: boolean; login: string }>;
+  /** Opens a terminal window with the GitHub CLI's own sign-in; false when none could open. */
+  githubTerminal(): Promise<boolean>;
   githubDeviceStart(): Promise<GithubDevice & Result>;
   /** Resolves once the device flow ends: signed in, denied, expired or cancelled. */
   githubDeviceWait(): Promise<SettingsView & Result>;
