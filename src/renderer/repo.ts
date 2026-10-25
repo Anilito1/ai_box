@@ -288,6 +288,8 @@ export class RepoPanel {
     this.preferred = height >= MIN_HEIGHT ? height : DEFAULT_HEIGHT;
     this.root.style.height = `${this.preferred}px`;
     this.root.classList.toggle('collapsed', this.collapsed);
+    // Hidden until a followed repo reports (render() shows it): no empty commit box when none is followed.
+    this.root.hidden = true;
     window.addEventListener('resize', () => this.fitHeight());
   }
 
