@@ -52,7 +52,6 @@ const en = {
   'notice.freshStart': 'Context renewed: its next mission starts a new conversation, with the handoff note it just wrote.',
   'perm.cancelled': 'Request cancelled.',
   'perm.denied': 'The user denied this action.',
-  'perm.sessionStopped': 'Session stopped.',
   'perm.confirm': 'Confirmation',
   'hub.restarted':
     'The hub restarted while you were working: check where you were (files, commands or background tasks that were cut), finish your mission and send me your report.',
@@ -261,7 +260,7 @@ const en = {
   'label.messageWorker': 'Message to a worker',
   'label.messageMaster': 'Message to the master',
   'label.workerReport': 'Worker report',
-  'label.closeWorker': 'Worker closed',
+  'label.closeWorker': 'Close a worker',
   'label.listRoles': 'Team list',
   'label.createRole': 'New post',
   'label.updateRole': 'Change a post',
@@ -381,7 +380,6 @@ const fr: Record<Key, string> = {
   'notice.freshStart': 'Contexte renouvelé : sa prochaine mission démarre une nouvelle conversation, avec la note de passation qu’il vient d’écrire.',
   'perm.cancelled': 'Demande annulée.',
   'perm.denied': "L'utilisateur a refusé cette action.",
-  'perm.sessionStopped': 'Session arrêtée.',
   'perm.confirm': 'Confirmation',
   'hub.restarted':
     'Le hub a redémarré pendant ton travail : vérifie où tu en étais (fichiers, commandes ou tâches de fond coupées), termine ta mission et fais-moi ton rapport.',
@@ -592,7 +590,7 @@ const fr: Record<Key, string> = {
   'label.messageWorker': 'Message à un worker',
   'label.messageMaster': 'Message au maître',
   'label.workerReport': 'Rapport d’un worker',
-  'label.closeWorker': 'Worker fermé',
+  'label.closeWorker': 'Fermeture de worker',
   'label.listRoles': 'Liste des postes',
   'label.createRole': 'Nouveau poste',
   'label.updateRole': 'Modification de poste',

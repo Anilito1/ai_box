@@ -811,7 +811,8 @@ export class SessionManager extends EventEmitter {
     s.inbox = null;
     s.liveId = null;
     s.queued = 0;
-    for (const finish of [...s.pending.values()]) finish({ behavior: 'deny', message: t('perm.sessionStopped') });
+    // Withdrawn, not refused: nobody answered them.
+    for (const finish of [...s.pending.values()]) finish(null);
     s.status = 'exited';
     s.busySince = null;
     s.handoff = false;
@@ -2059,6 +2060,7 @@ export class SessionManager extends EventEmitter {
         tool: t('ask.folder.tool', { name: role.name }),
         title: t('ask.folder.title', { name: role.name }),
         summary: t('ask.folder.summary', { list: outside.map((f) => basename(f) || f).join(', ') }),
+        done: outside.map((f) => basename(f) || f).join(', '),
         facts: [t('ask.fact.paths', { list: outside.join(' · ') }), ...this.postFacts(role)],
         allow: t('ask.folder.allow'),
         deny: t('ask.folder.deny'),
@@ -2092,7 +2094,7 @@ export class SessionManager extends EventEmitter {
    * answer it. Its own sentence and buttons; the facts fold under "Details".
    */
   private async confirm(
-    q: { tool: string; title: string; summary: string; facts: string[]; allow: string; deny: string },
+    q: { tool: string; title: string; summary: string; facts: string[]; allow: string; deny: string; done?: string },
     signal: AbortSignal,
   ): Promise<{ ok: boolean; reason: string }> {
     const master = this.sessions.get(MASTER_ID);
@@ -2112,8 +2114,9 @@ export class SessionManager extends EventEmitter {
       state: 'pending',
     };
     const d = await this.ask(master, item, signal);
-    // Answered, the question folds to its outcome and its subject ("Refused · Deleting the post docs").
-    this.upsert(master, { ...item, summary: '', state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
+    // Answered, the question folds to its outcome and its subject ("Denied · Delete a post"), plus what it was about
+    // when that still matters (the folders allowed).
+    this.upsert(master, { ...item, summary: q.done ?? '', state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
     if (!d) throw new Error(t('ask.unanswered'));
     return { ok: d.behavior !== 'deny', reason: d.message?.trim() ?? '' };
   }
