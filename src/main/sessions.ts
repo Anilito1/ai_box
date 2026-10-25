@@ -1825,6 +1825,8 @@ export class SessionManager extends EventEmitter {
       state: 'pending',
     };
     const d = await this.ask(master, item, signal);
+    // Answered, the question folds to its outcome and its subject ("Refused · Deleting the post docs").
+    this.upsert(master, { ...item, summary: '', state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
     if (!d) throw new Error(t('ask.unanswered'));
     return { ok: d.behavior !== 'deny', reason: d.message?.trim() ?? '' };
   }
