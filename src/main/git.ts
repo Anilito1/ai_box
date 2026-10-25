@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { t } from './i18n';
 
 // Git never waits for a terminal prompt, and status never takes the optional index lock: workers run git in
-// these folders at the same time.
-export const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' };
+// these folders at the same time. Its messages stay in English (a Homebrew git follows LANG), which the panel reads.
+export const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C' };
 
 /**
  * The hub's sign-in for its own git commands, offered only to URLs under `prefix` ("https://github.com"): a token,

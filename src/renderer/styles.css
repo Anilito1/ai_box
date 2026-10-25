@@ -3417,9 +3417,9 @@ kbd,
 .ph-settings:hover .ico {
   transform: rotate(30deg);
 }
-/* macOS draws its window buttons at the top left of a hidden title bar. */
+/* macOS draws its window buttons at the top left of a hidden title bar, and none at the right. */
 .platform-darwin .titlebar {
-  padding-left: 84px;
+  padding: 0 var(--sp-4) 0 84px;
 }
 
 /* ---------- first-run setup and settings: a sheet over a dimmed window (no blur: it would redraw every frame a

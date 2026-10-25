@@ -89,6 +89,8 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     backgroundColor: chrome().color,
     titleBarStyle: 'hidden',
     titleBarOverlay: chrome(),
+    // macOS: its window buttons, centred in the 36 px title bar.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 11 } } : {}),
     webPreferences: {
       preload: join(here, 'preload.cjs'),
       contextIsolation: true,
@@ -130,7 +132,11 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     if (process.platform === 'darwin') {
       // The Mac way: the window goes, the app and its sessions stay (Dock icon brings it back, Cmd+Q quits).
       e.preventDefault();
-      win?.hide();
+      // Hidden in full screen, it would leave an empty black Space behind: out of full screen first.
+      if (win?.isFullScreen()) {
+        win.once('leave-full-screen', () => win?.hide());
+        win.setFullScreen(false);
+      } else win?.hide();
       return;
     }
     if (!confirmQuit(mgr)) return e.preventDefault();
@@ -527,6 +533,12 @@ async function start(): Promise<void> {
     if (win && !win.isFocused()) win.flashFrame(true);
   });
   hub.registerIpc();
+  if (process.platform === 'darwin') {
+    // The window menus above are Windows and Linux only; a Mac keeps an app menu, with Edit for Cmd+C/V in the fields.
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
+    // Run from source, the Dock would show Electron's icon.
+    if (!app.isPackaged) app.dock?.setIcon(join(here, '..', 'assets', 'icon.png'));
+  }
   createWindow(mgr, hub.cfg.language);
   // A first run waits for the setup: the master needs Claude access before it starts.
   hub.startMaster();
@@ -546,7 +558,10 @@ if (!app.requestSingleInstanceLock()) {
     win.focus();
   });
   app.on('window-all-closed', () => app.quit());
-  app.on('activate', () => win?.show());
+  app.on('activate', () => {
+    if (win?.isMinimized()) win.restore();
+    win?.show();
+  });
   app.on('before-quit', (e) => {
     if (quitting) return;
     if (!confirmQuit(manager)) return e.preventDefault();
