@@ -523,7 +523,6 @@ export class SetupView {
       guide.append(this.link(t('setup.claude.docs'), 'https://code.claude.com/docs/en/setup'));
       el.append(guide);
     }
-    el.append(h('p', 'setup-fine', t('setup.claude.policy')));
   }
 
   private async checkClaude(): Promise<void> {
@@ -763,11 +762,13 @@ export class SetupView {
     }
 
     const slugOf = (remote: string) => /^github\.com\/(.+\/.+)$/i.exec(remote)?.[1].toLowerCase() ?? '';
+    // A remote on a server ("gitlab.com/team/app", "gitserver/team/app"), never a folder of this computer.
+    const remoteName = (remote: string) => slugOf(remote) || (/^([a-z]:[\\/]|[\\/~]|\.{1,2}[\\/]|file:)|\\/i.test(remote) ? '' : remote);
     const pinned = new Set(s.mainRepos);
     const local = new Map<string, Row>();
     // Pinned repos stay listed even when they sit outside the working folders.
     for (const p of s.mainRepos) local.set(p, { name: folderName(p), path: p, slug: '', detail: this.scanned ? t('setup.repos.outside') : '', private: false, pushedAt: 0 });
-    for (const r of this.found ?? []) local.set(r.path, { name: r.name, path: r.path, slug: slugOf(r.remote), detail: slugOf(r.remote) || r.remote || t('setup.repos.localOnly'), private: false, pushedAt: 0 });
+    for (const r of this.found ?? []) local.set(r.path, { name: r.name, path: r.path, slug: slugOf(r.remote), detail: remoteName(r.remote) || t('setup.repos.localOnly'), private: false, pushedAt: 0 });
     const bySlug = new Map([...local.values()].filter((r) => r.slug).map((r) => [r.slug, r]));
     const remoteOnly: Row[] = [];
     for (const g of this.ghRepos ?? []) {

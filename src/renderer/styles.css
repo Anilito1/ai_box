@@ -452,6 +452,9 @@ kbd,
   background: var(--panel);
   font-size: var(--fs-sm);
 }
+.scm[hidden] {
+  display: none;
+}
 .scm.collapsed {
   height: auto !important;
   min-height: 0;
@@ -1329,8 +1332,6 @@ kbd,
 }
 .card-sub.live {
   color: var(--accent-text);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
   -webkit-line-clamp: 1;
 }
 /* Done: a compact card, its name a step quieter and its mascot asleep (no fading: its text keeps its contrast). */
@@ -2043,9 +2044,9 @@ kbd,
   font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
-.perm-reason {
-  color: var(--text-3);
-  font-size: var(--fs-sm);
+.perm-summary.human {
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
 }
 .perm-actions {
   display: flex;
@@ -2082,6 +2083,9 @@ kbd,
 .perm-done b {
   color: var(--text-2);
   font-weight: 600;
+}
+.perm-done-sep {
+  color: var(--text-3);
 }
 .perm-done.allowed .ico {
   color: var(--ok);
@@ -2908,6 +2912,20 @@ kbd,
 }
 .clawd * {
   transform-box: fill-box;
+}
+/* The flat Clawd holding the place until the 3D one arrives: still, centred, then faded out under it. */
+.avatar .clawd.still {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  transition: opacity var(--dur-4) var(--ease-out);
+}
+.avatar .clawd.still * {
+  animation: none !important;
+}
+.avatar.drawn .clawd.still {
+  opacity: 0;
 }
 .cw-body,
 .cw-arm,

@@ -560,7 +560,9 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(start)
     .catch((err: unknown) => {
-      dialog.showMessageBoxSync({ type: 'error', title: APP_NAME, message: t('startup.failed', { app: APP_NAME }), detail: errorText(err) });
+      // The raw error is not shown: a button copies it, for whoever helps.
+      const copy = dialog.showMessageBoxSync({ type: 'error', title: APP_NAME, message: t('startup.failed', { app: APP_NAME }), buttons: [t('startup.quit'), t('startup.copy')], defaultId: 0, cancelId: 0 });
+      if (copy === 1) clipboard.writeText(errorText(err));
       app.quit();
     });
 }

@@ -246,6 +246,24 @@ interface Prompt {
   handoff?: boolean;
 }
 
+/** Tools whose input a permission card shows as it is: the command to run, the edit to make. */
+const SHOWN_INPUT = /^(Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit)$/;
+
+/** A worker's name as the user reads it: without its "hub-" prefix. */
+const displayName = (s: { name: string }) => s.name.replace(/^hub-/, '');
+
+/** A model as the interface names it: Claude Code's name, its "default" choice said in the user's language. */
+const modelLabel = (value: string, label: string) => (value === 'default' ? t('model.default') : label.replace(/\s*\(recommended\)\s*$/i, ''));
+
+/** One line on what a model is for, in the user's language (Claude Code's own description is English). */
+function modelHint(value: string, label: string): string {
+  const name = `${value} ${label}`;
+  const family = value === 'default' ? 'default' : (['fable', 'opus', 'sonnet', 'haiku'].find((f) => new RegExp(f, 'i').test(name)) ?? '');
+  if (!family) return '';
+  const hint = t(`model.hint.${family}` as Parameters<typeof t>[0]);
+  return /\[1m\]/i.test(value) ? `${hint} ${t('model.hint.long')}` : hint;
+}
+
 // Tool calls that send a message to another session (worker ↔ worker, worker → master, master → worker).
 const OUTGOING = /^(SendMessage|mcp__hub__(message_worker|spawn_worker))$/;
 
@@ -655,7 +673,7 @@ export class SessionManager extends EventEmitter {
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
-    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: s.name, error: oneLine(failure, 400) }));
+    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }));
   }
 
   private teardown(s: Session): void {
@@ -757,8 +775,14 @@ export class SessionManager extends EventEmitter {
         if (msg.parent_tool_use_id) break;
         s.retrying = false;
         this.markBusy(s);
-        const blocks = blocksOf(msg.message);
+        // A frame carrying an error has Claude Code's own wording as its text ("Invalid API key · Fix external API
+        // key"): neither shown nor kept as the last message; the notice below says it for the user.
+        const blocks = blocksOf(msg.message).filter((b) => !msg.error || b.type !== 'text');
         const hasText = blocks.some((b) => b.type === 'text');
+        if (msg.error && s.liveId) {
+          this.drop(s, s.liveId);
+          s.liveId = null;
+        }
         for (const item of assistantItems(blocks, msg.uuid, hasText ? (s.liveId ?? undefined) : undefined)) this.upsert(s, item);
         if (hasText) s.liveId = null;
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === masterName())) {
@@ -819,7 +843,10 @@ export class SessionManager extends EventEmitter {
           const note = msg.subtype === 'success' ? msg.result.trim().slice(0, NOTE_MAX) : '';
           if (note) Object.assign(s, { note, noteFresh: true });
         } else if (msg.subtype === 'success') {
-          if (msg.result.trim()) s.lastMessage = msg.result;
+          // A turn that ended on an error carries Claude Code's wording as its result: the notice already said it, and
+          // the previous turn's text would pass for this one's.
+          if (msg.is_error) s.lastMessage = '';
+          else if (msg.result.trim()) s.lastMessage = msg.result;
           this.event(s, 'turn_done');
         } else {
           this.notice(s, t('notice.interrupted'), 'info');
@@ -951,6 +978,8 @@ export class SessionManager extends EventEmitter {
       tool: toolLabel(toolName),
       summary: toolSummary(toolName, input),
       ...toolDetail(toolName, input),
+      // A command or an edit stays in view (it is what is being allowed); any other input is raw data.
+      showDetail: SHOWN_INPUT.test(toolName),
       reason: opts.decisionReason ?? '',
       // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
       canAlways: (opts.suggestions?.length ?? 0) > 0,
@@ -1047,7 +1076,7 @@ export class SessionManager extends EventEmitter {
     if (handoff) Object.assign(s, { handoff: true, handoffStale: false, handoffDone: true });
     else Object.assign(s, { noteFresh: false, handoffDone: false, handoffStale: s.handoff });
     if (from) {
-      this.upsert(s, { kind: 'peer', id: `peer-${randomUUID()}`, from, text: taggedSender(text)?.text ?? visibleText(text) });
+      this.upsert(s, { kind: 'peer', id: `peer-${randomUUID()}`, from, text: shown ?? taggedSender(text)?.text ?? visibleText(text) });
     } else {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
       this.upsert(s, { kind: 'user', id: `user-${randomUUID()}`, text: shown ?? text, images: urls });
@@ -1099,7 +1128,9 @@ export class SessionManager extends EventEmitter {
       const messages = (await getSessionMessages(s.sessionId, { dir: s.cwd })).slice(-HISTORY_MAX);
       for (const m of messages) {
         if (m.parent_tool_use_id) continue;
-        const blocks = blocksOf(m.message);
+        // Claude Code stores an API error as a "<synthetic>" reply with its own wording: not shown again on reload.
+        const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';
+        const blocks = blocksOf(m.message).filter((b) => !synthetic || b.type !== 'text');
         if (m.type === 'assistant') {
           for (const item of assistantItems(blocks, m.uuid)) history.set(item.id, item);
         } else if (m.type === 'user') {
@@ -1122,6 +1153,13 @@ export class SessionManager extends EventEmitter {
   }
 
   // ---------- chat items ----------
+
+  /** Takes an item out of the conversation (a streamed reply that turned out to be an error's wording). */
+  private drop(s: Session, id: string): void {
+    if (!s.items.delete(id)) return;
+    this.pendingItems.get(s.id)?.delete(id);
+    this.emit('items', s.id, [...s.items.values()], true);
+  }
 
   private upsert(s: Session, item: ChatItem): void {
     s.items.set(item.id, item);
@@ -1150,10 +1188,11 @@ export class SessionManager extends EventEmitter {
   // ---------- master supervision ----------
 
   /** Wakes the master with a hub message about a worker it would otherwise wait on forever. */
-  private notifyMaster(text: string): void {
+  /** `shown`: the short line the user reads; `note`: what the model alone needs (visibleText() hides it). */
+  private notifyMaster(shown: string, note: string): void {
     const master = this.sessions.get(MASTER_ID);
     if (!master || this.quitting) return;
-    this.deliver(master, { text: `${tags().hub} ${text}`, images: [], from: 'hub' });
+    this.deliver(master, { text: `${tags().hub} ${shown}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: 'hub' });
   }
 
   /** A worker the master wrote to ended its turn without answering: the master hears it from the hub. */
@@ -1166,8 +1205,8 @@ export class SessionManager extends EventEmitter {
     s.owesReport = false;
     // A random tag the worker's text cannot guess: nothing inside it can pass for the hub's own words.
     const tag = `worker-output-${randomUUID().slice(0, 8)}`;
-    const last = s.lastMessage ? s.lastMessage.slice(0, 3000) : t('hub.noText');
-    this.notifyMaster(t('hub.silent', { name: s.name, tag, last }));
+    const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
+    this.notifyMaster(t('hub.silent', { name: displayName(s) }), t('hub.silent.note', { name: s.name, tag, last }));
   }
 
   /** End of the turn (and of its background tasks) of a worker the master closed while it was finishing. */
@@ -1778,8 +1817,8 @@ export class SessionManager extends EventEmitter {
   private modelOptions(): ModelOption[] {
     return this.modelInfos.map((m) => ({
       value: m.value,
-      label: m.displayName,
-      description: m.description,
+      label: modelLabel(m.value, m.displayName),
+      description: modelHint(m.value, m.displayName),
       efforts: m.supportsEffort ? (m.supportedEffortLevels ?? []) : [],
     }));
   }
@@ -1811,7 +1850,7 @@ export class SessionManager extends EventEmitter {
 
   private labelFor(value: string, modelId: string): string {
     const info = this.modelInfos.find((m) => m.value === value) ?? this.modelInfos.find((m) => m.resolvedModel === modelId);
-    return info?.displayName ?? modelId.replace(/^claude-/, '');
+    return info ? modelLabel(info.value, info.displayName) : modelId.replace(/^claude-/, '');
   }
 
   // ---------- state ----------

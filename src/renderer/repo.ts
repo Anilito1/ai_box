@@ -317,7 +317,7 @@ export class RepoPanel {
 
   /** Folds or unfolds the panel (the keyboard shortcut). */
   toggle(): void {
-    this.setCollapsed(!this.collapsed);
+    if (this.current()) this.setCollapsed(!this.collapsed); // No repo followed: nothing to show.
   }
 
   /** Folder of the worker opened beside the master: in Auto, the panel follows it. */
@@ -374,7 +374,7 @@ export class RepoPanel {
     this.renderChanges(c.tree);
     const key = `${c.tree.path}|${c.tree.oid}|${c.tree.branch}|${c.tree.upstream}|${c.repo.refsKey}|${this.filter}`;
     // Folded, the graph waits: it loads when unfolded.
-    if (key !== this.graphKey && !this.collapsed) {
+    if (key !== this.graphKey && !this.collapsed && !c.repo.missing) {
       this.graphKey = key;
       void this.loadGraph();
     }
@@ -486,7 +486,8 @@ export class RepoPanel {
     const c = this.current();
     const state: RepoState = c?.tree.state ?? '';
     const a = this.alert && c && this.alert.path === c.tree.path && !(state && this.alert.kind === 'conflict') ? this.alert : null;
-    const key = JSON.stringify([state, a]);
+    const missing = c?.repo.missing ? c.repo.path : '';
+    const key = JSON.stringify([state, a, missing]);
     if (key === this.renderedKeys.alert) return;
     this.renderedKeys.alert = key;
     const items: HTMLElement[] = [];
@@ -496,6 +497,18 @@ export class RepoPanel {
       btn.addEventListener('click', () => void this.run(action));
       return btn;
     };
+    if (missing) {
+      // Moved or deleted: said plainly, with the way out.
+      const box = h('div', 'scm-alert-box warn');
+      box.append(h('div', 'scm-alert-text', t('scm.folderMissing')));
+      const stop = h('button', 'scm-fix');
+      stop.append(icon(ICONS.remove, 'ico small'), h('span', '', t('scm.removeRepo')));
+      stop.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:remove-repo', { detail: missing })));
+      const fixes = h('div', 'scm-fixes');
+      fixes.append(stop);
+      box.append(fixes);
+      items.push(box);
+    }
     if (state) {
       const box = h('div', 'scm-alert-box warn');
       box.append(h('div', 'scm-alert-text', t(STATES[state].text)));
@@ -922,7 +935,8 @@ export class RepoPanel {
           window.dispatchEvent(new CustomEvent('hub:remove-repo', { detail: repo.path }));
         }));
         menu.append(h('div', 'menu-sep'), label);
-        if (repo.error) menu.append(errorNote('menu-note', t('scm.repoFailed'), repo.error));
+        if (repo.missing) menu.append(errorNote('menu-note', t('scm.folderMissing')));
+        else if (repo.error) menu.append(errorNote('menu-note', t('scm.repoFailed'), repo.error));
         for (const tree of repo.trees) {
           const workers = this.workersIn(tree.path);
           const hint = [tree.branch || (tree.oid ? t('scm.detached', { oid: tree.oid.slice(0, 7) }) : t('scm.noCommit')), workers.length ? t('scm.workers', { names: workers.join(', ') }) : '']

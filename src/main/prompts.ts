@@ -29,7 +29,7 @@ export function tags(l: Lang = lang()) {
 const list = (items: string[], and: string) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} ${and} ${items.at(-1)}`);
 const flat = (text: string) => text.replace(/\s+/g, ' ').trim();
 /** Text the user, the master or a worker wrote, put between the hub's tags: none of it can close them. */
-export const inside = (text: string) => text.replace(/<\/(post-instructions|handoff-note|hub-post|hub-roster)>/gi, '<\\/$1>');
+export const inside = (text: string) => text.replace(/<\/(post-instructions|handoff-note|hub-post|hub-roster|hub-note)>/gi, '<\\/$1>');
 
 /** One line per enabled post, as the master reads it. */
 export function teamText(cfg: HubConfig, l: Lang = lang()): string {

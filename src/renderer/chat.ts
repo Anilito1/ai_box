@@ -730,16 +730,24 @@ export class ChatView {
     const sessionId = this.session?.id ?? '';
     const card = h('div', 'perm');
     const title = h('div', 'perm-title');
-    const [before, after] = t('perm.question').split('{tool}');
-    title.append(icon(ICONS.shield), h('span', '', before), h('b', '', item.tool), h('span', '', after));
+    title.append(icon(ICONS.shield));
+    if (item.title) title.append(h('span', '', item.title));
+    else {
+      const [before, after] = t('perm.question').split('{tool}');
+      title.append(h('span', '', before), h('b', '', item.tool), h('span', '', after));
+    }
     card.append(title);
-    if (item.summary) card.append(h('div', 'perm-summary', item.summary));
-    if (item.detail && item.detail !== item.summary) card.append(this.code(item.detail, item.diff));
-    if (item.reason) card.append(h('div', 'perm-reason', item.reason));
+    if (item.summary) card.append(h('div', item.title ? 'perm-summary human' : 'perm-summary', item.summary));
+    // A command or an edit is what is being allowed: in view. Any other raw input, and the CLI's own reason (English),
+    // fold under "Details".
+    const detail = item.detail && item.detail !== item.summary ? item.detail : '';
+    if (detail && (item.showDetail || item.diff)) card.append(this.code(detail, item.diff));
+    const raw = [item.showDetail || item.diff ? '' : detail, item.reason].filter(Boolean).join('\n\n');
+    if (raw) card.append(techDetails(raw));
 
     const decide = (behavior: 'allow' | 'always' | 'deny', message?: string) => this.hub.decide(sessionId, item.id, { behavior, message });
     const actions = h('div', 'perm-actions');
-    const allow = h('button', 'btn primary', t('perm.allow'));
+    const allow = h('button', 'btn primary', item.allowLabel ?? t('perm.allow'));
     allow.addEventListener('click', () => decide('allow'));
     actions.append(allow);
     if (item.canAlways) {
@@ -748,7 +756,7 @@ export class ChatView {
       always.addEventListener('click', () => decide('always'));
       actions.append(always);
     }
-    const deny = h('button', 'btn ghost', t('perm.deny'));
+    const deny = h('button', 'btn ghost', item.denyLabel ?? t('perm.deny'));
     deny.addEventListener('click', () => decide('deny'));
     actions.append(deny);
 
@@ -764,7 +772,8 @@ export class ChatView {
   private permissionDone(item: Extract<ChatItem, { kind: 'permission' }>): HTMLElement {
     const labels = { allowed: t('perm.allowed'), denied: t('perm.denied'), expired: t('perm.expired'), pending: '' };
     const row = h('div', `perm-done ${item.state}`);
-    row.append(icon(item.state === 'allowed' ? ICONS.check : ICONS.remove), h('b', '', item.tool), h('span', '', ` ${labels[item.state]}`));
+    // "Allowed · Command": the outcome first, so it reads the same whatever the tool's name.
+    row.append(icon(item.state === 'allowed' ? ICONS.check : ICONS.remove), h('span', '', labels[item.state]), h('span', 'perm-done-sep', '·'), h('b', '', item.tool));
     if (item.summary) row.append(h('span', 'perm-done-summary', item.summary));
     return row;
   }

@@ -13,7 +13,7 @@ function readBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ''));
-    reader.onerror = () => reject(reader.error ?? new Error(t('img.readFailed')));
+    reader.onerror = () => reject(new Error(t('img.readFailed'))); // The browser's own message is English and technical.
     reader.readAsDataURL(blob);
   });
 }

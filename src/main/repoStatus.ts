@@ -47,6 +47,7 @@ export class RepoWatcher extends EventEmitter {
       fetchError: '',
       busy: null,
       error: '',
+      missing: false,
     };
   }
 
@@ -114,7 +115,7 @@ export class RepoWatcher extends EventEmitter {
     try {
       this.update(await this.read());
     } catch (err) {
-      this.update({ error: errorMessage(err) });
+      this.update({ error: errorMessage(err), missing: false }); // read() said "missing" itself: the folder is there.
     } finally {
       this.reading = false;
     }
@@ -125,7 +126,11 @@ export class RepoWatcher extends EventEmitter {
   }
 
   private async read(): Promise<Partial<RepoStatus>> {
-    if (!existsSync(this.path)) throw new Error(t('repo.missingFolder', { path: this.path }));
+    // Moved or deleted: the panel says so and offers to stop following it, on a checkout with nothing to act on.
+    if (!existsSync(this.path)) {
+      const gone: RepoTree = { path: this.path, label: '', branch: '', oid: '', upstream: '', ahead: 0, behind: 0, state: '', files: [], changes: 0, conflicts: 0, error: 'missing' };
+      return { missing: true, error: '', trees: [gone] };
+    }
     const listed = parseWorktrees(await git(this.path, ['worktree', 'list', '--porcelain', '-z']));
     // A worktree whose folder was deleted without `git worktree remove` stays listed until pruned.
     const others = listed.filter((p) => !samePath(p, this.path) && existsSync(p));
@@ -134,7 +139,7 @@ export class RepoWatcher extends EventEmitter {
     const trees: RepoTree[] = [];
     // One folder at a time: a burst of parallel git processes would compete with the workers' own.
     for (const p of [this.path, ...others]) trees.push(await this.readTree(p, p === this.path));
-    return { error: '', trees, refsKey: createHash('sha1').update(refs).digest('hex').slice(0, 16), webUrl: remote };
+    return { error: '', missing: false, trees, refsKey: createHash('sha1').update(refs).digest('hex').slice(0, 16), webUrl: remote };
   }
 
   /** A checkout: its changes, and where it stands against its upstream. */

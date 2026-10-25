@@ -18,7 +18,47 @@ export const blocksOf = (message: unknown): Block[] => {
   return Array.isArray(content) ? (content as Block[]) : [];
 };
 
+/** Claude Code's tools and the hub's own, as a step names them in the user's language. */
+const LABELS: Record<string, Parameters<typeof t>[0]> = {
+  Read: 'label.read',
+  Edit: 'label.edit',
+  MultiEdit: 'label.edit',
+  Write: 'label.write',
+  NotebookEdit: 'label.notebook',
+  Bash: 'label.command',
+  PowerShell: 'label.command',
+  BashOutput: 'label.output',
+  TaskOutput: 'label.output',
+  KillShell: 'label.stop',
+  KillBash: 'label.stop',
+  TaskStop: 'label.stop',
+  Grep: 'label.grep',
+  Glob: 'label.glob',
+  WebFetch: 'label.webFetch',
+  WebSearch: 'label.webSearch',
+  TodoWrite: 'label.todos',
+  Task: 'label.subagent',
+  Agent: 'label.subagent',
+  ToolSearch: 'label.toolSearch',
+  SendMessage: 'label.message',
+  ExitPlanMode: 'label.plan',
+  Skill: 'label.skill',
+  mcp__hub__list_workers: 'label.listWorkers',
+  mcp__hub__list_repos: 'label.listRepos',
+  mcp__hub__spawn_worker: 'label.spawnWorker',
+  mcp__hub__message_worker: 'label.messageWorker',
+  mcp__hub__message_master: 'label.messageMaster',
+  mcp__hub__worker_report: 'label.workerReport',
+  mcp__hub__close_worker: 'label.closeWorker',
+  mcp__hub__list_roles: 'label.listRoles',
+  mcp__hub__create_role: 'label.createRole',
+  mcp__hub__update_role: 'label.updateRole',
+  mcp__hub__delete_role: 'label.deleteRole',
+};
+
+/** A tool's name for the user: ours in their language, another server's as "server · tool". */
 export function toolLabel(name: string): string {
+  if (LABELS[name]) return t(LABELS[name]);
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   return mcp ? `${mcp[1]} · ${mcp[2]}` : name;
 }
@@ -28,8 +68,18 @@ const shortPath = (p: string) => p.split(/[\\/]/).filter(Boolean).slice(-2).join
 
 export function toolSummary(name: string, input: Record<string, unknown>): string {
   if (name === 'TodoWrite' && Array.isArray(input.todos)) return t('todos', { n: input.todos.length });
-  if (name === 'SendMessage') return `→ ${str(input.to)}`;
-  const keys = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'name', 'to', 'path', 'prompt'];
+  // A session's reference ("hub-maitre [f62b1e]") keeps its name only.
+  if (name === 'SendMessage') return `→ ${str(input.to).replace(/\s*\[[0-9a-f]{4,}\]$/i, '')}`;
+  // "select:mcp__hub__update_role,…": the tools it looks for, named as the steps name them.
+  if (name === 'ToolSearch') {
+    const query = str(input.query);
+    const picked = /^select:(.+)$/.exec(query)?.[1].split(',').map((n) => toolLabel(n.trim()));
+    return (picked ? picked.join(', ') : query).slice(0, 180);
+  }
+  // The hub's own tools are about a worker or a post: its name says it best.
+  const keys = name.startsWith('mcp__hub__')
+    ? ['name', 'to']
+    : ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'name', 'to', 'path', 'prompt'];
   const key = keys.find((k) => typeof input[k] === 'string' && (input[k] as string).length > 0);
   if (!key) return '';
   const value = input[key] as string;
@@ -123,22 +173,46 @@ const PEER = /<cross-session-message\b([^>]*)>([\s\S]*?)<\/cross-session-message
 const attr = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`).exec(attrs)?.[1] ?? '';
 
 /** The tags of prompts.ts in either language: a transcript keeps the language it was written in. */
-const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from the master[^\]\n]*|Message from the master|Hub)\]\s*/;
+const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from the master[^\]\n]*|Message from the master|Hub|Message du worker "([^"\n]+)"|Message from worker "([^"\n]+)")\]\s*/;
 /** Appended for each image saved to disk, so the model can hand its path to another session. */
 export const capturedLine = (path: string) => (lang() === 'fr' ? `[Capture jointe : ${path}]` : `[Attached image: ${path}]`);
 const CAPTURED = /^\[(?:Capture jointe :|Attached image:) [^\]\n]+\]\n?/gm;
 
-/** What the hub adds to a message about a changed team or post (prompts.ts). */
-const HUB_BLOCK = /\s*<hub-(roster|post)>[\s\S]*?<\/hub-\1>/g;
+/**
+ * What the hub adds to a message for the model alone: a changed team or post, a handoff note, or the instructions
+ * behind a short message the user reads (<hub-note>).
+ */
+const HUB_BLOCK = /\s*<hub-(roster|post|note|handoff)>[\s\S]*?<\/hub-\1>/g;
+const HUB_NOTE = /<hub-note>([\s\S]*?)<\/hub-note>/;
+/**
+ * A worker's own words inside a hub note, between random tags nothing in them can close; the opening tag starts a line
+ * (the note's prose may name the tag before).
+ */
+const WORKER_OUTPUT = /(?:^|\n)<(worker-output-[\w-]+)>\n?([\s\S]*?)\n?<\/\1>/;
 
 /** Text as the user sees it: without the saved-image lines and the hub's blocks, which the model alone needs. */
 export const visibleText = (text: string) => text.replace(CAPTURED, '').replace(HUB_BLOCK, '').trim();
 
-/** Sender of a hub-delivered message (the master, or "hub"), and its text without the tag; null for a user message. */
+const preview = (text: string) => {
+  const line = text.replace(/\s+/g, ' ').trim();
+  return line.length > 280 ? `${line.slice(0, 280)}…` : line;
+};
+
+/**
+ * Sender of a hub-delivered message (the master, a worker, or "hub") and the text the user reads: without the tag nor
+ * what the model alone needs. A worker's words come from its note; a hub message keeps its short line, with a preview
+ * of the worker's words it carries.
+ */
 export function taggedSender(text: string): { from: string; text: string } | null {
   const m = TAGGED.exec(text);
   if (!m) return null;
-  return { from: m[1] === 'Hub' ? 'hub' : masterName(), text: visibleText(text.slice(m[0].length)) };
+  const body = text.slice(m[0].length);
+  const quoted = WORKER_OUTPUT.exec(HUB_NOTE.exec(body)?.[1] ?? '')?.[2]?.trim() ?? '';
+  const worker = m[2] ?? m[3];
+  if (worker) return { from: worker, text: quoted || visibleText(body) };
+  if (m[1] !== 'Hub') return { from: masterName(), text: visibleText(body) };
+  const line = visibleText(body);
+  return { from: 'hub', text: quoted ? `${line}\n\n> ${preview(quoted)}` : line };
 }
 
 /** data: URLs of the base64 images of a user message. */

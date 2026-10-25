@@ -73,6 +73,9 @@ function clawd(s: SessionView): SVGSVGElement {
   return svg;
 }
 
+/** The 3D stage is up: new mascots go straight to it, without the flat placeholder. */
+let stageReady = false;
+
 // One mind per session, shared by its views (sidebar card and open conversation), so both act alike.
 const minds = new Map<string, Mind>();
 
@@ -161,11 +164,26 @@ export class Avatar {
     this.svg?.remove();
     this.svg = null;
     this.canvas.hidden = false;
+    // Until the 3D stage arrives (a moment after the first paint), the flat Clawd holds the place, still.
+    if (!stageReady) {
+      this.svg = clawd(s);
+      this.svg.classList.add('still');
+      this.root.prepend(this.svg);
+    }
     void clawdStage().then((stage) => {
       if (this.session?.id !== s.id) return; // Switched to another session meanwhile.
       if (!stage) return this.fallback();
+      stageReady = true;
       this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), this.large, () => this.fallback());
-      this.root.classList.add('drawn'); // Fades in: the stage arrives a moment after the first paint.
+      this.root.classList.add('drawn'); // The 3D Clawd fades in over the flat one, which then leaves.
+      const placeholder = this.svg;
+      if (placeholder) {
+        window.setTimeout(() => {
+          if (this.svg !== placeholder || !this.view) return;
+          placeholder.remove();
+          this.svg = null;
+        }, 450);
+      }
     });
   }
 
@@ -173,10 +191,12 @@ export class Avatar {
     this.view?.dispose();
     this.view = null;
     this.canvas.hidden = true;
+    this.root.classList.remove('drawn');
     if (this.session && !this.svg) {
       this.svg = clawd(this.session);
       this.root.prepend(this.svg);
     }
+    this.svg?.classList.remove('still'); // No WebGL: the flat Clawd is the mascot, and moves.
   }
 
   private poke(e: MouseEvent): void {

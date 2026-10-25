@@ -100,12 +100,13 @@ export function git(cwd: string, args: string[], { timeout = 15_000, interactive
     execFile('git', [...config, '-C', cwd, ...args], { env, timeout, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (!err) return resolve(stdout);
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(new GitError(t('git.notFound'), ''));
-      if (err.killed) return reject(new GitError(t('git.timeout', { cmd: args[0], s: Math.round(timeout / 1000) }), ''));
+      if (err.killed) return reject(new GitError(t('git.timeout'), ''));
       const output = stripCredentials(`${stderr}\n${stdout}`.trim());
       const lines = output.split('\n').map((l) => l.trim()).filter(Boolean);
       // Never err.message: it repeats the whole command line, commit message included.
       const line = lines.find((l) => /^(fatal|error):/.test(l)) ?? lines.find((l) => !l.startsWith('hint:')) ?? t('git.failed', { cmd: args[0], code: String(err.code) });
-      reject(new GitError(line, output));
+      // No output at all: the exit code goes to the "Details" fold, not in a sentence (scm.ts).
+      reject(new GitError(line, output || line));
     });
   }).finally(() => cred?.cleanup());
 }

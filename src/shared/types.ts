@@ -178,6 +178,8 @@ export interface RepoStatus {
   fetchError: string;
   busy: RepoBusy | null;
   error: string;
+  /** Its folder was moved or deleted. */
+  missing: boolean;
 }
 
 export type GitRefKind = 'head' | 'branch' | 'remote' | 'tag';
@@ -303,6 +305,12 @@ export type ChatItem =
   | {
       kind: 'permission';
       id: string;
+      /** The question in human words, instead of "Permission needed: <tool>". */
+      title?: string;
+      allowLabel?: string;
+      denyLabel?: string;
+      /** The detail stays in view (a command, an edit) instead of folding under "Details". */
+      showDetail?: boolean;
       tool: string;
       summary: string;
       detail: string;
