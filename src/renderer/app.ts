@@ -43,6 +43,8 @@ settingsButton.addEventListener('click', () => void setup.open('settings'));
 interface Card {
   root: HTMLDivElement;
   avatar: Avatar;
+  /** Branch mark of a worker in its own worktree. */
+  tree: HTMLSpanElement;
   name: HTMLSpanElement;
   cost: HTMLSpanElement;
   model: HTMLSpanElement;
@@ -77,8 +79,11 @@ function actionButton(label: string, path: string, run: () => void): HTMLButtonE
   return btn;
 }
 
+/** Closed for good: its worktree was removed, so it cannot start there again. Its conversation stays readable. */
+const ended = (s: SessionView) => isClosed(s) && s.tree?.state === 'removed';
+
 function renderActions(c: Card, s: SessionView): void {
-  const key = `${s.role}:${isClosed(s)}:${s.post !== null}`;
+  const key = `${s.role}:${isClosed(s)}:${s.post !== null}:${ended(s)}`;
   if (c.actionsKey === key) return;
   c.actionsKey = key;
   c.actions.replaceChildren();
@@ -88,9 +93,22 @@ function renderActions(c: Card, s: SessionView): void {
     return;
   }
   if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.close'), ICONS.stop, () => hub.stop(s.id)));
-  if (isClosed(s)) c.actions.append(actionButton(t('card.resume'), ICONS.resume, () => hub.resume(s.id)));
+  if (isClosed(s) && !ended(s)) c.actions.append(actionButton(t('card.resume'), ICONS.resume, () => hub.resume(s.id)));
   if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
 }
+
+/** Who goes where in the sidebar: each post with its instances at work, the other active workers, the closed ones. */
+function layout(sessions: SessionView[]): { team: SessionView[]; active: SessionView[]; closed: SessionView[] } {
+  const posts = sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
+  const under = (p: SessionView) => sessions.filter((s) => s.instance && s.instance.postId === p.post?.id && !isClosed(s));
+  const team = posts.flatMap((p) => [p, ...under(p)]);
+  const rest = sessions.filter((s) => s.role === 'worker' && !team.includes(s));
+  // Newest first: the latest missions are the ones worth a look.
+  return { team, active: rest.filter((s) => !isClosed(s)), closed: rest.filter(isClosed).reverse() };
+}
+
+/** Nested under its post: an instance at work, its card in the team list. */
+const nested = (s: SessionView) => !!s.instance && !isClosed(s) && snapshot.sessions.some((p) => p.post?.id === s.instance?.postId);
 
 /** Shows a worker's conversation beside the master (a closed one is read from its transcript), or hides it. */
 function openWorker(id: string | null): void {
@@ -109,9 +127,13 @@ function ensureCard(s: SessionView): Card {
   const root = h('div', s.role === 'master' ? 'card master' : 'card');
   const row = h('div', 'card-row');
   const avatar = new Avatar('card');
+  const tree = h('span', 'card-tree');
+  tree.append(icon(ICONS.branch));
+  tree.setAttribute('aria-hidden', 'true');
+  tree.hidden = true;
   const name = h('span', 'card-name');
   const cost = h('span', 'card-cost');
-  row.append(name, cost);
+  row.append(tree, name, cost);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -127,7 +149,7 @@ function ensureCard(s: SessionView): Card {
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
+  const card = { root, avatar, tree, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -140,6 +162,8 @@ function setText(el: HTMLElement, text: string): void {
 /** What the card says under the meter: live activity while working, else the latest news. */
 function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
   if (s.status === 'attention') return { text: t('card.attention'), cls: 'warn' };
+  if (s.tree?.install === 'running' && !isClosed(s)) return { text: t('card.installing'), cls: 'live' };
+  if (s.tree?.state === 'kept' && isClosed(s)) return { text: t('card.treeKept', { reasons: s.tree.kept.map((k) => t(`tree.why.${k}`)).join(' · ') }), cls: 'warn' };
   if (s.status === 'busy') {
     const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
@@ -160,8 +184,12 @@ function renderCard(s: SessionView): void {
   // A resting permanent worker gets the compact card of a closed one, without its faded look.
   c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker' && !s.post);
   c.root.classList.toggle('asleep', isClosed(s) && s.post !== null);
+  // Under its post the job is enough ("agenda"); elsewhere the post goes with it ("brain · agenda").
+  const inTeam = nested(s);
+  c.root.classList.toggle('instance', inTeam);
   c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
-  setText(c.name, displayName(s));
+  c.tree.hidden = s.tree?.state !== 'active';
+  setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.cost, fmtCost(m?.costUsd));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
   setText(c.pct, fmtPct(m?.contextPct));
@@ -171,7 +199,9 @@ function renderCard(s: SessionView): void {
   const sub = cardSub(s, last);
   setText(c.sub, sub.text);
   c.sub.className = `card-sub ${sub.cls}`;
-  if (c.root.title !== s.cwd && c.root.dataset.tip !== s.cwd) c.root.title = s.cwd;
+  // A worktree is named by its branch, never by its path.
+  const tip = s.instance && s.tree ? t('card.instanceTip', { post: s.instance.post, branch: s.tree.branch }) : s.tree ? t('card.treeTip', { branch: s.tree.branch }) : s.cwd;
+  if (c.root.title !== tip && c.root.dataset.tip !== tip) c.root.title = tip;
   renderActions(c, s);
 }
 
@@ -264,20 +294,18 @@ function render(): void {
   if (opened && !ids.has(opened)) opened = null;
 
   for (const s of sessions) renderCard(s);
-  const workers = sessions.filter((s) => s.role === 'worker' && !s.post);
-  const posts = sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
-  const active = workers.filter((s) => !isClosed(s));
-  // Newest first: the latest missions are the ones worth a look.
-  const closed = workers.filter(isClosed).reverse();
+  const { team, active, closed } = layout(sessions);
+  const posts = team.filter((s) => s.post).length;
   const nodeOf = (s: SessionView) => (cards.get(s.id) as Card).root;
-  syncList(teamList, posts.map(nodeOf));
-  teamGroup.hidden = posts.length === 0;
-  $('team-count').textContent = posts.length ? String(posts.length) : '';
+  syncList(teamList, team.map(nodeOf));
+  teamGroup.hidden = posts === 0;
+  $('team-count').textContent = posts ? String(posts) : '';
   syncList(activeList, active.map(nodeOf));
   syncList(closedList, closed.map(nodeOf));
   closedGroup.hidden = closed.length === 0;
   $('closed-count').textContent = String(closed.length);
-  $('worker-empty').hidden = active.length > 0;
+  // Instances at work under their post count as active workers: "no active worker" would be wrong.
+  $('worker-empty').hidden = active.length > 0 || team.length > posts;
   $('worker-count').textContent = active.length ? String(active.length) : '';
 
   workspace.classList.toggle('expanded', opened !== null);
@@ -327,10 +355,10 @@ splitter.addEventListener('pointerdown', (e) => {
 
 // ---------- keyboard ----------
 
-/** The team, then the active workers, as the sidebar shows them: Ctrl/Cmd+2 to 9 open them in that order. */
+/** The team (posts and their instances), then the active workers, as the sidebar shows them: Ctrl/Cmd+2 to 9 open them in that order. */
 function sidebarOrder(): SessionView[] {
-  const posts = snapshot.sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
-  return [...posts, ...snapshot.sessions.filter((s) => s.role === 'worker' && !s.post && !isClosed(s))];
+  const { team, active } = layout(snapshot.sessions);
+  return [...team, ...active];
 }
 
 /** Everything the hub can do from the keyboard, with its shortcut when it has one. */
@@ -343,8 +371,7 @@ function commands(): Command[] {
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
   );
-  const closed = snapshot.sessions.filter((s) => s.role === 'worker' && !s.post && isClosed(s));
-  for (const s of closed.reverse()) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
+  for (const s of layout(snapshot.sessions).closed) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
   return list;
 }
 

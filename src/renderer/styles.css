@@ -1372,6 +1372,44 @@ kbd,
   margin-top: 2px;
   -webkit-line-clamp: 1;
 }
+/* An extra instance of a post at work: a compact card tucked under its post, hooked to it by a thin line. */
+.card.instance {
+  grid-template-columns: 32px minmax(0, 1fr);
+  margin-left: 20px;
+  padding-top: 5px;
+  padding-bottom: 7px;
+}
+.card.instance::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -11px;
+  width: 8px;
+  height: 22px;
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
+.card.instance .card-meta {
+  margin: 0 0 4px;
+}
+.card.instance .card-sub {
+  margin-top: 4px;
+  -webkit-line-clamp: 1;
+}
+.card-tree {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-3);
+}
+.card-tree[hidden] {
+  display: none;
+}
+.card-tree .ico {
+  width: 12px;
+  height: 12px;
+}
 .card-actions {
   position: absolute;
   top: 6px;
@@ -2876,7 +2914,8 @@ kbd,
   cursor: pointer;
 }
 .card.closed .avatar,
-.card.asleep .avatar {
+.card.asleep .avatar,
+.card.instance .avatar {
   width: 32px;
   height: 32px;
 }

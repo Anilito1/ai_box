@@ -59,6 +59,20 @@ export function repoRootOf(dir: string): string | null {
   }
 }
 
+/**
+ * Checkout holding `dir` and the main folder of its repo: the same folder for a main checkout, the repo's for a linked
+ * worktree. Two folders belong to the same repo when their `main` is the same. Null outside any repo.
+ */
+export function repoOf(dir: string): { checkout: string; main: string } | null {
+  const checkout = repoRootOf(dir);
+  if (!checkout) return null;
+  try {
+    return { checkout, main: describe(checkout, join(checkout, '.git')).worktreeOf || checkout };
+  } catch {
+    return { checkout, main: checkout };
+  }
+}
+
 function describe(dir: string, gitPath: string): RepoInfo {
   // A linked worktree has a `.git` file pointing at its git dir; its config lives in the common dir.
   const gitDir = statSync(gitPath).isFile() ? resolve(dir, readFileSync(gitPath, 'utf8').replace(/^gitdir:\s*/, '').trim()) : gitPath;

@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFile
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isLang, type Lang } from '../shared/i18n';
+import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
 import { EFFORTS, PROVIDERS, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
 
@@ -39,6 +40,7 @@ function defaults(lang: Lang): HubConfig {
     workerModels: ['opus', 'sonnet'],
     workerMaxEffort: 'xhigh',
     team: [],
+    parallel: { ...PARALLEL_DEFAULTS },
     permissionMode: '',
     masterInstructions: '',
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
@@ -81,6 +83,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     (v) => (cfg.workerModels = v),
   );
   take('workerMaxEffort', raw.workerMaxEffort, (v): v is Effort => EFFORTS.includes(v as Effort), (v) => (cfg.workerMaxEffort = v));
+  take('parallel', raw.parallel, isParallel, (v) => (cfg.parallel = { perPost: v.perPost, maxWorkers: v.maxWorkers }));
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
   if (raw.github !== undefined) {

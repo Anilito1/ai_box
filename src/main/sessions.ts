@@ -20,6 +20,7 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import {
   capEffort,
   fromTemplate,
@@ -59,6 +60,7 @@ import {
   inside,
   masterName,
   masterPrompt,
+  missionNote,
   PERMANENT_SLEEP_MIN,
   postUpdate,
   rosterBlock,
@@ -66,8 +68,9 @@ import {
   setMasterName,
   tags,
   workerPrompt,
+  type InstanceInfo,
 } from './prompts';
-import { findRepos, repoRootOf } from './repos';
+import { findRepos, repoOf } from './repos';
 import {
   assistantItems,
   blocksOf,
@@ -81,6 +84,7 @@ import {
   userTextItem,
   visibleText,
 } from './transcript';
+import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
 
 /** Push-based prompt stream: keeps a query in streaming-input mode so it can receive messages and controls. */
 class Inbox implements AsyncIterable<SDKUserMessage> {
@@ -115,7 +119,7 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree'> {
   sessionId: string;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
@@ -166,6 +170,19 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post'> {
   noteSentTo: string;
   /** The note is on its way with a first message: until the conversation exists, it is not added again. */
   noteSending: boolean;
+  /** Id of the post an extra instance works for, else null (the post's own worker has roleId instead). */
+  instanceOf: string | null;
+  /** The worktree the hub made for it, else null. */
+  tree: WorkTree | null;
+  /** Shares another worker's folder to read it: Edit and Write are off. */
+  readOnly: boolean;
+  /** The hub installing its worktree's dependencies. */
+  installing: { kill: () => void; done: Promise<unknown>; command: string } | null;
+  installFailed: boolean;
+  /** Its worktree being checked, and removed if nothing is lost, after a close: a launch waits for the outcome. */
+  retiring: Promise<string> | null;
+  /** Ends with its Claude Code process's stream. */
+  exit: Promise<void> | null;
 }
 
 type Persisted = {
@@ -194,6 +211,9 @@ type Persisted = {
   | 'noteSentTo'
   | 'userModel'
   | 'userEffort'
+  | 'instanceOf'
+  | 'tree'
+  | 'readOnly'
 >;
 
 export interface ManagerOptions {
@@ -307,6 +327,17 @@ const oneLine = (text: string, max: number): string => {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const KEEP_REASONS: KeepReason[] = ['changes', 'unpushed', 'operation', 'locked', 'inUse', 'unknown'];
+/** A worktree read back from state.json, as makeTree() makes them. */
+const validTree = (t: WorkTree): boolean =>
+  [t.repo, t.source, t.path].every((p) => typeof p === 'string' && isAbsolute(p)) &&
+  typeof t.branch === 'string' &&
+  isSafeBranch(t.branch) &&
+  /^[0-9a-f]{40,64}$/.test(t.base) &&
+  typeof t.baseRef === 'string' &&
+  ['active', 'kept', 'removed'].includes(t.state) &&
+  Array.isArray(t.kept) &&
+  t.kept.every((k) => KEEP_REASONS.includes(k));
 const minutesSince = (at: number) => Math.max(1, Math.round((Date.now() - at) / 60_000));
 const samePath = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
 
@@ -328,6 +359,7 @@ export class SessionManager extends EventEmitter {
   private readonly shownPosts = new Set<string>();
   /** Workers to relaunch at start, from the state saved when the hub last closed. */
   private readonly resumeOnStart = new Map<string, 'mission' | 'work'>();
+  private spawnQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly opts: ManagerOptions) {
     super();
@@ -362,6 +394,14 @@ export class SessionManager extends EventEmitter {
     this.resumeOnStart.clear();
     this.sweepTimer = setInterval(() => this.closeIdle(), 60_000);
     this.pruneAttachments();
+    void this.retireLeftovers();
+  }
+
+  /** Worktrees of workers the hub closed when it quit, idle: checked one at a time, removed if nothing is lost. */
+  private async retireLeftovers(): Promise<void> {
+    for (const s of [...this.sessions.values()]) {
+      if (s.tree?.state === 'active' && !s.inbox && !this.quitting) await this.retire(s);
+    }
   }
 
   /**
@@ -403,6 +443,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     const shown = text.trim();
     if (!s || (!shown && images.length === 0)) return;
+    if (this.ended(s)) return this.refuse(id, text, t('refuse.ended'));
     // Saved images get their path in the text, so the master can hand them to a worker (which opens them with Read).
     let paths: string[] = [];
     try {
@@ -424,7 +465,10 @@ export class SessionManager extends EventEmitter {
     s.query?.interrupt().catch(() => undefined);
   }
 
-  /** Also works while the session is still launching: launch() sees its inbox gone and gives up. */
+  /**
+   * Also works while the session is still launching: launch() sees its inbox gone and gives up. A worker with a
+   * worktree of the hub's gets it checked, and removed if nothing would be lost (`retiring` holds the outcome).
+   */
   stop(id: string): void {
     const s = this.sessions.get(id);
     if (!s?.inbox) return;
@@ -432,7 +476,14 @@ export class SessionManager extends EventEmitter {
     s.inbox.close();
     this.teardown(s);
     q?.close();
+    s.installing?.kill();
     this.changed();
+    if (s.tree && !this.quitting) void this.retire(s);
+  }
+
+  /** A worker whose worktree was removed: its job is over, its conversation can still be read. */
+  private ended(s: Session): boolean {
+    return !s.inbox && s.tree?.state === 'removed';
   }
 
   /** A permanent worker that wrote its handoff note: its next launch is a new conversation, seeded with the note. */
@@ -444,7 +495,7 @@ export class SessionManager extends EventEmitter {
 
   resume(id: string): void {
     const s = this.sessions.get(id);
-    if (s && !s.inbox) void this.launch(s, s.started);
+    if (s && !s.inbox && !this.ended(s)) void this.launch(s, s.started);
   }
 
   /** Shows the conversation of a closed session without resuming it. */
@@ -453,11 +504,13 @@ export class SessionManager extends EventEmitter {
     if (s && !s.inbox && s.started) void this.loadHistory(s);
   }
 
-  /** Only an ad-hoc worker: a permanent one goes with its post (Settings › Team). */
+  /** Only an ad-hoc worker or an instance: a permanent one goes with its post (Settings › Team). A worktree kept stays. */
   remove(id: string): void {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
+    // Its work may have been pushed since it closed: removed now if nothing would be lost.
+    if (s.tree && s.tree.state !== 'removed') void this.retire(s);
     this.changed();
   }
 
@@ -472,6 +525,7 @@ export class SessionManager extends EventEmitter {
     for (const s of this.sessions.values()) {
       s.inbox?.close();
       s.query?.close();
+      s.installing?.kill();
     }
   }
 
@@ -533,10 +587,12 @@ export class SessionManager extends EventEmitter {
     const { team } = this.opts.cfg;
     const sessions = this.visible()
       .sort((a, b) => (a.role === b.role ? a.createdAt - b.createdAt : a.role === 'master' ? -1 : 1))
-      .map((s) => ({
+      .map((s): SessionView => ({
         id: s.id,
         role: s.role,
         post: s.roleId ? { id: s.roleId, order: team.findIndex((r) => r.id === s.roleId), description: this.roleOf(s)?.description ?? '' } : null,
+        instance: s.instanceOf ? { postId: s.instanceOf, post: this.postOf(s)?.name ?? '', topic: this.topicOf(s) } : null,
+        tree: s.tree ? { branch: s.tree.branch, state: s.tree.state, kept: s.tree.kept, install: s.installing ? 'running' : s.installFailed ? 'failed' : '' } : null,
         name: s.name,
         mission: s.mission,
         cwd: s.cwd,
@@ -572,6 +628,44 @@ export class SessionManager extends EventEmitter {
     return s.roleId ? (this.opts.cfg.team.find((r) => r.id === s.roleId) ?? null) : null;
   }
 
+  /** The post a worker works for: its own (a permanent worker) or the one it is an extra instance of. */
+  private postOf(s: Session): TeamRole | null {
+    const id = s.roleId ?? s.instanceOf;
+    return id ? (this.opts.cfg.team.find((r) => r.id === id) ?? null) : null;
+  }
+
+  /** An instance's job: its name without "hub-<post>-". */
+  private topicOf(s: Session): string {
+    const name = displayName(s);
+    const post = this.postOf(s)?.name;
+    return post && name.startsWith(`${post}-`) ? name.slice(post.length + 1) : name;
+  }
+
+  /** Extra instances of a post, running or not. */
+  private instances(postId: string): Session[] {
+    return [...this.sessions.values()].filter((s) => s.instanceOf === postId);
+  }
+
+  private instancesBusy(postId: string): boolean {
+    return this.instances(postId).some((s) => s.inbox && !this.settled(s));
+  }
+
+  private running(): Session[] {
+    return [...this.sessions.values()].filter((s) => s.role === 'worker' && s.inbox);
+  }
+
+  /** The limits of Settings › Team for one more running worker (of `postId`, for an instance): the refusal, or ''. */
+  private overCap(postId: string | null): string {
+    const { perPost, maxWorkers } = this.opts.cfg.parallel;
+    const running = this.running();
+    // The post's own worker counts, asleep or not: a message may wake it at any time.
+    const instances = postId ? 1 + this.instances(postId).filter((s) => s.inbox).length : undefined;
+    const cap = capReached({ maxWorkers, running: running.length, ...(postId ? { perPost, instances } : {}) });
+    if (cap === 'workers') return t('cap.workers', { max: maxWorkers, list: running.map((s) => s.name).join(', ') });
+    if (cap === 'post') return t('cap.post', { name: this.opts.cfg.team.find((r) => r.id === postId)?.name ?? '', max: perPost });
+    return '';
+  }
+
   // ---------- SDK session ----------
 
   private async launch(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
@@ -599,6 +693,17 @@ export class SessionManager extends EventEmitter {
     s.queued = 0;
     this.changed();
 
+    // A close just checked its worktree: the outcome decides whether it can start there again.
+    if (s.retiring) await s.retiring;
+    if (this.quitting || s.inbox !== inbox) return;
+    if (s.tree?.state === 'removed') {
+      this.teardown(s);
+      this.notice(s, t('notice.ended'), 'info');
+      this.changed();
+      return;
+    }
+    if (s.tree?.state === 'kept') Object.assign(s.tree, { state: 'active', kept: [] });
+
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
     if (resume && !(await getSessionInfo(s.sessionId, { dir: s.cwd }).then(Boolean, () => true))) {
       resume = false;
@@ -610,7 +715,7 @@ export class SessionManager extends EventEmitter {
     if (this.quitting || s.inbox !== inbox) return; // Hub closing, or the session was closed while launching.
 
     const isMaster = s.role === 'master';
-    const post = this.roleOf(s);
+    const post = this.postOf(s);
     // Every launch starts in the configured mode (a composer change lasts as long as the process). None configured:
     // Claude Code picks its own default, which system/init reports.
     const mode = this.modeOf(s);
@@ -620,7 +725,7 @@ export class SessionManager extends EventEmitter {
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
-    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined);
+    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
     const options: Options = {
       cwd: s.cwd,
       ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
@@ -638,7 +743,11 @@ export class SessionManager extends EventEmitter {
       // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
       extraArgs: { name: s.name, 'replay-user-messages': null },
       includePartialMessages: true,
-      disallowedTools: isMaster ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'] : ['AskUserQuestion'],
+      disallowedTools: isMaster
+        ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage']
+        : s.readOnly
+          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion']
+          : ['AskUserQuestion'],
       mcpServers: { hub: this.hubServer(s) },
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
       allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
@@ -653,10 +762,11 @@ export class SessionManager extends EventEmitter {
     const q = query({ prompt: inbox, options });
     s.query = q;
     // A post's cost runs on across its conversations.
-    s.costBase = resume || post ? (s.metrics?.costUsd ?? 0) : 0;
+    s.costBase = resume || s.roleId ? (s.metrics?.costUsd ?? 0) : 0;
     this.changed();
     void this.onReady(s, q);
-    await this.consume(s, q);
+    s.exit = this.consume(s, q);
+    await s.exit;
   }
 
   private async consume(s: Session, q: Query): Promise<void> {
@@ -887,9 +997,9 @@ export class SessionManager extends EventEmitter {
     return this.opts.cfg.permissionMode || null;
   }
 
-  /** A post's own mode, else the hub's. */
+  /** A post's own mode (for its worker and its instances), else the hub's. */
   private modeOf(s: Session): Mode | null {
-    return this.roleOf(s)?.mode || this.hubMode();
+    return this.postOf(s)?.mode || this.hubMode();
   }
 
   /**
@@ -1063,7 +1173,7 @@ export class SessionManager extends EventEmitter {
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
     const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission;
-    void this.launch(s, s.started, lostMission ? { ...prompt, text: `${tags().mission(s.name)}\n${s.mission}\n\n${prompt.text}` } : prompt);
+    void this.launch(s, s.started, lostMission ? { ...prompt, text: `${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
   /** The first message of a post's conversation after a context renewal carries its handoff note. */
@@ -1079,7 +1189,7 @@ export class SessionManager extends EventEmitter {
    */
   private withNews(s: Session, prompt: Prompt): Prompt {
     const { cfg } = this.opts;
-    const post = this.roleOf(s);
+    const post = this.postOf(s);
     const key = s.role === 'master' ? rosterKey(cfg) : post ? roleKey(post) : '';
     if (key === s.seen || !s.query) return prompt;
     s.seen = key;
@@ -1245,6 +1355,7 @@ export class SessionManager extends EventEmitter {
     }
     this.stop(s.id);
     this.notice(s, t('notice.closedByMaster'), 'info');
+    this.tellKept(s);
   }
 
   /** Idle workers are closed, permanent ones sooner: their conversation stays on disk and the next message resumes them. */
@@ -1259,7 +1370,68 @@ export class SessionManager extends EventEmitter {
       this.event(s, 'idle_closed');
       this.stop(s.id);
       this.notice(s, t('notice.closedIdle', { min: IDLE_CLOSE_MIN }), 'info');
+      this.tellKept(s);
     }
+  }
+
+  // ---------- worktrees ----------
+
+  /**
+   * Checks a closed worker's worktree once its install is stopped, and removes it if nothing would be lost; a launch
+   * meanwhile keeps it. Resolves to the outcome as the master reads it; the conversation shows it too.
+   */
+  private retire(s: Session): Promise<string> {
+    const tree = s.tree;
+    if (!tree || tree.state === 'removed') return Promise.resolve('');
+    s.retiring ??= (async () => {
+      // Its Claude Code process, then its install, let go of the folder first.
+      await Promise.race([s.exit, new Promise((r) => setTimeout(r, 10_000))]);
+      await s.installing?.done;
+      const r = await retireTree(tree, () => !s.inbox);
+      // Started again while it was checked: it works there, the outcome no longer counts.
+      if (s.inbox) return '';
+      const leftover = r.removed && r.why.includes('inUse');
+      Object.assign(tree, { state: r.removed ? 'removed' : 'kept', kept: r.removed ? [] : r.why });
+      const reasons = r.why.map((w) => t(`tree.why.${w}`)).join(' · ');
+      if (this.sessions.get(s.id) === s) {
+        this.notice(s, leftover ? t('notice.treeLeftover') : r.removed ? t('notice.treeRemoved') : t('notice.treeKept', { reasons }), 'info');
+      }
+      this.changed();
+      if (leftover) return t('tree.leftover', { name: s.name, path: tree.path });
+      return r.removed ? t('tree.removed', { name: s.name }) : t('tree.kept', { name: s.name, path: tree.path, branch: tree.branch, reasons });
+    })().finally(() => (s.retiring = null));
+    return s.retiring;
+  }
+
+  /** A worktree kept on a close the master did not ask for (idle, end of its turn): the master hears why. */
+  private tellKept(s: Session): void {
+    void s.retiring?.then((text) => {
+      if (s.tree?.state === 'kept' && text) this.notifyMaster(t('hub.treeKept', { name: displayName(s) }), text);
+    });
+  }
+
+  /** Installs a new worktree's dependencies in the background; the worker hears when they are in. */
+  private install(s: Session, plan: InstallPlan): void {
+    const tree = s.tree;
+    if (!tree) return;
+    const command = planText(plan);
+    const run = { ...runInstall(tree, plan, this.toolEnv()), command };
+    s.installing = run;
+    s.installFailed = false;
+    void run.done.then((r) => {
+      if (s.installing !== run) return;
+      s.installing = null;
+      s.installFailed = !r.ok;
+      this.changed();
+      if (this.quitting || !s.inbox) return;
+      const line = r.ok ? t('install.done', { secs: Math.round(r.ms / 1000) }) : t('install.failed');
+      const tag = `install-output-${randomUUID().slice(0, 8)}`;
+      const note = r.ok ? t('install.done.note', { command }) : t('install.failed.note', { command, tag, output: inside(r.output.slice(-1500)) });
+      // Only while the worker may still need them: an idle one that has reported is not woken for this.
+      if (this.isWorking(s) || s.owesReport || s.status === 'starting') {
+        this.pushUser(s, { text: `${tags().hub} ${line}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: 'hub' });
+      } else this.notice(s, line, r.ok ? 'info' : 'error', r.ok ? '' : r.output);
+    });
   }
 
   /**
@@ -1339,10 +1511,19 @@ export class SessionManager extends EventEmitter {
             name: z.string().describe(t('tool.spawn.name')),
             mission: z.string().describe(t('tool.spawn.mission')),
             cwd: z.string().nullish().describe(t('tool.spawn.cwd', { cwd: masterCwd(cfg) })),
+            role: z.string().nullish().describe(t('tool.spawn.role')),
+            worktree: z.boolean().nullish().describe(t('tool.spawn.worktree')),
+            read_only: z.boolean().nullish().describe(t('tool.spawn.readOnly')),
             model,
             effort,
           },
-          (args) => run(() => this.spawnWorker(args)),
+          (args) =>
+            run(() => {
+              // One at a time: two parallel calls would pick the same names and both pass the limits.
+              const job = this.spawnQueue.then(() => this.spawnWorker(args));
+              this.spawnQueue = job.catch(() => undefined);
+              return job;
+            }),
         ),
         tool(
           'message_worker',
@@ -1364,9 +1545,12 @@ export class SessionManager extends EventEmitter {
           t('tool.close'),
           { name: byName, force: z.boolean().nullish().describe(t('tool.close.force')) },
           ({ name, force }) =>
-            run(() => {
+            run(async () => {
               const s = this.findWorker(name);
-              if (!s.query) return t(s.roleId ? 'close.alreadyAsleep' : 'close.already', { name: s.name });
+              if (!s.query) {
+                const tree = s.retiring ? await s.retiring : '';
+                return tree || t(s.roleId ? 'close.alreadyAsleep' : this.ended(s) ? 'close.alreadyEnded' : 'close.already', { name: s.name });
+              }
               if (this.isWorking(s) && !force) {
                 s.closeWhenDone = true;
                 const what = s.background.length > 0 ? t('close.tasks', { list: s.background.join(' ; ') }) : t('close.turn');
@@ -1374,7 +1558,10 @@ export class SessionManager extends EventEmitter {
               }
               if (s.roleId && !force) return t(this.sleep(s) ? 'close.asleep' : 'close.note', { name: s.name });
               this.stop(s.id);
-              return t(s.roleId ? 'close.asleep' : 'close.done', { name: s.name });
+              if (s.roleId) return t('close.asleep', { name: s.name });
+              // Its worktree's outcome replaces "restarts with its conversation": a removed one ends the job.
+              const tree = s.retiring ? await s.retiring : '';
+              return tree || t('close.done', { name: s.name });
             }),
         ),
         tool('list_roles', t('tool.listRoles'), {}, () => run(() => this.listRoles())),
@@ -1400,45 +1587,109 @@ export class SessionManager extends EventEmitter {
     });
   }
 
-  private spawnWorker(args: { name: string; mission: string; cwd?: string | null; model?: string | null; effort?: Effort | null }): string {
+  /**
+   * An ad-hoc worker, or with `role` one more instance of a post (its prompt, folders and model rule). A worker that
+   * would write in a checkout another one writes in (or a post holds) gets its own worktree, so does every instance;
+   * `read_only` shares the folder with Edit and Write off instead.
+   */
+  private async spawnWorker(args: {
+    name: string;
+    mission: string;
+    cwd?: string | null;
+    role?: string | null;
+    worktree?: boolean | null;
+    read_only?: boolean | null;
+    model?: string | null;
+    effort?: Effort | null;
+  }): Promise<string> {
     const { cfg } = this.opts;
     const mission = args.mission.trim();
     if (!mission) throw new Error(t('spawn.empty'));
-    const cwd = args.cwd?.trim() || masterCwd(cfg);
-    if (!isAbsolute(cwd) || !existsSync(cwd) || !statSync(cwd).isDirectory()) throw new Error(t('spawn.badDir', { cwd }));
-    const choice = this.choose(null, args);
-    const model = choice.model ?? cfg.worker.model;
-    const effort = choice.effort ?? (cfg.worker.effort || null);
+    const post = args.role?.trim() ? this.findRole(args.role) : null;
+    if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
+    const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
+    if (!isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
+    const over = this.overCap(post?.id ?? null);
+    if (over) throw new Error(over);
+    const choice = this.choose(null, args, post);
+    const model = choice.model ?? (post?.model || cfg.worker.model);
+    const effort = choice.effort ?? (post?.effort || cfg.worker.effort || null);
+    const readOnly = !!args.read_only;
+    const where = repoOf(folder);
+    const writers = where ? this.writersIn(where.checkout) : [];
+    const isolate = !readOnly && (!!post || !!args.worktree || writers.length > 0);
+    if (isolate && !where && (post || args.worktree)) throw new Error(t(post ? 'instance.noRepo' : 'spawn.noRepoTree', { name: post?.name ?? '', cwd: folder }));
 
-    // Compared by checkout root, so a worker in a subfolder of the same folder counts too.
-    const rootKey = (dir: string) => (repoRootOf(dir) ?? resolve(dir)).toLowerCase();
+    const topic = topicOf(args.name, post?.name ?? '');
+    let made: NewTree | null = null;
+    if (isolate && where) {
+      try {
+        made = await makeTree(folder, post?.name ?? '', topic);
+      } catch (err) {
+        throw new Error(t('tree.failed', { error: errorText(err) }));
+      }
+    }
+    const cwd = made?.cwd ?? folder;
+    const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
+    const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
+    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true });
+    const plan = s.tree ? installPlan(s.tree) : null;
+    // Only where nothing waits for an approval: an install runs the packages' own scripts.
+    const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
+    if (plan && byHub) this.install(s, plan);
+    void this.launch(s, false, this.missionPrompt(s, made?.stale));
+
+    // Other workers of the same repo, in any of its checkouts: worth naming in the briefs.
+    const repoKey = (dir: string) => (repoOf(dir)?.main ?? resolve(dir)).toLowerCase();
     const notes = this.choiceNotes(choice.notes);
     const sameRepo = this.visible()
-      .filter((w) => w.role === 'worker' && !w.roleId && w.inbox && rootKey(w.cwd) === rootKey(cwd))
+      .filter((w) => w !== s && w.role === 'worker' && w.inbox && repoKey(w.cwd) === repoKey(folder))
       .map((w) => w.name);
-    if (sameRepo.length > 0) notes.push(t('spawn.sameRepo', { names: sameRepo.join(', ') }));
-    // A post that works in this folder, or bears this name, is the one to hand the task to.
+    if (sameRepo.length > 0) notes.push(t(made || readOnly ? 'spawn.sameRepoApart' : 'spawn.sameRepo', { names: sameRepo.join(', ') }));
+    // A post that works in this repo, or bears this name, is the one to hand the task to.
     const slug = slugify(args.name, 28);
-    const posts = this.visible()
-      .filter((w) => w.roleId && (rootKey(w.cwd) === rootKey(cwd) || w.name === `hub-${slug}`))
-      .map((w) => w.name);
+    const posts = post
+      ? []
+      : cfg.team.filter((r) => r.enabled && (r.folders.some((f) => repoKey(f) === repoKey(folder)) || r.name === slug)).map(sessionNameOf);
     if (posts.length > 0) notes.push(t('spawn.post', { names: posts.join(', ') }));
-    if (!repoRootOf(cwd)) notes.push(t('spawn.noRepo', { cwd }));
-
-    const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', this.uniqueName(args.name), mission, cwd, model, effort);
-    s.owesReport = true;
-    void this.launch(s, false, this.missionPrompt(s));
+    if (!where) notes.push(t('spawn.noRepo', { cwd: folder }));
+    const others = post ? this.instances(post.id).filter((w) => w !== s && w.inbox).map((w) => w.name) : [];
     return [
       t('spawn.started', { name: s.name, model: model || t('spawn.usualModel'), effort: effort ?? t('spawn.usualEffort'), cwd }),
+      ...(post ? [t('instance.started', { post: post.name, main: sessionNameOf(post), others: others.join(', ') || t('report.none') })] : []),
+      ...(made ? [t('tree.made', { branch: made.tree.branch, base: made.tree.baseRef || 'HEAD', sha: made.tree.base.slice(0, 8) }), ...(made.stale ? [t('tree.stale')] : [])] : []),
+      ...(plan ? [t(byHub ? 'install.byHub' : 'install.byWorker', { command: planText(plan) })] : []),
+      ...(readOnly ? [t('spawn.readOnly')] : []),
       ...notes,
       t('spawn.howTo', { name: s.name }),
     ].join('\n');
+  }
+
+  /** Workers that write in a checkout: posts with a folder in it (asleep or not), running workers working in it. */
+  private writersIn(checkout: string): string[] {
+    const key = checkout.toLowerCase();
+    const inIt = (dir: string) => (repoOf(dir)?.checkout ?? resolve(dir)).toLowerCase() === key;
+    return this.visible()
+      .filter((w) => w.role === 'worker' && !w.readOnly && (w.roleId ? !!this.roleOf(w)?.folders.some(inIt) : !!w.inbox && inIt(w.cwd)))
+      .map((w) => w.name);
+  }
+
+  /** What an instance is told of its post's other workers when it starts. */
+  private instanceInfo(s: Session, post: TeamRole): InstanceInfo {
+    const others = this.instances(post.id).filter((w) => w !== s && w.inbox && !this.ended(w));
+    return { name: s.name, main: sessionNameOf(post), others: others.map((w) => w.name), readOnly: s.readOnly };
   }
 
   private async messageWorker(args: { name: string; message: string; interrupt?: boolean | null; model?: string | null; effort?: Effort | null }): Promise<string> {
     const s = this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
+    if (s.retiring) await s.retiring;
+    if (this.ended(s)) throw new Error(t('instance.ended', { name: s.name }));
+    if (!s.inbox) {
+      const over = this.overCap(s.instanceOf);
+      if (over) throw new Error(over);
+    }
     const choice = this.choose(s, args);
     const wasClosed = !s.inbox;
     const wasWorking = !wasClosed && this.isWorking(s);
@@ -1461,14 +1712,21 @@ export class SessionManager extends EventEmitter {
     return [state, ...runs, ...this.choiceNotes(choice.notes)].join('\n');
   }
 
-  private missionPrompt(s: Session): Prompt {
-    return { text: `${tags().mission(s.name)}\n${s.mission}`, images: [], from: masterName() };
+  /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
+  private missionPrompt(s: Session, stale = false): Prompt {
+    const tree = s.tree;
+    const plan = tree && !s.installing ? installPlan(tree) : null;
+    const note = missionNote({
+      tree: tree ? { path: tree.path, cwd: s.cwd, branch: tree.branch, baseRef: tree.baseRef, base: tree.base, stale } : undefined,
+      install: s.installing ? { by: 'hub', command: s.installing.command } : plan ? { by: 'worker', command: planText(plan) } : undefined,
+      sharedWith: s.readOnly ? this.writersIn(repoOf(s.cwd)?.checkout ?? s.cwd).filter((n) => n !== s.name) : undefined,
+    });
+    return { text: `${tags().mission(s.name)}\n${s.mission}${note ? `\n\n${note}` : ''}`, images: [], from: masterName() };
   }
 
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
-  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }) {
+  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null) {
     const { cfg } = this.opts;
-    const post = s ? this.roleOf(s) : null;
     const choice = resolveChoice({
       requested,
       post: post ? { model: post.model, effort: post.effort } : null,
@@ -1493,6 +1751,8 @@ export class SessionManager extends EventEmitter {
   private syncTeam(): void {
     const { cfg } = this.opts;
     for (const s of [...this.sessions.values()]) {
+      // An instance stops with its post (switched off or deleted); its conversation stays readable.
+      if (s.instanceOf && s.inbox && !this.postOf(s)?.enabled) this.stop(s.id);
       if (!s.roleId) continue;
       const role = this.roleOf(s);
       if (!role || !role.enabled) {
@@ -1560,6 +1820,8 @@ export class SessionManager extends EventEmitter {
     const s = before ? this.sessions.get(before.id) : undefined;
     const structural = !!before && (before.name !== role.name || moved || (before.enabled && !role.enabled));
     if (structural && s?.inbox && !this.settled(s)) return { error: 'working' };
+    // Switched off, its instances stop too: not in the middle of their work.
+    if (before?.enabled && !role.enabled && this.instancesBusy(role.id)) return { error: 'working' };
     return { role, before, structural };
   }
 
@@ -1596,7 +1858,7 @@ export class SessionManager extends EventEmitter {
   deleteRole(id: string): boolean {
     const { cfg } = this.opts;
     const s = this.sessions.get(id);
-    if (s?.inbox && !this.settled(s)) return false;
+    if ((s?.inbox && !this.settled(s)) || this.instancesBusy(id)) return false;
     if (s?.inbox) this.stop(id);
     cfg.team = cfg.team.filter((r) => r.id !== id);
     this.teamChanged();
@@ -1905,8 +2167,17 @@ export class SessionManager extends EventEmitter {
     const model = `${s.modelLabel || s.model || t('spawn.usualModel')}/${s.effort ?? t('spawn.usualEffort')}`;
     const mine = [s.userModel ? t('workers.userModel') : '', s.userEffort ? t('workers.userEffort') : ''].filter(Boolean);
     const since = s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '';
-    const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : t(`status.${s.status}`);
+    const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`);
     return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''} · ${ctx} · ${cost} · ${s.cwd}`;
+  }
+
+  /** Its worktree as the master reads it: branch, and what was kept at the last close. */
+  private treeLine(s: Session): string {
+    const tree = s.tree;
+    if (!tree) return s.readOnly ? t('workers.readOnly') : '';
+    const kept = tree.state === 'kept' ? t('workers.treeKept', { reasons: tree.kept.map((w) => t(`tree.why.${w}`)).join(' · ') }) : '';
+    const install = s.installing ? t('workers.installing') : s.installFailed ? t('workers.installFailed') : '';
+    return t('workers.tree', { branch: tree.branch, state: t(`tree.state.${tree.state}`) }) + kept + install;
   }
 
   private listWorkers(): string {
@@ -1914,8 +2185,11 @@ export class SessionManager extends EventEmitter {
     if (workers.length === 0) return t('workers.none');
     const block = (s: Session) => {
       const post = this.roleOf(s);
-      const lines = [`- ${this.workerLine(s)}`];
+      const lines = [`${s.instanceOf ? '  ↳ ' : '- '}${this.workerLine(s)}`];
       if (post) lines.push(t('workers.post', { text: oneLine(post.description, 160), model: post.model || 'auto', effort: post.effort || 'auto' }));
+      if (s.instanceOf) lines.push(t('workers.instance', { post: this.postOf(s)?.name ?? '' }));
+      const tree = this.treeLine(s);
+      if (tree) lines.push(tree);
       if (s.mission) lines.push(t('workers.mission', { text: oneLine(s.mission, 160) }));
       if (s.background.length > 0) lines.push(t('workers.background', { text: oneLine(s.background.join(' ; '), 200) }));
       if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
@@ -1924,9 +2198,11 @@ export class SessionManager extends EventEmitter {
     const { team } = this.opts.cfg;
     const order = (s: Session) => team.findIndex((r) => r.id === s.roleId);
     const posts = workers.filter((s) => s.roleId).sort((a, b) => order(a) - order(b));
-    const adhoc = workers.filter((s) => !s.roleId);
+    // An instance goes under its post; one whose post is gone, with the ad-hoc workers.
+    const under = (p: Session) => workers.filter((w) => w.instanceOf === p.roleId);
+    const adhoc = workers.filter((s) => !s.roleId && !(s.instanceOf && posts.some((p) => p.roleId === s.instanceOf)));
     return [
-      posts.length > 0 ? `${t('workers.team')}\n${posts.map(block).join('\n')}` : '',
+      posts.length > 0 ? `${t('workers.team')}\n${posts.flatMap((p) => [p, ...under(p)]).map(block).join('\n')}` : '',
       adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
     ]
       .filter(Boolean)
@@ -1977,8 +2253,8 @@ export class SessionManager extends EventEmitter {
   }
 
   /** "hub-<slug>", numbered when taken; the names of every post are taken, even a disabled one's. */
-  private uniqueName(raw: string): string {
-    const slug = slugify(raw, 28) || 'worker';
+  private uniqueName(raw: string, max = 28): string {
+    const slug = slugify(raw, max) || 'worker';
     const taken = new Set([...[...this.sessions.values()].map((s) => s.name), ...this.opts.cfg.team.map(sessionNameOf)]);
     let name = `hub-${slug}`;
     for (let i = 2; taken.has(name); i++) name = `hub-${slug}-${i}`;
@@ -2079,6 +2355,13 @@ export class SessionManager extends EventEmitter {
       userEffort: false,
       noteSentTo: '',
       noteSending: false,
+      instanceOf: null,
+      tree: null,
+      readOnly: false,
+      installing: null,
+      installFailed: false,
+      retiring: null,
+      exit: null,
     };
     this.sessions.set(id, s);
     return s;
@@ -2086,12 +2369,17 @@ export class SessionManager extends EventEmitter {
 
   /** Environment of a Claude Code process started by the hub: the hub's own, without a parent session's variables. */
   environment(): Record<string, string> {
-    const { set, unset } = this.opts.sessionEnv();
+    return { ...this.toolEnv(), ...this.opts.sessionEnv().set };
+  }
+
+  /** Environment of the hub's own tools (an install): the same, without the Claude access and GitHub sign-in added. */
+  private toolEnv(): Record<string, string> {
+    const { unset } = this.opts.sessionEnv();
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined && !PARENT_SESSION_VARS.test(key) && !unset.includes(key)) env[key] = value;
     }
-    return { ...env, ...set };
+    return env;
   }
 
   private restore(): void {
@@ -2102,6 +2390,8 @@ export class SessionManager extends EventEmitter {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
+        // The hub removes this worktree and deletes its branch later: only one that it could have made itself.
+        if (s.tree && !validTree(s.tree)) s.tree = null;
         // Its note written, the hub closed before the worker did: the next conversation starts afresh all the same.
         if (s.noteFresh) this.freshStart(s);
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
@@ -2148,6 +2438,9 @@ export class SessionManager extends EventEmitter {
       noteSentTo: s.noteSentTo,
       userModel: s.userModel,
       userEffort: s.userEffort,
+      instanceOf: s.instanceOf,
+      tree: s.tree,
+      readOnly: s.readOnly,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),

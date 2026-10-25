@@ -1,4 +1,5 @@
 import { LANG_NAMES, LANGS } from '../shared/i18n';
+import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
   APP_NAME,
@@ -984,7 +985,32 @@ export class SetupView {
     add.append(row);
     el.append(add);
     if (this.agents) el.append(this.agentList(this.agents));
-    el.append(h('p', 'setup-fine', t('team.fine')));
+    el.append(this.parallelLimits(v.settings), h('p', 'setup-fine', t('team.fine')));
+  }
+
+  /** How many instances of one post, and how many workers in all, may run at the same time. */
+  private parallelLimits(s: HubSettings): HTMLElement {
+    const grid = h('div', 'setup-grid');
+    const pick = (key: 'perPost' | 'maxWorkers', label: string, hint: string, text: (n: number) => string) => {
+      const f = this.field(label, hint);
+      const select = h('select', 'setup-select');
+      select.id = `team-${key}`;
+      select.setAttribute('aria-label', label);
+      const hintEl = f.querySelector<HTMLElement>('.setup-hint');
+      if (hintEl) select.setAttribute('aria-describedby', (hintEl.id = `team-${key}-hint`));
+      const { min, max } = PARALLEL_LIMITS[key];
+      for (let n = min; n <= max; n++) select.append(new Option(text(n), String(n)));
+      select.value = String(s.parallel[key]);
+      select.disabled = this.busy;
+      select.addEventListener('change', () => void this.save({ parallel: { ...s.parallel, [key]: Number(select.value) } }));
+      f.append(select);
+      return f;
+    };
+    grid.append(
+      pick('perPost', t('team.perPost'), t('team.perPost.hint'), (n) => (n === 1 ? t('team.perPost.one') : t('team.perPost.n', { n }))),
+      pick('maxWorkers', t('team.maxWorkers'), t('team.maxWorkers.hint'), (n) => t('team.maxWorkers.n', { n })),
+    );
+    return grid;
   }
 
   private postRow(role: TeamRole, index: number, count: number): HTMLElement {

@@ -1,4 +1,5 @@
 import type { Lang } from './i18n';
+import type { KeepReason } from './parallel';
 import type { AgentDrop } from './team';
 
 export { APP_NAME } from './brand';
@@ -75,11 +76,31 @@ export interface RoleBadge {
   description: string;
 }
 
+/** An extra instance of a post, started for one parallel job. */
+export interface InstanceBadge {
+  postId: string;
+  post: string;
+  /** Its name without "hub-<post>-": the job it was started for. */
+  topic: string;
+}
+
+/** A worktree the hub made for a worker: named by its branch, never by its path. */
+export interface TreeBadge {
+  branch: string;
+  /** removed: the worker closed and nothing was lost; kept: it closed with work left in it. */
+  state: 'active' | 'kept' | 'removed';
+  kept: KeepReason[];
+  /** The hub is installing its dependencies, or could not. */
+  install: '' | 'running' | 'failed';
+}
+
 export interface SessionView {
   id: string;
   role: Role;
   /** Set for a permanent worker. */
   post: RoleBadge | null;
+  instance: InstanceBadge | null;
+  tree: TreeBadge | null;
   name: string;
   mission: string;
   cwd: string;
@@ -363,6 +384,8 @@ export interface HubSettings {
   workerMaxEffort: Effort;
   /** Permanent workers, in the order the settings show them. */
   team: TeamRole[];
+  /** Instances of one post at the same time (its own worker included), and workers running at the same time. */
+  parallel: { perPost: number; maxWorkers: number };
   /** Permission mode of every session at launch; empty = Claude Code's own default (settings, else auto or manual). */
   permissionMode: Mode | '';
   /** The user's own guidance, appended to the master's system prompt. */

@@ -1,7 +1,8 @@
 import type { SessionView } from '../shared/types';
 import { t } from './i18n';
 
-export const displayName = (s: SessionView) => (s.role === 'master' ? t('master') : s.name.replace(/^hub-/, ''));
+export const displayName = (s: SessionView) =>
+  s.role === 'master' ? t('master') : s.instance?.post ? `${s.instance.post} · ${s.instance.topic}` : s.name.replace(/^hub-/, '');
 
 /** Closed on an error (its last start or run failed), not closed on purpose. */
 export const failed = (s: SessionView) => s.status === 'exited' && s.error !== '';
