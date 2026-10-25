@@ -34,8 +34,23 @@ const no = () => false;
 
 const originUrl = async (repo: string) => (await git(repo, ['remote', 'get-url', 'origin']).catch(() => '')).trim();
 
-/** origin, fetched with the hub's sign-in and none of the repo's hooks; false offline (the last known refs serve). */
-const fetchOrigin = (repo: string, url: string) => git(repo, ['fetch', '--quiet', '--no-tags', 'origin'], { timeout: NETWORK_MS, auth: url, hooks: false }).then(ok, no);
+const fetches = new Map<string, { at: number; run: Promise<boolean>; settled: boolean }>();
+
+/**
+ * origin, fetched with the hub's sign-in and none of the repo's hooks; false offline (the last known refs serve).
+ * A fetch in flight is shared (two at once would fight over the same refs), a finished one younger than `maxAge` too.
+ */
+function fetchOrigin(repo: string, url: string, maxAge: number): Promise<boolean> {
+  const key = repo.toLowerCase();
+  const last = fetches.get(key);
+  if (last && (!last.settled || Date.now() - last.at < maxAge)) return last.run;
+  const entry = { at: Date.now(), settled: false, run: Promise.resolve(false) };
+  entry.run = git(repo, ['fetch', '--quiet', '--no-tags', 'origin'], { timeout: NETWORK_MS, auth: url, hooks: false })
+    .then(ok, no)
+    .finally(() => (entry.settled = true));
+  fetches.set(key, entry);
+  return entry.run;
+}
 
 /** origin's default branch ("origin/main"), else origin/main or origin/master when one exists. */
 async function defaultBase(repo: string): Promise<{ ref: string; oid: string } | null> {
@@ -73,15 +88,19 @@ export async function makeTree(folder: string, post: string, topic: string): Pro
   if (!where) throw new Error('no-repo');
   const repo = where.main;
   const url = await originUrl(repo);
-  const fetched = url ? await fetchOrigin(repo, url) : true;
+  const fetched = url ? await fetchOrigin(repo, url, 30_000) : true;
   const base = url ? await defaultBase(repo) : null;
   const baseOid = base?.oid ?? (await git(where.checkout, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])).trim();
   const refs = (await git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'])).split('\n').filter(Boolean);
   const names = treeNames(basename(repo), post, topic);
-  // A branch named like the post itself makes "<post>/…" impossible: "hub/<post>-…" instead.
-  const postTaken = !!post && refs.some((r) => r === `refs/heads/${post}` || r === `refs/remotes/origin/${post}`);
-  const branch = firstFree(postTaken ? treeNames('', '', `${post}-${topic || 'work'}`).branch : names.branch, (b) => collides(refs, b));
-  const path = join(dirname(repo), firstFree(names.folder, (f) => existsSync(join(dirname(repo), f))));
+  // A branch named like the prefix ("brain", "hub") makes "<prefix>/…" impossible: a flat "hub-…" name instead.
+  const prefix = names.branch.split('/')[0];
+  const flat = refs.some((r) => r === `refs/heads/${prefix}` || r === `refs/remotes/origin/${prefix}`);
+  const branch = firstFree(flat ? `hub-${post ? `${post}-` : ''}${topic || 'work'}` : names.branch, (b) => collides(refs, b));
+  // A folder git still lists (deleted by hand, never pruned) is refused by `worktree add` too.
+  const listed = (await listTrees(repo)).map((w) => w.path.toLowerCase());
+  const taken = (f: string) => existsSync(join(dirname(repo), f)) || listed.includes(resolve(dirname(repo), f).toLowerCase());
+  const path = join(dirname(repo), firstFree(names.folder, taken));
   if (!isSafeBranch(branch) || !/^[0-9a-f]{40,64}$/.test(baseOid)) throw new Error('bad-name');
   // --no-track: a plain `git push` cannot land on main; the worker pushes its own branch with -u.
   await git(repo, ['worktree', 'add', '--no-track', '-b', branch, path, baseOid], { timeout: CHECKOUT_MS, hooks: false });
@@ -122,7 +141,7 @@ export async function retireTree(t: WorkTree, canRemove: () => boolean): Promise
 
 async function retire(t: WorkTree, canRemove: () => boolean): Promise<{ removed: boolean; why: KeepReason[] }> {
   const url = await originUrl(t.repo);
-  if (url) await fetchOrigin(t.repo, url);
+  if (url) await fetchOrigin(t.repo, url, 0);
   const exists = existsSync(t.path);
   const trees = await listTrees(t.repo);
   const mine = trees.find((w) => samePath(w.path, t.path));
@@ -151,6 +170,8 @@ async function retire(t: WorkTree, canRemove: () => boolean): Promise<{ removed:
     branchElsewhere: trees.some((w) => w.branch === branchRef && !samePath(w.path, t.path)),
   });
   if (!verdict.removeTree || !canRemove()) return { removed: false, why: verdict.why };
+  // Only a folder git lists as a worktree of this repo is ever deleted: anything else at that path is left alone.
+  if (exists && !mine) return { removed: false, why: ['unknown'] };
   let leftover = false;
   if (exists) {
     try {

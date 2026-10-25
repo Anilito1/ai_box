@@ -79,8 +79,12 @@ function actionButton(label: string, path: string, run: () => void): HTMLButtonE
   return btn;
 }
 
-/** Closed for good: its worktree was removed, so it cannot start there again. Its conversation stays readable. */
-const ended = (s: SessionView) => isClosed(s) && s.tree?.state === 'removed';
+/**
+ * Closed for good: its worktree was removed, or it is an instance of a post now off or deleted. Its conversation
+ * stays readable.
+ */
+const ended = (s: SessionView) =>
+  isClosed(s) && (s.tree?.state === 'removed' || (!!s.instance && !snapshot.sessions.some((p) => p.post?.id === s.instance?.postId)));
 
 function renderActions(c: Card, s: SessionView): void {
   const key = `${s.role}:${isClosed(s)}:${s.post !== null}:${ended(s)}`;

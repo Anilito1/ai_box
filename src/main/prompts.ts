@@ -464,11 +464,12 @@ export function missionNote(
 }
 
 /** Added to the next message a permanent worker gets once its post changed. */
-export function postUpdate(role: TeamRole, l: Lang = lang()): string {
+export function postUpdate(role: TeamRole, l: Lang = lang(), instance = false): string {
+  // An instance keeps its worktree: the post's folders are where the post's own worker writes.
   const head =
     l === 'fr'
-      ? `[Hub] Ton poste a été modifié. Ces valeurs remplacent celles de ton prompt.\nPérimètre : ${inside(flat(role.description))}\nDossiers : ${role.folders.join(', ')}`
-      : `[Hub] Your post was changed. These values replace those of your prompt.\nScope: ${inside(flat(role.description))}\nFolders: ${role.folders.join(', ')}`;
+      ? `[Hub] Ton poste a été modifié. Ces valeurs remplacent celles de ton prompt${instance ? ' ; ton worktree reste ton dossier' : ''}.\nPérimètre : ${inside(flat(role.description))}${instance ? '' : `\nDossiers : ${role.folders.join(', ')}`}`
+      : `[Hub] Your post was changed. These values replace those of your prompt${instance ? '; your worktree stays your folder' : ''}.\nScope: ${inside(flat(role.description))}${instance ? '' : `\nFolders: ${role.folders.join(', ')}`}`;
   const instructions = inside(role.instructions.trim()) || (l === 'fr' ? '(aucune)' : '(none)');
   return `<hub-post>\n${head}\n<post-instructions>\n${instructions}\n</post-instructions>\n</hub-post>`;
 }

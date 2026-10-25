@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import {
   createSdkMcpServer,
   getSessionInfo,
@@ -331,6 +331,9 @@ const KEEP_REASONS: KeepReason[] = ['changes', 'unpushed', 'operation', 'locked'
 /** A worktree read back from state.json, as makeTree() makes them. */
 const validTree = (t: WorkTree): boolean =>
   [t.repo, t.source, t.path].every((p) => typeof p === 'string' && isAbsolute(p)) &&
+  // Next to the repo's main folder, as makeTree() puts them.
+  samePath(dirname(t.path), dirname(t.repo)) &&
+  !samePath(t.path, t.repo) &&
   typeof t.branch === 'string' &&
   isSafeBranch(t.branch) &&
   /^[0-9a-f]{40,64}$/.test(t.base) &&
@@ -444,6 +447,7 @@ export class SessionManager extends EventEmitter {
     const shown = text.trim();
     if (!s || (!shown && images.length === 0)) return;
     if (this.ended(s)) return this.refuse(id, text, t('refuse.ended'));
+    if (!s.inbox && this.orphan(s)) return this.refuse(id, text, t('refuse.orphan'));
     // Saved images get their path in the text, so the master can hand them to a worker (which opens them with Read).
     let paths: string[] = [];
     try {
@@ -495,7 +499,7 @@ export class SessionManager extends EventEmitter {
 
   resume(id: string): void {
     const s = this.sessions.get(id);
-    if (s && !s.inbox && !this.ended(s)) void this.launch(s, s.started);
+    if (s && !s.inbox && !this.ended(s) && !this.orphan(s)) void this.launch(s, s.started);
   }
 
   /** Shows the conversation of a closed session without resuming it. */
@@ -509,9 +513,17 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
-    // Its work may have been pushed since it closed: removed now if nothing would be lost.
-    if (s.tree && s.tree.state !== 'removed') void this.retire(s);
     this.changed();
+    // Its work may have been pushed since it closed: removed now if nothing would be lost. Kept, the master's
+    // conversation says which branch stays on disk (the git panel shows its worktree).
+    const tree = s.tree;
+    if (!tree || tree.state === 'removed') return;
+    void this.retire(s).then(() => {
+      const master = this.sessions.get(MASTER_ID);
+      if (tree.state !== 'kept' || !master) return;
+      const reasons = tree.kept.map((w) => t(`tree.why.${w}`)).join(' · ');
+      this.notice(master, t('notice.treeLeftBehind', { name: displayName(s), branch: tree.branch, reasons }), 'info');
+    });
   }
 
   killAll(): void {
@@ -1193,7 +1205,7 @@ export class SessionManager extends EventEmitter {
     const key = s.role === 'master' ? rosterKey(cfg) : post ? roleKey(post) : '';
     if (key === s.seen || !s.query) return prompt;
     s.seen = key;
-    const news = s.role === 'master' ? rosterBlock(cfg) : post ? postUpdate(post) : '';
+    const news = s.role === 'master' ? rosterBlock(cfg) : post ? postUpdate(post, undefined, !!s.instanceOf) : '';
     return { ...prompt, text: `${prompt.text}\n\n${news}` };
   }
 
@@ -1383,13 +1395,16 @@ export class SessionManager extends EventEmitter {
   private retire(s: Session): Promise<string> {
     const tree = s.tree;
     if (!tree || tree.state === 'removed') return Promise.resolve('');
+    let skipped = false;
     s.retiring ??= (async () => {
       // Its Claude Code process, then its install, let go of the folder first.
       await Promise.race([s.exit, new Promise((r) => setTimeout(r, 10_000))]);
       await s.installing?.done;
       const r = await retireTree(tree, () => !s.inbox);
-      // Started again while it was checked: it works there, the outcome no longer counts.
-      if (s.inbox) return '';
+      // Started again before git touched anything (a kept worktree always has a reason): it works there.
+      skipped = !r.removed && r.why.length === 0;
+      if (skipped) return '';
+      // Removed while a launch waited: start() sees it, and the worker does not start in a deleted folder.
       const leftover = r.removed && r.why.includes('inUse');
       Object.assign(tree, { state: r.removed ? 'removed' : 'kept', kept: r.removed ? [] : r.why });
       const reasons = r.why.map((w) => t(`tree.why.${w}`)).join(' · ');
@@ -1399,8 +1414,17 @@ export class SessionManager extends EventEmitter {
       this.changed();
       if (leftover) return t('tree.leftover', { name: s.name, path: tree.path });
       return r.removed ? t('tree.removed', { name: s.name }) : t('tree.kept', { name: s.name, path: tree.path, branch: tree.branch, reasons });
-    })().finally(() => (s.retiring = null));
+    })().finally(() => {
+      s.retiring = null;
+      // Closed again while that check ran: checked once more.
+      if (skipped && !s.inbox && !this.quitting) void this.retire(s);
+    });
     return s.retiring;
+  }
+
+  /** An instance whose post was switched off or deleted: it does not run without it. */
+  private orphan(s: Session): boolean {
+    return !!s.instanceOf && !this.postOf(s)?.enabled;
   }
 
   /** A worktree kept on a close the master did not ask for (idle, end of its turn): the master hears why. */
@@ -1686,6 +1710,7 @@ export class SessionManager extends EventEmitter {
     if (!message) throw new Error(t('message.empty'));
     if (s.retiring) await s.retiring;
     if (this.ended(s)) throw new Error(t('instance.ended', { name: s.name }));
+    if (!s.inbox && this.orphan(s)) throw new Error(t('instance.orphan', { name: s.name }));
     if (!s.inbox) {
       const over = this.overCap(s.instanceOf);
       if (over) throw new Error(over);
