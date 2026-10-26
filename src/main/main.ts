@@ -1,6 +1,5 @@
 import './shellPath';
 import { existsSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -357,17 +356,6 @@ class Hub {
       const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
       if (!ok(from) || !ok(to) || from >= to) throw new Error(t('cost.badRange'));
       return { records: await this.costLog.read(from, to), since: this.costLog.since };
-    });
-    handle('cost:export', async (csv, name) => {
-      if (!win || !isStr(csv) || csv.length > 50_000_000 || !isStr(name) || !/^[\w.-]{1,80}\.csv$/.test(name)) return false;
-      const r = await dialog.showSaveDialog(win, { title: t('cost.exportTitle'), defaultPath: join(app.getPath('downloads'), name), filters: [{ name: 'CSV', extensions: ['csv'] }] });
-      if (r.canceled || !r.filePath) return false;
-      try {
-        await writeFile(r.filePath, `﻿${csv}`, 'utf8'); // The mark lets Excel read the accents.
-        return true;
-      } catch {
-        return false;
-      }
     });
     handle('repo:graph', (path, filter, limit) => {
       const c = checkout(path);

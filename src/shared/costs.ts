@@ -103,8 +103,8 @@ export function decodeRecord(line: string): TurnRecord | null {
 
 // ---------- periods, in the computer's own time zone ----------
 
-export type Period = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom';
-export const PERIODS: Period[] = ['today', 'yesterday', '7d', '30d', 'month', 'custom'];
+export type Period = 'today' | '7d' | '30d' | 'month';
+export const PERIODS: Period[] = ['today', '7d', '30d', 'month'];
 
 /** [from, to) in ms. */
 export interface Range {
@@ -112,44 +112,21 @@ export interface Range {
   to: number;
 }
 
-const DAY_KEY = /^(\d{4})-(\d{2})-(\d{2})$/;
 /** Midnight of a day, `offset` days after `d` (a day lasts 23 or 25 hours when the clocks change). */
 const midnight = (d: Date, offset = 0) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + offset).getTime();
-const pad = (n: number) => String(n).padStart(2, '0');
 
-/** "2026-10-26": the local day of a time. */
-export const dayKey = (at: number) => {
-  const d = new Date(at);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-
-/** Local midnight of "YYYY-MM-DD", or null when it is not a real date. */
-export function parseDay(key: string): number | null {
-  const m = DAY_KEY.exec(key);
-  if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return dayKey(d.getTime()) === key ? d.getTime() : null;
-}
-
-/** The days a period covers, up to the end of today; a custom one takes two days in any order, both included. */
-export function periodRange(period: Period, now: Date, custom?: { from: string; to: string }): Range | null {
+/** The days a period covers, up to the end of today. */
+export function periodRange(period: Period, now: Date): Range {
+  const to = midnight(now, 1);
   switch (period) {
     case 'today':
-      return { from: midnight(now), to: midnight(now, 1) };
-    case 'yesterday':
-      return { from: midnight(now, -1), to: midnight(now) };
+      return { from: midnight(now), to };
     case '7d':
-      return { from: midnight(now, -6), to: midnight(now, 1) };
+      return { from: midnight(now, -6), to };
     case '30d':
-      return { from: midnight(now, -29), to: midnight(now, 1) };
+      return { from: midnight(now, -29), to };
     case 'month':
-      return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to: midnight(now, 1) };
-    case 'custom': {
-      const a = custom ? parseDay(custom.from) : null;
-      const b = custom ? parseDay(custom.to) : null;
-      if (a === null || b === null) return null;
-      return { from: Math.min(a, b), to: midnight(new Date(Math.max(a, b)), 1) };
-    }
+      return { from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), to };
   }
 }
 
@@ -158,48 +135,24 @@ export function periodRange(period: Period, now: Date, custom?: { from: string; 
 export interface CostRow {
   key: string;
   label: string;
-  role: CostRole | null;
+  role: CostRole;
   usage: Usage;
   turns: number;
-}
-
-export interface Bucket {
-  /** Day key, or the hour ("00" to "23") of a one-day period. */
-  key: string;
-  start: number;
-  usage: Usage;
+  /** Models used, most expensive first. */
+  models: string[];
 }
 
 export interface CostSummary {
   total: Usage;
   turns: number;
+  /** Most expensive first. */
   sessions: CostRow[];
-  models: CostRow[];
-  /** One bucket per day, or per hour when the period is a single day; empty ones included. */
-  unit: 'day' | 'hour';
-  buckets: Bucket[];
-}
-
-const byCost = (a: CostRow, b: CostRow) => b.usage.cost - a.usage.cost || a.label.localeCompare(b.label);
-
-/** Starts of the buckets of a range: its local days, or the hours of its only day. */
-function bucketStarts(range: Range): { unit: 'day' | 'hour'; starts: number[] } {
-  const first = new Date(range.from);
-  const days: number[] = [];
-  for (let i = 0; midnight(first, i) < range.to; i++) days.push(midnight(first, i));
-  if (days.length !== 1) return { unit: 'day', starts: days };
-  const hours: number[] = [];
-  for (let h = 0; h < 24; h++) hours.push(new Date(first.getFullYear(), first.getMonth(), first.getDate(), h).getTime());
-  // A day the clocks go back has an hour twice: a bucket per distinct start.
-  return { unit: 'hour', starts: [...new Set(hours)].filter((s) => s < range.to) };
 }
 
 export function summarize(records: TurnRecord[], range: Range): CostSummary {
   const sessions = new Map<string, CostRow>();
-  const models = new Map<string, CostRow>();
   const named = new Map<string, number>();
-  const { unit, starts } = bucketStarts(range);
-  const buckets: Bucket[] = starts.map((start) => ({ key: unit === 'day' ? dayKey(start) : pad(new Date(start).getHours()), start, usage: ZERO }));
+  const byModel = new Map<string, Map<string, number>>();
   let total = ZERO;
   let turns = 0;
   for (const r of records) {
@@ -207,21 +160,17 @@ export function summarize(records: TurnRecord[], range: Range): CostSummary {
     const spent = sumUsage(r.models);
     total = addUsage(total, spent);
     turns++;
-    const s = sessions.get(r.id) ?? { key: r.id, label: r.name, role: r.role, usage: ZERO, turns: 0 };
+    const s = sessions.get(r.id) ?? { key: r.id, label: r.name, role: r.role, usage: ZERO, turns: 0, models: [] };
     // Its latest name wins: a session renamed keeps one row.
     const latest = r.at >= (named.get(r.id) ?? 0);
     if (latest) named.set(r.id, r.at);
     sessions.set(r.id, { ...s, ...(latest ? { label: r.name, role: r.role } : {}), usage: addUsage(s.usage, spent), turns: s.turns + 1 });
-    for (const [model, u] of Object.entries(r.models)) {
-      const m = models.get(model) ?? { key: model, label: model, role: null, usage: ZERO, turns: 0 };
-      models.set(model, { ...m, usage: addUsage(m.usage, u), turns: m.turns + 1 });
-    }
-    // The last bucket starting at or before the turn.
-    let i = buckets.length - 1;
-    while (i > 0 && buckets[i].start > r.at) i--;
-    if (buckets[i]) buckets[i] = { ...buckets[i], usage: addUsage(buckets[i].usage, spent) };
+    const costs = byModel.get(r.id) ?? new Map<string, number>();
+    for (const [model, u] of Object.entries(r.models)) costs.set(model, (costs.get(model) ?? 0) + u.cost);
+    byModel.set(r.id, costs);
   }
-  return { total, turns, sessions: [...sessions.values()].sort(byCost), models: [...models.values()].sort(byCost), unit, buckets };
+  const rows = [...sessions.values()].map((s) => ({ ...s, models: [...(byModel.get(s.key) ?? [])].sort((a, b) => b[1] - a[1]).map(([model]) => model) }));
+  return { total, turns, sessions: rows.sort((a, b) => b.usage.cost - a.usage.cost || a.label.localeCompare(b.label)) };
 }
 
 /** "claude-opus-5-5" → "Opus 5.5", "claude-sonnet-4-5-20250929[1m]" → "Sonnet 4.5 (1M)"; anything else as is. */
@@ -230,31 +179,4 @@ export function modelName(id: string): string {
   if (!m) return id;
   const family = m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase();
   return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}${m[4] ? ' (1M)' : ''}`;
-}
-
-/** A spreadsheet cell: quoted when it holds the separator, and never read as a formula. */
-const cell = (v: string | number, sep: string) => {
-  const s = String(v);
-  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-  return safe.includes(sep) || /["\n\r]/.test(safe) ?`"${safe.replace(/"/g, '""')}"` : safe;
-};
-
-/**
- * One line per turn and model, oldest first, local time. `;` with decimal commas is what a spreadsheet set to French
- * reads, `,` an English one.
- */
-export function toCsv(records: TurnRecord[], range: Range, header: string[], sep: ',' | ';' = ','): string {
-  const cost = (v: number) => (sep === ';' ? v.toFixed(6).replace('.', ',') : v.toFixed(6));
-  const lines = [header.map((h) => cell(h, sep)).join(sep)];
-  const time = (at: number) => {
-    const d = new Date(at);
-    return `${dayKey(at)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  };
-  for (const r of [...records].sort((a, b) => a.at - b.at)) {
-    if (r.at < range.from || r.at >= range.to) continue;
-    for (const [model, u] of Object.entries(r.models)) {
-      lines.push([time(r.at), r.name, r.role, model, cost(u.cost), u.input, u.output, u.cacheRead, u.cacheWrite].map((v) => cell(v, sep)).join(sep));
-    }
-  }
-  return `${lines.join('\r\n')}\r\n`;
 }

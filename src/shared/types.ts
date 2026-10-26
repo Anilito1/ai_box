@@ -490,8 +490,6 @@ export interface HubApi {
   showCost(id: string): void;
   /** Turns logged in [from, to), oldest first, and when the log started. */
   costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number }>;
-  /** Asks where to save the CSV, then writes it; false when cancelled or not written. */
-  exportCost(csv: string, name: string): Promise<boolean>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
   send(id: string, text: string, images: ImageInput[]): void;

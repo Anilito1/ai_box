@@ -41,7 +41,6 @@ const api: HubApi = {
   clear: (id) => ipcRenderer.send('session:clear', id),
   showCost: (id) => ipcRenderer.send('session:cost', id),
   costHistory: (from, to) => ipcRenderer.invoke('cost:history', from, to),
-  exportCost: (csv, name) => ipcRenderer.invoke('cost:export', csv, name),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
