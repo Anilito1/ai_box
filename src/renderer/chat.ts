@@ -461,10 +461,10 @@ export class ChatView {
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
     this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? effortLabel(s.effort) : ''), icon(ICONS.chevron, 'ico small'));
     this.modelBtn.title = t('chat.modelTitle');
-    // A worker's account, once there is more than the usual one to pick from.
-    const pickable = (s.role === 'worker' && this.accounts.length > 1) || s.fallbackFrom !== '';
-    this.accountBtn.hidden = !pickable;
-    if (pickable) {
+    // The account (the provider) of every session, master included, even when there is only the usual one: the menu
+    // leads to Settings › Accounts to add more.
+    this.accountBtn.hidden = false;
+    {
       const name = this.accounts.find((a) => a.id === s.account)?.name ?? s.account;
       this.accountBtn.replaceChildren(icon(ICONS.user), h('span', '', name), h('span', 'cbtn-muted', s.fallbackFrom ? t('chat.fallbackFrom', { name: this.accounts.find((a) => a.id === s.fallbackFrom)?.name ?? s.fallbackFrom }) : s.accountPending ? t('chat.accountPending') : ''), icon(ICONS.chevron, 'ico small'));
       this.accountBtn.title = t('chat.accountTitle');
@@ -693,7 +693,12 @@ export class ChatView {
         });
         menu.append(h('div', 'menu-sep'), back);
       }
-      menu.append(h('div', 'menu-note', t('chat.accountNote')));
+      const add = this.menuRow(t('chat.accountAdd'), t('chat.accountAdd.hint'), false);
+      add.addEventListener('click', () => {
+        close();
+        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
+      });
+      menu.append(h('div', 'menu-sep'), add, h('div', 'menu-note', t('chat.accountNote')));
     });
   }
 

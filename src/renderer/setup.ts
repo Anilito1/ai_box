@@ -1867,8 +1867,8 @@ export class SetupView {
     grid.append(modeField);
     el.append(grid);
 
-    // Only once there is another account than the usual one to pick.
-    if (s.accounts.length > 0) {
+    // Always offered: with only the usual access, the link below leads to where accounts are added.
+    {
       const usual = s.accounts.find((a) => a.id === s.workerAccount)?.name ?? t('account.default');
       const accountField = this.accountSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
         const before = this.catalog(d.account || s.workerAccount) !== null;
@@ -1882,6 +1882,7 @@ export class SetupView {
       }, t('team.account.inherit', { account: usual }));
       const control = accountField.querySelector('select');
       if (control) mark('account', accountField, control);
+      if (s.accounts.length === 0) accountField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
       el.append(accountField);
     }
 
