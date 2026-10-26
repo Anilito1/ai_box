@@ -43,7 +43,7 @@ import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
 import { accountDir, accountEnv, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, removeClaudeDir } from './accounts';
 import { agentFiles } from './agents';
 import { Bridge, type BridgeAccount } from './bridge';
-import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
+import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './providers/claude/cli';
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
 import { errorCode } from './errors';

@@ -1,10 +1,10 @@
 import { IMAGE_TYPES, type ChatItem } from '../shared/types';
 import { lang, t } from './i18n';
+import { blocksOf, type Block } from './providers/blocks';
 import { masterName } from './prompts';
 
 // Converts Anthropic message content blocks (live SDK frames or stored transcripts) into chat items.
 
-type Block = Record<string, unknown>;
 
 const RESULT_MAX = 6000;
 const DETAIL_MAX = 4000;
@@ -12,11 +12,7 @@ const DETAIL_MAX = 4000;
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…` : text);
 
-export const blocksOf = (message: unknown): Block[] => {
-  const content = (message as { content?: unknown } | null)?.content;
-  if (typeof content === 'string') return [{ type: 'text', text: content }];
-  return Array.isArray(content) ? (content as Block[]) : [];
-};
+export { blocksOf };
 
 /** Claude Code's tools and the hub's own, as a step names them in the user's language. */
 const LABELS: Record<string, Parameters<typeof t>[0]> = {

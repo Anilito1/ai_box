@@ -2,30 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import {
-  createSdkMcpServer,
-  getSessionInfo,
-  getSessionMessages,
-  query,
-  resolveSettings,
-  tool,
-  type ElicitationRequest,
-  type ElicitationResult,
-  type ModelInfo,
-  type Options,
-  type PermissionResult,
-  type PermissionUpdate,
-  type Query,
-  type SDKMessage,
-  type SDKUserMessage,
-  type SlashCommand,
-} from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
-import { addUsage, sumUsage, totalsOf, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
+import { z, type ZodRawShape } from 'zod';
+import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
-import { DEFAULT_ACCOUNT, findAccount, firstAccount, runsClaude } from '../shared/accounts';
+import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, runsClaude } from '../shared/accounts';
 import {
   capEffort,
   fromTemplate,
@@ -81,7 +63,6 @@ import {
 import { findRepos, realPath, repoOf, samePath } from './repos';
 import {
   assistantItems,
-  blocksOf,
   capturedLine,
   commandOutcome,
   resultText,
@@ -94,39 +75,20 @@ import {
 } from './transcript';
 import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlock, topicErrors, topicToolSpec } from './topics';
 import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
-
-/** Push-based prompt stream: keeps a query in streaming-input mode so it can receive messages and controls. */
-class Inbox implements AsyncIterable<SDKUserMessage> {
-  private queue: SDKUserMessage[] = [];
-  private waiting: ((r: IteratorResult<SDKUserMessage>) => void) | null = null;
-  private closed = false;
-
-  push(msg: SDKUserMessage): void {
-    if (this.waiting) {
-      this.waiting({ value: msg, done: false });
-      this.waiting = null;
-    } else {
-      this.queue.push(msg);
-    }
-  }
-
-  close(): void {
-    this.closed = true;
-    this.waiting?.({ value: undefined, done: true });
-    this.waiting = null;
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    return {
-      next: () => {
-        const msg = this.queue.shift();
-        if (msg) return Promise.resolve({ value: msg, done: false });
-        if (this.closed) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => (this.waiting = resolve));
-      },
-    };
-  }
-}
+import { adapterFor } from './providers';
+import { Inbox } from './providers/inbox';
+import type {
+  AgentCommand,
+  AgentEvent,
+  AgentInput,
+  AgentModel,
+  AgentProcess,
+  ElicitationAnswer,
+  ElicitationRequest,
+  HubTool,
+  PermissionAnswer,
+  PermissionRequest,
+} from './providers/types';
 
 interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending'> {
   sessionId: string;
@@ -140,8 +102,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
   items: Map<string, ChatItem>;
-  query: Query | null;
-  inbox: Inbox | null;
+  query: AgentProcess | null;
+  inbox: Inbox<AgentInput> | null;
   /** Approval cards waiting for the user; null = withdrawn by the CLI. */
   pending: Map<string, (decision: PermissionDecision | null) => void>;
   liveId: string | null;
@@ -207,7 +169,7 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   usageBase: Promise<Totals | null | 'unknown'>;
   usageSeen: Totals | null;
   /** Commands and skills its Claude Code process offers. */
-  commands: SlashCommand[];
+  commands: AgentCommand[];
 }
 
 type Persisted = {
@@ -263,20 +225,6 @@ export type RoleSave = { role: TeamRole; before: TeamRole | null; notes: ChoiceN
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
-const HUB_TOOLS = [
-  'message_master',
-  'spawn_worker',
-  'message_worker',
-  'list_workers',
-  'list_repos',
-  'worker_report',
-  'close_worker',
-  'list_roles',
-  'create_role',
-  'update_role',
-  'delete_role',
-  'topic',
-];
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
 const ITEMS_MAX = 1500;
@@ -361,13 +309,6 @@ const withTopics = (item: ChatItem, topics: string[] = []): ChatItem => {
   const [topic, ...also] = topics;
   return topic ? { ...item, topic, ...(also.length > 0 ? { also } : {}) } : item;
 };
-/** The text of a message's blocks: what a replayed prompt was sent as. */
-const textOf = (blocks: Record<string, unknown>[]) =>
-  blocks
-    .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-    .filter(Boolean)
-    .join('\n');
-
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -399,9 +340,9 @@ const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
-  private modelInfos: ModelInfo[] = [];
+  private modelInfos: AgentModel[] = [];
   /** Commands of the last session that started: offered to one that has not run yet. */
-  private lastCommands: SlashCommand[] = [];
+  private lastCommands: AgentCommand[] = [];
   /** Plan limits by account, and when each was last asked. */
   private readonly rateLimits = new Map<string, RateLimits>();
   private readonly usageCheckedAt = new Map<string, number>();
@@ -642,7 +583,7 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
-    s.query?.applyFlagSettings({ effortLevel: effort }).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
+    s.query?.setEffort(effort).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -653,7 +594,7 @@ export class SessionManager extends EventEmitter {
     const bypasses = (m: Mode | null) => m === 'bypassPermissions';
     if (bypasses(mode) !== bypasses(this.hubMode())) this.notice(s, t('notice.modeMismatch'), 'info');
     s.mode = mode;
-    s.query?.setPermissionMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
+    s.query?.setMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -697,6 +638,17 @@ export class SessionManager extends EventEmitter {
 
   private kindOf(account: string): AccountKind | 'default' {
     return this.opts.cfg.accounts.find((a) => a.id === account)?.kind ?? 'default';
+  }
+
+  /** The adapter of the program a session runs on (or will, once launched). */
+  private adapterOf(s: Session) {
+    return adapterFor(harnessOf(this.kindOf(s.runAccount || this.accountOf(s))));
+  }
+
+  /** A failed start that means the program is not there: for Claude, no executable was found either. */
+  private missingProgram(s: Session, failure: string): boolean {
+    const adapter = this.adapterOf(s);
+    return adapter.isMissingProgram(failure) || (adapter.harness === 'claude' && !this.opts.executable());
   }
 
   private accountName(account: string): string {
@@ -746,7 +698,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The turn that held a switch is over (with its background tasks): the session restarts on its new account. */
-  private switchIfDone(s: Session, q: Query): void {
+  private switchIfDone(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.switchPending) return;
     if (!this.settled(s) || Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
@@ -956,7 +908,7 @@ export class SessionManager extends EventEmitter {
       // Claude Code could not be started (missing executable, broken install): nothing else would report it.
       if (s.query) return; // Started: consume() reports what happens next.
       this.teardown(s);
-      this.failed(s, errorText(err));
+      this.failed(s, errorText(err), this.missingProgram(s, errorText(err)));
       this.changed();
     }
   }
@@ -964,7 +916,7 @@ export class SessionManager extends EventEmitter {
   private async start(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
     const { cfg } = this.opts;
     // Claimed synchronously: a send() or resume() during the awaits below queues into this inbox instead of launching twice.
-    const inbox = new Inbox();
+    const inbox = new Inbox<AgentInput>();
     s.inbox = inbox;
     s.status = 'starting';
     s.liveId = null;
@@ -985,8 +937,10 @@ export class SessionManager extends EventEmitter {
     }
     if (s.tree?.state === 'kept') Object.assign(s.tree, { state: 'active', kept: [] });
 
+    const account = this.accountOf(s);
+    const adapter = adapterFor(harnessOf(this.kindOf(account)));
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
-    if (resume && !(await getSessionInfo(s.sessionId, { dir: s.cwd }).then(Boolean, () => true))) {
+    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd))) {
       resume = false;
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
@@ -999,82 +953,70 @@ export class SessionManager extends EventEmitter {
     const isMaster = s.role === 'master';
     const post = this.postOf(s);
     // Every launch starts in the configured mode (a composer change lasts as long as the process). None configured:
-    // Claude Code picks its own default, which system/init reports.
+    // the program picks its own default, which its first event reports.
     const mode = this.modeOf(s);
-    s.mode = mode ?? (await this.settingsMode(s.cwd));
+    s.mode = mode ?? (await adapter.defaultMode(s.cwd));
     if (this.quitting || s.inbox !== inbox) return;
     const executable = this.opts.executable();
     // The account is fixed for the life of the process: a switch starts another one on the same conversation.
-    const account = this.accountOf(s);
     s.runAccount = account;
     s.switchPending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
     const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
-    const options: Options = {
-      cwd: s.cwd,
-      ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
-      // No model/effort = the CLI resolves them from settings.json, exactly like a normal session. On a bridged
-      // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
-      ...(s.fixedModel && runsClaude(this.kindOf(account)) ? { model: s.fixedModel } : {}),
-      ...(s.fixedEffort ? { effort: s.fixedEffort } : {}),
-      ...(mode ? { permissionMode: mode } : {}),
-      // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
-      allowDangerouslySkipPermissions: true,
-      ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
-      systemPrompt: { type: 'preset', preset: 'claude_code', append, ...(isMaster || post ? { snapshot: false } : {}) },
-      // Workers talk to the master and to each other through native cross-session messaging (SendMessage). The master
-      // writes to workers through the hub (message_worker), which delivers its words as a user turn: a peer message
-      // carries no user authority, so a "go" sent that way would not unblock a commit or a push.
-      // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
-      extraArgs: { name: s.name, 'replay-user-messages': null },
-      includePartialMessages: true,
-      disallowedTools: isMaster
-        ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage']
-        : s.readOnly
-          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion']
-          : ['AskUserQuestion'],
-      mcpServers: { hub: this.hubServer(s) },
-      // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
-      allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
-      canUseTool: (name, input, o) => this.askPermission(s, name, input, o),
-      onElicitation: (req, o) => this.answerElicitation(s, req, o.signal),
-      env: this.environment(account),
-      ...(resume ? { resume: s.sessionId } : { sessionId: s.sessionId }),
-    };
 
-    // Shown (and queued) before Claude Code starts: a start that fails still leaves the message visible.
+    // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
     if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
-    const q = query({ prompt: inbox, options });
+    const q = adapter.start({
+      role: s.role,
+      name: s.name,
+      cwd: s.cwd,
+      extraDirs: post && post.folders.length > 1 ? post.folders.slice(1) : [],
+      readOnly: s.readOnly,
+      // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
+      // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
+      model: s.fixedModel && runsClaude(this.kindOf(account)) ? s.fixedModel : '',
+      effort: s.fixedEffort,
+      mode,
+      instructions: append,
+      stableInstructions: isMaster || !!post,
+      tools: this.hubTools(s),
+      executable,
+      env: this.environment(account),
+      conversation: { id: s.sessionId, resume },
+      input: inbox,
+      onPermission: (req) => this.askPermission(s, req),
+      onElicitation: (req, signal) => this.answerElicitation(s, req, signal),
+    });
     s.query = q;
     s.usageSeen = null;
     // A resumed conversation's results carry the totals it saved: its turns count from there. A new one starts at zero.
     s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
     void this.onReady(s, q);
-    s.exit = this.consume(s, q);
+    s.exit = this.consume(s, q, (f) => adapter.isMissingProgram(f) || (adapter.harness === 'claude' && !executable));
     await s.exit;
   }
 
-  private async consume(s: Session, q: Query): Promise<void> {
+  private async consume(s: Session, q: AgentProcess, isMissing: (failure: string) => boolean): Promise<void> {
     let failure = '';
     try {
-      for await (const msg of q) this.onMessage(s, q, msg);
+      for await (const ev of q.events) this.onEvent(s, q, ev);
     } catch (err) {
       failure = errorText(err);
     }
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
-    if (failure && !this.quitting) this.failed(s, failure);
+    if (failure && !this.quitting) this.failed(s, failure, isMissing(failure));
     this.changed();
   }
 
   /** A session that stopped on an error: its card and conversation say why; the master hears about a worker. */
-  private failed(s: Session, failure: string): void {
+  private failed(s: Session, failure: string, noProgram: boolean): void {
     if (this.quitting) return;
-    // The executable the SDK expects is missing: the fix is in the settings, not in the conversation.
-    const noClaude = !this.opts.executable() || /Native CLI binary|pathToClaudeCodeExecutable|spawn \S*claude\S* ENOENT/i.test(failure);
+    // The program is missing: the fix is in the settings, not in the conversation.
+    const noClaude = noProgram;
     s.error = noClaude ? t('error.noClaude') : humanError(failure);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
@@ -1126,63 +1068,58 @@ export class SessionManager extends EventEmitter {
     this.trackAgent(s, taskId, false);
   }
 
-  private onMessage(s: Session, q: Query, msg: SDKMessage): void {
+  private onEvent(s: Session, q: AgentProcess, ev: AgentEvent): void {
     s.activeAt = Date.now();
-    switch (msg.type) {
-      case 'system':
-        if (msg.subtype === 'init') {
-          s.started = true;
-          // The note is in this conversation now: its later prompts never carry it again.
-          if (s.noteSending) Object.assign(s, { noteSentTo: msg.session_id, noteSending: false });
-          // Another conversation in the same process: its totals start again from zero.
-          if (s.usageSeen && msg.session_id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
-          s.sessionId = msg.session_id;
-          s.mode = msg.permissionMode;
-          if (msg.effort) s.effort = msg.effort;
-          this.applyModel(s, msg.model);
-        } else if (msg.subtype === 'compact_boundary') {
-          s.compacting = false;
-          this.compacted(s, msg.compact_metadata.pre_tokens, msg.compact_metadata.post_tokens);
-        } else if (msg.subtype === 'commands_changed') {
-          s.commands = this.lastCommands = msg.commands;
-        } else if (msg.subtype === 'status') {
-          const compacting = msg.status === 'compacting';
-          if (compacting && !s.compacting) this.event(s, 'compacting');
-          s.compacting = compacting;
-        } else if (msg.subtype === 'api_retry') {
-          s.retrying = true;
-          this.event(s, 'retry');
-        } else if (msg.subtype === 'background_tasks_changed') {
-          // Level signal with replace semantics; ambient tasks (watchers) are not activity.
-          s.background = msg.tasks.filter((t) => !t.ambient).map((t) => t.description);
-          if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
-        } else if (msg.subtype === 'task_started') {
-          if (msg.task_type === 'local_agent' && !msg.ambient) this.trackAgent(s, msg.task_id, true);
-        } else if (msg.subtype === 'task_updated') {
-          const { status } = msg.patch;
-          if (status === 'completed' || status === 'failed' || status === 'killed') this.endAgent(s, msg.task_id, status === 'failed');
-        } else if (msg.subtype === 'task_notification') {
-          this.endAgent(s, msg.task_id, msg.status === 'failed');
-        }
+    switch (ev.type) {
+      case 'conversation':
+        s.started = true;
+        // The note is in this conversation now: its later prompts never carry it again.
+        if (s.noteSending) Object.assign(s, { noteSentTo: ev.id, noteSending: false });
+        // Another conversation in the same process: its totals start again from zero.
+        if (s.usageSeen && ev.id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
+        s.sessionId = ev.id;
+        s.mode = ev.mode;
+        if (ev.effort) s.effort = ev.effort;
+        this.applyModel(s, ev.model);
         break;
-      case 'rate_limit_event':
-        // Refused by a plan limit: the CLI waits or gives up; either way the session is stuck until the next frame.
-        if (msg.rate_limit_info.status === 'rejected') {
-          s.retrying = true;
-          this.event(s, 'retry');
-        }
+      case 'compacted':
+        s.compacting = false;
+        this.compacted(s, ev.before, ev.after);
         break;
-      case 'stream_event': {
-        if (msg.parent_tool_use_id) return;
+      case 'commands':
+        s.commands = this.lastCommands = ev.commands;
+        break;
+      case 'compacting':
+        if (ev.on && !s.compacting) this.event(s, 'compacting');
+        s.compacting = ev.on;
+        break;
+      case 'retry':
+        s.retrying = true;
+        this.event(s, 'retry');
+        break;
+      case 'background':
+        s.background = ev.tasks;
+        if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        break;
+      case 'agentTask':
+        if (ev.state === 'start') this.trackAgent(s, ev.id, true);
+        else this.endAgent(s, ev.id, ev.state === 'failed');
+        break;
+      case 'limit':
+        // Refused by a plan limit: the program waits or gives up; either way the session is stuck until the next frame.
+        s.retrying = true;
+        this.event(s, 'retry');
+        break;
+      case 'stream': {
         const before = s.status;
         const retried = s.retrying;
         s.retrying = false; // A frame came through: the retry worked.
         this.markBusy(s);
-        if (msg.event.type === 'content_block_start' && msg.event.content_block.type === 'text') {
+        if (ev.textStart) {
           s.liveId = `live-${randomUUID()}`;
           s.liveText = '';
-        } else if (msg.event.type === 'content_block_delta' && msg.event.delta.type === 'text_delta' && s.liveId) {
-          s.liveText += msg.event.delta.text;
+        } else if (ev.delta && s.liveId) {
+          s.liveText += ev.delta;
           this.upsert(s, { kind: 'assistant', id: s.liveId, text: s.liveText, live: true });
         }
         // Deltas travel on the items channel; the snapshot only needs a refresh when the status flips.
@@ -1190,21 +1127,20 @@ export class SessionManager extends EventEmitter {
         return;
       }
       case 'assistant': {
-        if (msg.parent_tool_use_id) break;
         s.retrying = false;
         this.markBusy(s);
-        // A frame carrying an error has Claude Code's own wording as its text ("Invalid API key · Fix external API
+        // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
-        const all = blocksOf(msg.message).filter((b) => !msg.error || b.type !== 'text');
+        const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
         const master = s.id === MASTER_ID;
         // The master's topic calls are the hub's filing, not a step worth reading.
         const blocks = master ? all.filter((b) => b.name !== TOPIC_TOOL) : all;
         const hasText = blocks.some((b) => b.type === 'text');
-        if (msg.error && s.liveId) {
+        if (ev.error && s.liveId) {
           this.drop(s, s.liveId);
           s.liveId = null;
         }
-        const items = assistantItems(blocks, msg.uuid, hasText ? (s.liveId ?? undefined) : undefined);
+        const items = assistantItems(blocks, ev.id, hasText ? (s.liveId ?? undefined) : undefined);
         const filed = master ? this.fileFrame(all, items) : null;
         for (const item of items) this.upsert(s, withTopics(item, filed?.get(item.id)));
         if (hasText) s.liveId = null;
@@ -1212,36 +1148,27 @@ export class SessionManager extends EventEmitter {
           s.owesReport = false;
         }
         if (blocks.some((b) => b.type === 'tool_use' && OUTGOING.test(String(b.name)))) this.event(s, 'message_out');
-        if (msg.error) this.notice(s, assistantError(msg.error), 'error', msg.error);
-        const u = msg.message.usage;
-        const tokens = (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
-        if (tokens > 0) this.setContext(s, tokens, s.metrics?.contextSize ?? 0);
+        if (ev.error) this.notice(s, assistantError(ev.error), 'error', ev.error);
+        if (ev.contextTokens > 0) this.setContext(s, ev.contextTokens, s.metrics?.contextSize ?? 0);
         break;
       }
-      case 'user': {
-        if (msg.parent_tool_use_id) break;
-        const blocks = blocksOf(msg.message);
-        if ('isReplay' in msg && msg.isReplay && msg.origin?.kind !== 'peer') {
-          // One of our prompts reached the model: it is no longer waiting in the queue.
-          s.queued = Math.max(0, s.queued - 1);
-          if (s.id === MASTER_ID) this.topics.taken(textOf(blocks));
-          this.markBusy(s);
-          break;
-        }
-        if (msg.origin?.kind === 'peer') {
-          // `body` (the sender's raw text) is sent by the CLI but not yet in the SDK typings.
-          const origin = msg.origin as typeof msg.origin & { body?: string };
-          const text = origin.body ?? userTextItem(blocks, '')?.text ?? '';
-          const id = `peer-${msg.uuid ?? randomUUID()}`;
-          const from = origin.name || origin.from;
-          // A worker writing to the master directly: filed under its topic, part of the turn it starts.
-          const topic = s.id === MASTER_ID ? this.topics.shown(id, { worker: workerName(from) || null }, false) : null;
-          this.upsert(s, { kind: 'peer', id, from, text, ...(topic ? { topic } : {}) });
-          this.event(s, 'message_in');
-          break;
-        }
-        for (const b of blocks) {
-          if (b.type !== 'tool_result') continue;
+      case 'promptTaken':
+        // One of our prompts reached the model: it is no longer waiting in the queue.
+        s.queued = Math.max(0, s.queued - 1);
+        if (s.id === MASTER_ID) this.topics.taken(ev.text);
+        this.markBusy(s);
+        break;
+      case 'peer': {
+        const text = ev.body ?? userTextItem(ev.blocks, '')?.text ?? '';
+        const id = `peer-${ev.id ?? randomUUID()}`;
+        // A worker writing to the master directly: filed under its topic, part of the turn it starts.
+        const topic = s.id === MASTER_ID ? this.topics.shown(id, { worker: workerName(ev.from) || null }, false) : null;
+        this.upsert(s, { kind: 'peer', id, from: ev.from, text, ...(topic ? { topic } : {}) });
+        this.event(s, 'message_in');
+        break;
+      }
+      case 'toolResults':
+        for (const b of ev.blocks) {
           const item = s.items.get(String(b.tool_use_id));
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
@@ -1252,11 +1179,10 @@ export class SessionManager extends EventEmitter {
           else if (isError) this.event(s, 'tool_error');
         }
         break;
-      }
-      case 'result': {
+      case 'turn': {
         s.liveId = null;
-        // A local command (/context, /usage…) is never replayed: the CLI's own count says what still waits.
-        if (typeof msg.queued_turn_count === 'number') s.queued = Math.min(s.queued, msg.queued_turn_count);
+        // A local command (/context, /usage…) is never replayed: the program's own count says what still waits.
+        if (ev.queued !== null) s.queued = Math.min(s.queued, ev.queued);
         if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
         s.compacting = false;
@@ -1269,27 +1195,26 @@ export class SessionManager extends EventEmitter {
         // turn: then the result answers that work, and goes where any result goes.
         const handoff = s.handoff && !s.handoffStale;
         s.handoff = false;
+        // A turn that ended on an error carries the program's error text, not a note.
+        const ok = ev.subtype === 'success' && !ev.isError;
         if (handoff) {
-          // A turn that ended on an error carries Claude Code's error text, not a note.
-          const ok = msg.subtype === 'success' && !msg.is_error;
-          const note = ok ? msg.result.trim().slice(0, NOTE_MAX) : '';
+          const note = ok ? ev.result.trim().slice(0, NOTE_MAX) : '';
           if (note) Object.assign(s, { note, noteFresh: true });
           // Not written: the worker keeps its conversation as it is, and a note is asked again at its next sleep after work.
-          else this.notice(s, t('notice.noteFailed'), 'info', ok ? '' : msg.subtype === 'success' ? msg.result.trim() : msg.subtype);
-        } else if (msg.subtype === 'success') {
-          // A turn that ended on an error carries Claude Code's wording as its result: the notice already said it, and
+          else this.notice(s, t('notice.noteFailed'), 'info', ok ? '' : ev.subtype === 'success' ? ev.result.trim() : ev.subtype);
+        } else if (ev.subtype === 'success') {
+          // A turn that ended on an error carries the program's wording as its result: the notice already said it, and
           // the previous turn's text would pass for this one's.
-          if (msg.is_error) s.lastMessage = '';
-          else if (msg.result.trim()) s.lastMessage = msg.result;
+          if (ev.isError) s.lastMessage = '';
+          else if (ev.result.trim()) s.lastMessage = ev.result;
           this.event(s, 'turn_done');
         } else {
           this.notice(s, t('notice.interrupted'), 'info');
           this.event(s, 'interrupted');
         }
-        const windows = Object.values(msg.modelUsage ?? {}).map((m) => m.contextWindow);
-        const size = Math.max(s.metrics?.contextSize ?? 0, ...windows);
+        const size = Math.max(s.metrics?.contextSize ?? 0, ...ev.contextWindows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, size);
-        this.countTurn(s, totalsOf(msg.total_cost_usd, msg.modelUsage));
+        this.countTurn(s, ev.usage);
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
         if (s.switchPending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
@@ -1297,6 +1222,8 @@ export class SessionManager extends EventEmitter {
         void this.refreshUsage(s, q);
         break;
       }
+      case 'activity':
+        break;
     }
     this.changed();
   }
@@ -1308,19 +1235,6 @@ export class SessionManager extends EventEmitter {
   /** A post's own mode (for its worker and its instances), else the hub's. */
   private modeOf(s: Session): Mode | null {
     return this.postOf(s)?.mode || this.hubMode();
-  }
-
-  /**
-   * Mode shown before the first turn of a session that leaves it to Claude Code (system/init reports the real one):
-   * the settings' `permissions.defaultMode`, else null.
-   */
-  private async settingsMode(cwd: string): Promise<Mode | null> {
-    try {
-      const { effective } = await resolveSettings({ cwd });
-      return (effective.permissions?.defaultMode as Mode | undefined) ?? null;
-    } catch {
-      return null;
-    }
   }
 
   private markBusy(s: Session): void {
@@ -1339,9 +1253,9 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The CLI answers `initialize` at spawn, before any turn: the session is usable from then on. */
-  private async onReady(s: Session, q: Query): Promise<void> {
+  private async onReady(s: Session, q: AgentProcess): Promise<void> {
     try {
-      const init = await q.initializationResult();
+      const init = await q.ready();
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
       if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount))) this.modelInfos = init.models;
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
@@ -1359,10 +1273,10 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
-  private async refreshContext(s: Session, q: Query): Promise<void> {
+  private async refreshContext(s: Session, q: AgentProcess): Promise<void> {
     try {
-      const usage = await q.getContextUsage({ detail: 'summary' });
-      this.setContext(s, usage.totalTokens, usage.maxTokens);
+      const usage = await q.context();
+      this.setContext(s, usage.tokens, usage.size);
       // Before the first turn this is the only source of the inherited model.
       this.applyModel(s, usage.model);
       await this.inheritEffort(s, usage.model);
@@ -1381,14 +1295,11 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The running totals a resumed conversation starts from, read before its first turn ends. */
-  private usageTotals(q: Query): Promise<Totals | 'unknown'> {
-    return q
-      .initializationResult()
-      .then(() => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }))
-      .then(
-        (u) => totalsOf(u.session.total_cost_usd, u.session.model_usage),
-        () => 'unknown' as const, // API unavailable: the first result only sets the base, later turns count.
-      );
+  private usageTotals(q: AgentProcess): Promise<Totals | 'unknown'> {
+    return q.totals().then(
+      (totals) => totals,
+      () => 'unknown' as const, // API unavailable: the first result only sets the base, later turns count.
+    );
   }
 
   private costRole(s: Session): CostRole {
@@ -1425,51 +1336,38 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
-  private async refreshUsage(s: Session, q: Query): Promise<void> {
+  private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
     const account = s.runAccount || DEFAULT_ACCOUNT;
     if (!runsClaude(this.kindOf(account)) || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
     this.usageCheckedAt.set(account, Date.now());
     try {
-      const limits = (await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })).rate_limits;
+      const limits = await q.rateLimits();
       if (!limits) return;
-      const epoch = (iso: string | null | undefined) => (iso ? Date.parse(iso) / 1000 : null);
-      this.rateLimits.set(account, {
-        fiveHourPct: limits.five_hour?.utilization ?? null,
-        fiveHourResetsAt: epoch(limits.five_hour?.resets_at),
-        sevenDayPct: limits.seven_day?.utilization ?? null,
-        sevenDayResetsAt: epoch(limits.seven_day?.resets_at),
-      });
+      this.rateLimits.set(account, limits);
       this.changed();
     } catch {
       // Experimental API unavailable in this CLI version: the status bar simply omits plan limits.
     }
   }
 
-  private askPermission(
-    s: Session,
-    toolName: string,
-    input: Record<string, unknown>,
-    opts: { signal: AbortSignal; suggestions?: PermissionUpdate[]; decisionReason?: string },
-  ): Promise<PermissionResult> {
-    if (opts.signal.aborted) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
+  private askPermission(s: Session, req: PermissionRequest): Promise<PermissionAnswer> {
+    if (req.signal.aborted) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,
-      tool: toolLabel(toolName),
-      summary: toolSummary(toolName, input),
-      ...toolDetail(toolName, input),
+      tool: toolLabel(req.tool),
+      summary: toolSummary(req.tool, req.input),
+      ...toolDetail(req.tool, req.input),
       // A command or an edit stays in view (it is what is being allowed); any other input is raw data.
-      showDetail: SHOWN_INPUT.test(toolName),
-      reason: opts.decisionReason ?? '',
-      // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
-      canAlways: (opts.suggestions?.length ?? 0) > 0,
+      showDetail: SHOWN_INPUT.test(req.tool),
+      reason: req.reason,
+      canAlways: req.canAlways,
       state: 'pending',
     };
-    return this.ask(s, item, opts.signal).then((d): PermissionResult => {
+    return this.ask(s, item, req.signal).then((d): PermissionAnswer => {
       if (!d) return { behavior: 'deny', message: t('perm.cancelled') };
       if (d.behavior === 'deny') return { behavior: 'deny', message: d.message?.trim() || t('perm.denied') };
-      const always = d.behavior === 'always' && opts.suggestions ? { updatedPermissions: opts.suggestions } : {};
-      return { behavior: 'allow', updatedInput: input, ...always };
+      return { behavior: 'allow', always: d.behavior === 'always' };
     });
   }
 
@@ -1497,7 +1395,7 @@ export class SessionManager extends EventEmitter {
    * validation, so they are accepted; in any other mode the user answers them like a permission. A form that needs
    * real input, or a browser sign-in, is declined and shown.
    */
-  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationResult> {
+  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationAnswer> {
     const content = req.mode === 'url' ? null : confirmationAnswers(req.requestedSchema);
     const message = oneLine(req.message, 300);
     if (!content) {
@@ -1519,7 +1417,7 @@ export class SessionManager extends EventEmitter {
       canAlways: false,
       state: 'pending',
     };
-    return this.ask(s, item, signal).then((d): ElicitationResult => (d && d.behavior !== 'deny' ? { action: 'accept', content } : { action: 'decline' }));
+    return this.ask(s, item, signal).then((d): ElicitationAnswer => (d && d.behavior !== 'deny' ? { action: 'accept', content } : { action: 'decline' }));
   }
 
   /** Into the running session, or resumes a closed one with its conversation. */
@@ -1578,7 +1476,7 @@ export class SessionManager extends EventEmitter {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
       this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...tag });
     }
-    s.inbox?.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: s.sessionId });
+    s.inbox?.push({ content });
     s.queued++;
     s.activeAt = Date.now();
     this.markBusy(s);
@@ -1625,23 +1523,20 @@ export class SessionManager extends EventEmitter {
     // The master's conversation is filed by topic again, from its own calls (shared/topics.ts).
     const steps: ReplayStep[] = [];
     try {
-      const messages = (await getSessionMessages(s.sessionId, { dir: s.cwd })).slice(-HISTORY_MAX);
+      const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd)).slice(-HISTORY_MAX);
       for (const m of messages) {
-        if (m.parent_tool_use_id) continue;
-        // Claude Code stores an API error as a "<synthetic>" reply with its own wording: not shown again on reload.
-        const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';
-        const blocks = blocksOf(m.message).filter((b) => !synthetic || b.type !== 'text');
-        if (m.type === 'assistant') {
-          const items = assistantItems(master ? blocks.filter((b) => b.name !== TOPIC_TOOL) : blocks, m.uuid);
+        const { blocks } = m;
+        if (m.role === 'assistant') {
+          const items = assistantItems(master ? blocks.filter((b) => b.name !== TOPIC_TOOL) : blocks, m.id);
           for (const item of items) history.set(item.id, item);
           if (master) steps.push(...frameSteps(blocks, items.filter((i) => i.kind !== 'tool')));
-        } else if (m.type === 'user') {
+        } else {
           for (const b of blocks) {
             if (b.type !== 'tool_result') continue;
             const item = history.get(String(b.tool_use_id));
             if (item?.kind === 'tool') history.set(item.id, { ...item, result: resultText(b.content), isError: b.is_error === true });
           }
-          const text = userTextItem(blocks, m.uuid);
+          const text = userTextItem(blocks, m.id);
           if (!text) continue;
           history.set(text.id, text);
           if (master) {
@@ -1757,7 +1652,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A worker the master wrote to ended its turn without answering: the master hears it from the hub. */
-  private chaseSilence(s: Session, q: Query): void {
+  private chaseSilence(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.owesReport || !this.settled(s)) return;
     if (Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.chaseSilence(s, q), SILENCE_MS); // Something moved meanwhile: look again once it is quiet.
@@ -1771,7 +1666,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** End of the turn (and of its background tasks) of a worker the master closed while it was finishing. */
-  private closeIfDone(s: Session, q: Query): void {
+  private closeIfDone(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.closeWhenDone || !this.settled(s)) return;
     if (Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
@@ -1899,10 +1794,11 @@ export class SessionManager extends EventEmitter {
    * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
    * hub's own channel always reaches this hub's master.
    */
-  private hubServer(s: Session) {
+  private hubTools(s: Session): HubTool[] {
     const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+    const tool = (name: string, description: string, shape: ZodRawShape, handler: HubTool['handler']): HubTool => ({ name, description, shape, handler });
     const run = async (fn: () => string | Promise<string>) => {
       try {
         return text(await fn());
@@ -1917,7 +1813,7 @@ export class SessionManager extends EventEmitter {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
         run(() => this.messageMaster(s, message)),
       );
-      return createSdkMcpServer({ name: 'hub', version: '0.6.0', tools: [listWorkers, listRepos, toMaster] });
+      return [listWorkers, listRepos, toMaster];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -1942,10 +1838,7 @@ export class SessionManager extends EventEmitter {
         .describe(t('tool.role.effort')),
       enabled: z.boolean().nullish().describe(t('tool.role.enabled')),
     };
-    return createSdkMcpServer({
-      name: 'hub',
-      version: '0.6.0',
-      tools: [
+    return [
         tool(
           'spawn_worker',
           t('tool.spawn'),
@@ -2042,8 +1935,7 @@ export class SessionManager extends EventEmitter {
           },
           (args) => run(() => this.declareTopic(args)),
         ),
-      ],
-    });
+    ];
   }
 
   /**
@@ -2826,7 +2718,7 @@ export class SessionManager extends EventEmitter {
       value: m.value,
       label: modelLabel(m.value, m.displayName),
       description: modelHint(m.value, m.displayName),
-      efforts: m.supportsEffort ? (m.supportedEffortLevels ?? []) : [],
+      efforts: m.efforts,
     }));
   }
 
@@ -2837,14 +2729,9 @@ export class SessionManager extends EventEmitter {
   private async inheritEffort(s: Session, modelId: string): Promise<void> {
     if (s.fixedEffort || s.effortResolved || !modelId) return;
     s.effortResolved = true;
-    try {
-      const { effective } = await resolveSettings({ cwd: s.cwd });
-      if (s.fixedEffort) return; // Chosen in the composer meanwhile.
-      const perModel = effective.modelSettings;
-      s.effort = perModel?.[modelId]?.effortLevel ?? perModel?.[s.model]?.effortLevel ?? effective.effortLevel ?? null;
-    } catch {
-      // Display only: the session keeps running with the CLI's own resolution.
-    }
+    const effort = await this.adapterOf(s).inheritedEffort(s.cwd, [modelId, s.model]);
+    if (s.fixedEffort || effort === undefined) return; // Chosen in the composer meanwhile, or unreadable.
+    s.effort = effort;
   }
 
   /** Display model: the explicit choice, else what settings.json resolved to (as a picker alias when one matches). */

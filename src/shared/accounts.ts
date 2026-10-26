@@ -1,4 +1,4 @@
-import { ACCOUNT_KINDS, type Account, type AccountKind } from './types';
+import { ACCOUNT_KINDS, type Account, type AccountKind, type HarnessId } from './types';
 
 // Accounts sessions can run on: checks shared by the settings screen and the main process. No Node and no DOM.
 
@@ -16,6 +16,8 @@ const URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/i;
 export const isAccountRef = (v: unknown): v is string => typeof v === 'string' && (v === DEFAULT_ACCOUNT || ACCOUNT_ID.test(v));
 /** The account runs Claude models: Claude Code talks to Anthropic itself, no bridge in between. */
 export const runsClaude = (kind: AccountKind | 'default') => kind !== 'openai';
+/** The program that runs the sessions of an account. */
+export const harnessOf = (_kind: AccountKind | 'default'): HarnessId => ('claude');
 /** A server on this computer (LM Studio, llama.cpp, Ollama…): it usually needs no key. */
 export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(url);
 /** OpenAI's own API names the output limit max_completion_tokens; most compatible servers, max_tokens. */

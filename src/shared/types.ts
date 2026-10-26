@@ -10,6 +10,8 @@ export { APP_NAME } from './brand';
 
 export type Role = 'master' | 'worker';
 export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
+/** The program that runs an agent: Claude Code (also for Anthropic-compatible and bridged accounts) or Codex. */
+export type HarnessId = 'claude' | 'codex';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk';
 
