@@ -12,11 +12,13 @@ import {
 } from '@anthropic-ai/claude-agent-sdk';
 import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
-import { WORKER_COMPACT_WINDOW } from '../../../shared/team';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
 import { blocksOf } from '../blocks';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
+
+/** The largest autoCompactWindow the CLI accepts: a worker compacts only at the model's own limit. */
+const FULL_WINDOW = 1_000_000;
 
 
 /** Claude Code, driven through the Agent SDK: streaming input, in-process MCP server for the hub's tools. */
@@ -121,8 +123,9 @@ export const claudeAdapter: ProviderAdapter = {
         : spec.readOnly
           ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'Workflow', 'ScheduleWakeup']
           : ['AskUserQuestion', 'Workflow', 'ScheduleWakeup'],
-      // Flag-level settings, over the user's own: a worker compacts early and loads none of the unneeded connectors.
-      ...(master ? {} : { settings: { autoCompactWindow: WORKER_COMPACT_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) } }),
+      // Flag-level settings, over the user's own: a worker keeps the model's whole window (the user's own
+      // autoCompactWindow would cut it) and loads none of the unneeded connectors.
+      ...(master ? {} : { settings: { autoCompactWindow: FULL_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) } }),
       mcpServers: {
         hub: createSdkMcpServer({
           name: 'hub',
