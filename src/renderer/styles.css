@@ -499,7 +499,7 @@ kbd,
   background: transparent;
   cursor: default;
 }
-/* A git command at work: its button stays lit; the head line below carries the motion. */
+/* A git command at work: its button stays lit; the sync icon alone turns. */
 .scm .running {
   color: var(--accent) !important;
   opacity: 1 !important;
@@ -515,25 +515,6 @@ kbd,
   height: 26px;
   padding: 0 var(--sp-1) 0 2px;
   overflow: hidden;
-}
-/* Indeterminate progress on the compositor: a light sweeping along the bottom edge. */
-.scm.working .scm-head::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 35%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  animation: scm-progress 1.1s var(--ease-in-out) infinite;
-}
-@keyframes scm-progress {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(300%);
-  }
 }
 .scm .scm-chevron {
   width: 16px;
@@ -608,8 +589,7 @@ kbd,
   transition: opacity var(--dur-2);
 }
 .scm:hover .scm-actions,
-.scm-actions:focus-within,
-.scm-actions:has(.running) {
+.scm-actions:focus-within {
   opacity: 1;
 }
 .scm-sync {
@@ -624,7 +604,7 @@ kbd,
 .scm-sync.error .ico {
   color: var(--danger);
 }
-.scm-sync.running .ico {
+.scm-sync.spinning .ico {
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin {

@@ -47,22 +47,7 @@ const SCALE = ROW / SWIMLANE_HEIGHT;
 // Commit shortcut as the platform names it.
 const SHORTCUT = t(PLATFORM === 'darwin' ? 'scm.shortcutMac' : 'scm.shortcut');
 
-// Keys typed by kind: a new action, error or state cannot be left untranslated.
-const BUSY: Record<RepoActionKind, Key> = {
-  fetch: 'scm.busy.fetch',
-  pull: 'scm.busy.pull',
-  push: 'scm.busy.push',
-  sync: 'scm.busy.sync',
-  publish: 'scm.busy.publish',
-  commit: 'scm.busy.commit',
-  stage: 'scm.busy.stage',
-  unstage: 'scm.busy.unstage',
-  'stage-all': 'scm.busy.stage-all',
-  'unstage-all': 'scm.busy.unstage-all',
-  checkout: 'scm.busy.checkout',
-  branch: 'scm.busy.branch',
-  abort: 'scm.busy.abort',
-};
+// Keys typed by kind: a new error or state cannot be left untranslated.
 const ERRORS: Record<RepoErrorKind, Key> = {
   'no-upstream': 'scm.error.no-upstream',
   rejected: 'scm.error.rejected',
@@ -220,6 +205,7 @@ export class RepoPanel {
   private shownPath = '';
   private graphKey = '';
   private graph: RepoGraph | null = null;
+  private graphJson = '';
   private viewModels: HistoryItemViewModel[] = [];
   private graphError = '';
   private limit = PAGE;
@@ -230,6 +216,8 @@ export class RepoPanel {
   private alert: Alert | null = null;
   private pending: RepoActionKind | null = null;
   private renderedKeys = { head: '', changes: '', alert: '' };
+  private remoteButtons: Partial<Record<'fetch' | 'pull' | 'push', HTMLButtonElement>> = {};
+  private syncButton: HTMLButtonElement | null = null;
 
   private readonly head = h('div', 'scm-head');
   private readonly alertBox = h('div', 'scm-alert');
@@ -369,7 +357,6 @@ export class RepoPanel {
     if (!c) return;
     if (c.tree.path !== this.shownPath) this.show(c.tree.path);
     const busy = c.repo.busy?.path === c.tree.path ? c.repo.busy.action : this.pending;
-    this.root.classList.toggle('working', !!busy || c.repo.fetching);
     this.renderHead(c.repo, c.tree, busy);
     this.renderAlert();
     this.renderCommit(c.repo, c.tree);
@@ -386,6 +373,7 @@ export class RepoPanel {
   private show(path: string): void {
     this.shownPath = path;
     this.graph = null;
+    this.graphJson = '';
     this.viewModels = [];
     this.graphError = '';
     this.limit = PAGE;
@@ -410,11 +398,31 @@ export class RepoPanel {
 
   /** One line: fold, repo, branch, then the remote actions (shown on hover), sync and more. */
   private renderHead(repo: RepoStatus, tree: RepoTree, busy: RepoActionKind | null): void {
-    const locked = !!repo.busy || !!this.pending;
-    const key = JSON.stringify([repo.name, tree.path, tree.label, tree.branch, tree.oid, tree.error, tree.changes > 0, tree.upstream, tree.ahead, tree.behind, !!repo.fetchError, busy, locked, this.collapsed]);
-    if (key === this.renderedKeys.head) return;
-    this.renderedKeys.head = key;
+    const key = JSON.stringify([repo.name, tree.path, tree.label, tree.branch, tree.oid, tree.error, tree.changes > 0, tree.upstream, tree.ahead, tree.behind, !!repo.fetchError, this.collapsed]);
+    if (key !== this.renderedKeys.head) {
+      this.renderedKeys.head = key;
+      this.buildHead(repo, tree);
+    }
+    this.markBusy(repo, busy);
+  }
 
+  /** A git command at work only lights its button and spins the sync icon: the line is never rebuilt, so nothing flickers. */
+  private markBusy(repo: RepoStatus, busy: RepoActionKind | null): void {
+    const locked = !!repo.busy || !!this.pending;
+    for (const kind of ['fetch', 'pull', 'push'] as const) {
+      const btn = this.remoteButtons[kind];
+      if (!btn) continue;
+      btn.disabled = locked;
+      btn.classList.toggle('running', busy === kind);
+    }
+    const sync = this.syncButton;
+    if (!sync) return;
+    sync.disabled = locked;
+    sync.classList.toggle('running', busy === 'sync' || busy === 'publish');
+    sync.classList.toggle('spinning', !!busy || repo.fetching);
+  }
+
+  private buildHead(repo: RepoStatus, tree: RepoTree): void {
     const chevron = iconButton(ICONS.chevron, this.collapsed ? t('scm.expand') : t('scm.collapse'), () => this.setCollapsed(!this.collapsed), 'icon-btn scm-chevron');
 
     const repoBtn = h('button', 'scm-repo');
@@ -435,10 +443,11 @@ export class RepoPanel {
       this.openBranchPicker(branch);
     });
 
+    this.remoteButtons = {};
+    this.syncButton = null;
     const remote = (kind: 'fetch' | 'pull' | 'push', path: string, label: string) => {
       const btn = iconButton(path, label, () => void this.run({ kind }));
-      btn.disabled = locked;
-      btn.classList.toggle('running', busy === kind);
+      this.remoteButtons[kind] = btn;
       return btn;
     };
     const actions = h('div', 'scm-actions');
@@ -454,14 +463,13 @@ export class RepoPanel {
         if (tree.ahead + tree.behind > 0) sync.append(h('span', '', `${tree.behind}↓${tree.ahead}↑`));
         sync.classList.toggle('active', tree.ahead + tree.behind > 0);
       } else sync.append(icon(ICONS.publish, 'ico small'));
-      sync.classList.toggle('running', busy === 'sync' || busy === 'publish');
       sync.classList.toggle('error', !!repo.fetchError);
-      sync.disabled = locked;
       sync.addEventListener('mouseenter', () => (sync.title = this.syncTitle()));
       sync.addEventListener('click', (e) => {
         e.stopPropagation();
         void this.run({ kind: own ? 'sync' : 'publish' });
       });
+      this.syncButton = sync;
       items.push(sync);
     }
     const more = iconButton(ICONS.more, t('scm.more'), () => this.openMoreMenu(more));
@@ -474,10 +482,9 @@ export class RepoPanel {
     const c = this.current();
     if (!c) return '';
     const { repo, tree } = c;
-    const busy = repo.busy?.path === tree.path ? repo.busy.action : this.pending;
     return [
       ownUpstream(tree.branch, tree.upstream) ? t('scm.syncHint', { behind: tree.behind, ahead: tree.ahead, upstream: tree.upstream }) : t('scm.publishHint'),
-      busy ? t(BUSY[busy]) : repo.fetching ? t('scm.busy.fetch') : repo.fetchError ? t(/Authentication failed|could not read Username|Permission denied|terminal prompts disabled|\b403\b/i.test(repo.fetchError) ? 'scm.fetchAuth' : 'scm.fetchFailed') : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
+      repo.fetchError ? t(/Authentication failed|could not read Username|Permission denied|terminal prompts disabled|\b403\b/i.test(repo.fetchError) ? 'scm.fetchAuth' : 'scm.fetchFailed') : repo.fetchedAt ? t('scm.fetchedAgo', { when: ago(repo.fetchedAt) }) : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -657,14 +664,21 @@ export class RepoPanel {
     try {
       const graph = await this.hub.repoGraph(path, this.filter, this.limit);
       if (token !== this.loadingGraph || path !== this.shownPath) return;
+      this.loadingGraph = 0;
+      // A reload brings the same history most of the time: the rows on screen stay untouched.
+      const json = JSON.stringify(graph);
+      if (!this.graphError && json === this.graphJson) return;
+      this.graphJson = json;
       this.graph = graph;
       this.graphError = '';
       this.viewModels = this.toViewModels(graph);
     } catch (err) {
       if (token !== this.loadingGraph || path !== this.shownPath) return;
+      this.loadingGraph = 0;
+      // A failed reload keeps the history already shown; the next change of the repo tries again.
+      if (this.graph) return;
       this.graphError = remoteError(err);
     }
-    this.loadingGraph = 0;
     this.renderGraph();
   }
 
@@ -1087,7 +1101,8 @@ export class RepoPanel {
 
   /** Re-renders what depends on an action being in flight. */
   private renderLocks(): void {
-    this.renderedKeys = { head: '', changes: '', alert: '' };
+    this.renderedKeys.changes = '';
+    this.renderedKeys.alert = '';
     this.render();
   }
 
