@@ -26,6 +26,7 @@ import {
 } from '../shared/types';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
+import { mascotOf, mascotPicture } from './mascot';
 import { updateSection } from './update';
 
 type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
@@ -968,7 +969,7 @@ export class SetupView {
     model.addEventListener('change', update);
     effort.addEventListener('change', update);
     const row = h('div', 'setup-row setup-defaults');
-    row.append(provider, model, effort);
+    row.append(mascotPicture(mascotOf(current?.id ?? ''), 'setup-provider-pic'), provider, model, effort);
     f.append(row);
     return f;
   }

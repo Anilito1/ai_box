@@ -4,6 +4,7 @@ import type { StageView } from './clawd/stage';
 import { hash, Mind, signalsOf, type MindEvent } from './clawd/state';
 import { h, statusDot, statusLabel } from './dom';
 import { t } from './i18n';
+import { mascotPicture, type MascotId } from './mascot';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -73,8 +74,11 @@ function clawd(s: SessionView): SVGSVGElement {
   return svg;
 }
 
-/** The 3D stage is up: new mascots go straight to it, without the flat placeholder. */
-let stageReady = false;
+/** A session's flat mascot: the SVG Clawd, else the still picture of its provider's. */
+const flatMascot = (s: SessionView, mascot: MascotId) => (mascot === 'clawd' ? clawd(s) : mascotPicture(mascot, 'clawd mascot-pic'));
+
+/** Models up on the 3D stage: their new mascots go straight to it, without the flat placeholder. */
+const drawable = new Set<MascotId>();
 
 // One mind per session, shared by its views (sidebar card and open conversation), so both act alike.
 const minds = new Map<string, Mind>();
@@ -112,14 +116,17 @@ export function noteFleet(sessions: SessionView[]): void {
   waveBusy = 0;
 }
 
-/** A session's Clawd: 3D on the shared stage, or the SVG mascot when WebGL is unavailable. */
+/** A session's mascot, its provider's: 3D on the shared stage, or flat when WebGL is unavailable. */
 export class Avatar {
   readonly root = h('span', 'avatar');
   private readonly canvas = h('canvas', 'clawd-3d');
   private readonly badge: HTMLSpanElement | null = null;
   private view: StageView | null = null;
-  private svg: SVGSVGElement | null = null;
+  private flat: SVGSVGElement | HTMLImageElement | null = null;
   private session: SessionView | null = null;
+  private mascot: MascotId = 'clawd';
+  /** Bumped by each follow(): a model that arrives for an older one is dropped. */
+  private following = 0;
   private lastClick = 0;
 
   private readonly large: boolean;
@@ -136,8 +143,8 @@ export class Avatar {
     this.root.addEventListener('click', (e) => this.poke(e));
   }
 
-  update(s: SessionView, last: ChatItem | undefined, workersBusy = 0): void {
-    if (s.id !== this.session?.id) this.follow(s);
+  update(s: SessionView, last: ChatItem | undefined, mascot: MascotId, workersBusy = 0): void {
+    if (s.id !== this.session?.id || mascot !== this.mascot) this.follow(s, mascot);
     this.session = s;
     mindOf(s.id).update(signalsOf(s, last, workersBusy), Date.now());
     this.view?.wake();
@@ -158,30 +165,36 @@ export class Avatar {
     this.session = null;
   }
 
-  private follow(s: SessionView): void {
+  private follow(s: SessionView, mascot: MascotId): void {
+    const turn = ++this.following;
     this.view?.dispose();
     this.view = null;
-    this.svg?.remove();
-    this.svg = null;
+    // Another character: its last frame goes rather than show until the new one draws.
+    if (mascot !== this.mascot) this.canvas.getContext('bitmaprenderer')?.transferFromImageBitmap(null);
+    this.flat?.remove();
+    this.flat = null;
+    this.mascot = mascot;
     this.canvas.hidden = false;
-    // Until the 3D stage arrives (a moment after the first paint), the flat Clawd holds the place, still.
-    if (!stageReady) {
-      this.svg = clawd(s);
-      this.svg.classList.add('still');
-      this.root.prepend(this.svg);
+    // Until its model is on the 3D stage (a moment after the first paint), the flat mascot holds the place, still.
+    if (!drawable.has(mascot)) {
+      this.root.classList.remove('drawn');
+      this.flat = flatMascot(s, mascot);
+      this.flat.classList.add('still');
+      this.root.prepend(this.flat);
     }
-    void clawdStage().then((stage) => {
-      if (this.session?.id !== s.id) return; // Switched to another session meanwhile.
-      if (!stage) return this.fallback();
-      stageReady = true;
-      this.view = stage.attach(this.canvas, mindOf(s.id), shadeOf(s), this.large, () => this.fallback());
-      this.root.classList.add('drawn'); // The 3D Clawd fades in over the flat one, which then leaves.
-      const placeholder = this.svg;
+    void clawdStage().then(async (stage) => {
+      const model = await stage?.model(mascot);
+      if (turn !== this.following) return; // Switched to another session or provider meanwhile.
+      if (!stage || !model) return this.fallback();
+      drawable.add(mascot);
+      this.view = stage.attach(this.canvas, mindOf(s.id), model, shadeOf(s), this.large, () => this.fallback());
+      this.root.classList.add('drawn'); // The 3D mascot fades in over the flat one, which then leaves.
+      const placeholder = this.flat;
       if (placeholder) {
         window.setTimeout(() => {
-          if (this.svg !== placeholder || !this.view) return;
+          if (this.flat !== placeholder || !this.view) return;
           placeholder.remove();
-          this.svg = null;
+          this.flat = null;
         }, 450);
       }
     });
@@ -192,11 +205,11 @@ export class Avatar {
     this.view = null;
     this.canvas.hidden = true;
     this.root.classList.remove('drawn');
-    if (this.session && !this.svg) {
-      this.svg = clawd(this.session);
-      this.root.prepend(this.svg);
+    if (this.session && !this.flat) {
+      this.flat = flatMascot(this.session, this.mascot);
+      this.root.prepend(this.flat);
     }
-    this.svg?.classList.remove('still'); // No WebGL: the flat Clawd is the mascot, and moves.
+    this.flat?.classList.remove('still'); // No WebGL: the flat mascot stands in, and the SVG Clawd moves.
   }
 
   private poke(e: MouseEvent): void {

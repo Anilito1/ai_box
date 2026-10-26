@@ -5,6 +5,7 @@ import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
+import { sessionMascot } from './mascot';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
@@ -215,7 +216,7 @@ function renderCard(s: SessionView): void {
   // Under its post the job is enough ("agenda"); elsewhere the post goes with it ("brain · agenda").
   const inTeam = nested(s);
   c.root.classList.toggle('instance', inTeam);
-  c.avatar.update(s, last, s.role === 'master' ? workersBusy() : 0);
+  c.avatar.update(s, last, sessionMascot(s, snapshot.accounts), s.role === 'master' ? workersBusy() : 0);
   c.tree.hidden = s.tree?.state !== 'active';
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.cost, fmtCost(m?.costUsd));

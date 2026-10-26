@@ -3,6 +3,7 @@ import { PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from
 import type { HubApi, ProviderAccountView, ProviderView } from '../shared/types';
 import { h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
+import { mascotOf, mascotPicture } from './mascot';
 
 // Settings › Accounts: one row per provider, all built the same way. A row says whether the provider is connected and
 // offers one action; the way of connecting (an account or an API key, Anthropic's other accounts) waits behind its
@@ -172,8 +173,7 @@ export class ProvidersPanel {
     const item = h('div', open ? 'acct open' : 'acct');
     item.dataset.provider = id;
     const row = h('div', 'acct-row');
-    const mark = h('span', 'acct-mark', def.label[0]);
-    mark.setAttribute('aria-hidden', 'true');
+    const mark = mascotPicture(mascotOf(id), 'acct-mark');
     const text = h('div', 'acct-text');
     text.append(h('span', 'acct-name', def.label));
     const sub = this.subLine(id, v, error, waiting);

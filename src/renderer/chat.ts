@@ -19,6 +19,7 @@ import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
+import { mascotOf, mascotPicture, sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -421,7 +422,7 @@ export class ChatView {
     const s = this.session;
     const last = lastOf(this.items);
     this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background, s?.compacting);
-    if (s) this.mascot?.update(s, last);
+    if (s) this.mascot?.update(s, last, sessionMascot(s, this.accounts));
   }
 
   // ---------- chrome (header + composer state) ----------
@@ -675,7 +676,8 @@ export class ChatView {
         // The provider first: the models below are its models. One that is not connected is greyed, and leads to Settings.
         const tabs = h('div', 'segmented provider-tabs');
         for (const p of this.providers) {
-          const b = h('button', p.id === tab ? 'seg active' : 'seg', p.label);
+          const b = h('button', p.id === tab ? 'seg active' : 'seg');
+          b.append(mascotPicture(mascotOf(p.id), 'seg-pic'), p.label);
           b.classList.toggle('off', !p.connected);
           b.title = p.connected ? '' : t('chat.providerOff');
           if (p.connected && p.id !== tab && !looked.has(p.id) && p.news.unseen) {

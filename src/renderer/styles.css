@@ -4277,7 +4277,17 @@ kbd,
 .setup-defaults .setup-select {
   width: 190px;
 }
-.setup-defaults .setup-select:nth-child(2) {
+.setup-defaults .setup-select:first-of-type {
+  width: 160px;
+  min-width: 0;
+}
+.setup-provider-pic {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+.setup-defaults .setup-select:nth-of-type(2) {
   width: 230px;
 }
 .setup-input.wide {
@@ -5642,16 +5652,13 @@ input[type='radio']:focus-visible {
   padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
 }
 .acct-mark {
-  display: grid;
   flex: none;
-  place-items: center;
   width: 28px;
   height: 28px;
+  padding: 1px;
   border-radius: var(--r-md);
   background: var(--hover-strong);
-  color: var(--text-2);
-  font-size: var(--fs-md);
-  font-weight: 600;
+  object-fit: contain;
 }
 .acct-text {
   display: flex;
@@ -5793,6 +5800,25 @@ input[type='radio']:focus-visible {
 }
 .provider-tabs .seg.off {
   opacity: 0.5;
+}
+.provider-tabs .seg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.seg-pic {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+/* A provider's still mascot as a small mark: its picture is framed for a card, with room for the hats above. */
+.acct-mark,
+.setup-provider-pic,
+.seg-pic {
+  object-view-box: inset(20% 6% 6% 6%);
 }
 
 /* ---------- what is new at a provider ---------- */
