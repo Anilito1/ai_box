@@ -5,6 +5,7 @@ import type { NewsToast, ProviderNews } from './news';
 import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
+import type { TopicGroupPrefs } from './topicGroups';
 import type { Topic } from './topics';
 import type { UltracodeAccess } from './ultracode';
 import type { UpdateChoice, UpdateMode, UpdateState } from './update';
@@ -566,6 +567,8 @@ export interface HubSettings {
   };
   /** When the hub installs its own updates (a source checkout of the official repository). */
   updates: UpdateMode;
+  /** The topics column of the master: its groups' order and the folded ones. */
+  topicGroups: TopicGroupPrefs;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */
@@ -661,6 +664,8 @@ export interface HubApi {
   clear(id: string): void;
   /** Deletes one of the master's topics and the history filed under it; the master's own conversation stays. */
   deleteTopic(topic: string): void;
+  /** Puts a topic in a group of the topics column (a repo's main folder, "" for General); undefined: back with its repo. */
+  moveTopic(topic: string, group: string | undefined): void;
   /** Says the session's cost and tokens in its conversation. */
   showCost(id: string): void;
   /** Turns logged in [from, to), oldest first, and when the log started. */

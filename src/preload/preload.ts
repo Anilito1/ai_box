@@ -45,6 +45,7 @@ const api: HubApi = {
   compact: (id, instructions) => ipcRenderer.send('session:compact', id, instructions),
   clear: (id) => ipcRenderer.send('session:clear', id),
   deleteTopic: (topic) => ipcRenderer.send('topic:delete', topic),
+  moveTopic: (topic, group) => ipcRenderer.send('topic:move', topic, group ?? null),
   showCost: (id) => ipcRenderer.send('session:cost', id),
   costHistory: (from, to) => ipcRenderer.invoke('cost:history', from, to),
   openExternal: (url) => ipcRenderer.send('open-external', url),

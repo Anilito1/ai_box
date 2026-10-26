@@ -1,3 +1,4 @@
+import { GENERAL, groupName, groupTopics, reorderGroups, toggled, type TopicGroup, type TopicGroupPrefs } from '../shared/topicGroups';
 import { implicitWorker, type Topic } from '../shared/topics';
 import type { ChatItem, HubApi } from '../shared/types';
 import type { ChatView } from './chat';
@@ -12,9 +13,11 @@ function badge(n: number): HTMLSpanElement {
 }
 
 /**
- * The topics of the master's conversation, in a column that the master's card opens into: "All", then one per job,
- * a red badge where the master waits for the user. A topic shows only its messages and what is written goes to it.
- * Nothing runs at rest: it redraws when the snapshot or an approval of the master changes.
+ * The topics of the master's conversation, in a column that the master's card opens into: "All", then the jobs grouped
+ * by repo (a group folds on a click on its header, its badge then adds those of its topics; it moves by drag and drop,
+ * or Alt+↑/↓), a red badge where the master waits for the user. A topic shows only its messages and what is written goes
+ * to it; dragged to another group, it stays there. Nothing runs at rest: it redraws when the snapshot or an approval
+ * of the master changes.
  */
 export class TopicsView {
   private readonly column = h('nav', 'topics');
@@ -22,6 +25,10 @@ export class TopicsView {
   private items: Map<string, ChatItem> | undefined;
   private selected: string | null = null;
   private key = '';
+  /** Order and folded groups, saved in the settings. */
+  private prefs: TopicGroupPrefs = { order: [], collapsed: [] };
+  /** What is being dragged: a whole group or a topic. */
+  private drag: { kind: 'group' | 'topic'; id: string } | null = null;
 
   constructor(
     private readonly pane: HTMLElement,
@@ -32,6 +39,15 @@ export class TopicsView {
     this.column.hidden = true;
     this.column.addEventListener('keydown', (e) => this.onKey(e));
     pane.append(this.column);
+    void hub.getSettings().then((v) => {
+      this.prefs = { order: [...v.settings.topicGroups.order], collapsed: [...v.settings.topicGroups.collapsed] };
+      this.render();
+    });
+  }
+
+  private savePrefs(): void {
+    void this.hub.saveSettings({ topicGroups: this.prefs });
+    this.render();
   }
 
   /** The master's topics (most recent first) and its items, for the approvals it waits on. */
@@ -67,7 +83,7 @@ export class TopicsView {
   private render(): void {
     const { by, total } = this.waiting();
     const column = this.topics.length > 0;
-    const key = JSON.stringify([column, this.selected, total, this.topics.map((x) => [x.id, x.title, by.get(x.id) ?? 0, x.question, x.workers])]);
+    const key = JSON.stringify([column, this.selected, total, this.topics.map((x) => [x.id, x.title, by.get(x.id) ?? 0, x.question, x.workers, x.repo, x.moved]), this.prefs]);
     if (key === this.key) return;
     this.key = key;
     this.column.hidden = !column;
@@ -78,13 +94,109 @@ export class TopicsView {
   }
 
   private renderColumn(by: Map<string, number>, total: number): void {
-    const focused = this.column.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.index : undefined;
+    const focused = this.column.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.nav : undefined;
     const all = this.row(null, t('topics.all'), total, t('topics.allTip'));
-    const slots = this.topics.map((x) => this.slot(x, by.get(x.id) ?? 0));
-    const rows = [all, ...slots.map((slot) => slot.firstElementChild as HTMLButtonElement)];
-    rows.forEach((row, i) => (row.dataset.index = String(i)));
-    this.column.replaceChildren(all, h('div', 'topics-sep'), ...slots);
-    if (focused !== undefined) rows[Math.min(Number(focused), rows.length - 1)]?.focus();
+    all.dataset.nav = 'all';
+    const groups = groupTopics(this.topics, this.prefs.order);
+    const sections = groups.map((g) => this.section(g, groups, by));
+    this.column.replaceChildren(all, h('div', 'topics-sep'), ...sections);
+    // One stop in the tab order: the topic shown, else the header of its folded group, else "All".
+    const rows = this.rows();
+    const shown = this.selected ? `t:${this.selected}` : 'all';
+    const stop = rows.some((r) => r.dataset.nav === shown) ? shown : `g:${groups.find((g) => g.topics.some((x) => x.id === this.selected))?.key ?? ''}`;
+    for (const row of rows) {
+      row.tabIndex = row.dataset.nav === stop ? 0 : -1;
+      const remove = row.nextElementSibling;
+      if (remove instanceof HTMLButtonElement) remove.tabIndex = row.tabIndex;
+    }
+    if (focused !== undefined) (rows.find((r) => r.dataset.nav === focused) ?? rows[0])?.focus();
+  }
+
+  /** The rows that take the arrows: "All", the headers and the topics of the open groups, in order. */
+  private rows(): HTMLButtonElement[] {
+    return [...this.column.querySelectorAll<HTMLButtonElement>('.topic, .topic-group-head')];
+  }
+
+  /** A group: its header (a folded one adds the badges of its topics) and, open, its topics. */
+  private section(group: TopicGroup, groups: TopicGroup[], by: Map<string, number>): HTMLElement {
+    const folded = this.prefs.collapsed.includes(group.key);
+    const name = group.key === GENERAL ? t('topics.general') : groupName(group.key) || group.key;
+    const waiting = group.topics.reduce((n, x) => n + (by.get(x.id) ?? 0), 0);
+    const head = h('button', 'topic-group-head');
+    head.type = 'button';
+    head.dataset.nav = `g:${group.key}`;
+    head.draggable = true;
+    head.setAttribute('aria-expanded', String(!folded));
+    head.append(icon(ICONS.chevron, 'ico small topic-chevron'), h('span', 'topic-group-name', name));
+    if (folded && waiting > 0) head.append(badge(waiting));
+    const label = `${name}, ${tn('topics.inGroup', group.topics.length)}`;
+    head.setAttribute('aria-label', folded && waiting > 0 ? `${label}, ${tn('topics.waiting', waiting)}` : label);
+    head.title = [group.key === GENERAL ? t('topics.generalTip') : group.key, t('topics.groupHint')].join('\n');
+    head.addEventListener('click', () => {
+      this.prefs = { ...this.prefs, collapsed: toggled(this.prefs.collapsed, group.key, !folded) };
+      this.savePrefs();
+    });
+    head.addEventListener('dragstart', (e) => this.dragStart(e, 'group', group.key, head));
+    head.addEventListener('dragend', () => this.endDrag());
+    const section = h('section', 'topic-group');
+    section.dataset.group = group.key;
+    section.setAttribute('aria-label', name);
+    section.append(head);
+    if (!folded) section.append(...group.topics.map((x) => this.slot(x, by.get(x.id) ?? 0)));
+    this.dropTarget(section, group, groups);
+    return section;
+  }
+
+  private dragStart(e: DragEvent, kind: 'group' | 'topic', id: string, from: HTMLElement): void {
+    this.drag = { kind, id };
+    from.classList.add('dragging');
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', id);
+    }
+  }
+
+  private endDrag(): void {
+    this.drag = null;
+    for (const el of this.column.querySelectorAll('.dragging, .drop-before, .drop-after, .drop-into')) el.classList.remove('dragging', 'drop-before', 'drop-after', 'drop-into');
+  }
+
+  /** A group takes a group dragged onto it (it goes to its place) and a topic dragged onto it (it joins it). */
+  private dropTarget(section: HTMLElement, group: TopicGroup, groups: TopicGroup[]): void {
+    const mark = () => {
+      const drag = this.drag;
+      if (!drag) return null;
+      if (drag.kind === 'topic') return group.topics.some((x) => x.id === drag.id) ? null : 'drop-into';
+      if (drag.id === group.key) return null;
+      const keys = groups.map((g) => g.key);
+      return keys.indexOf(drag.id) < keys.indexOf(group.key) ? 'drop-after' : 'drop-before';
+    };
+    section.addEventListener('dragover', (e) => {
+      const cls = mark();
+      if (!cls) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      section.classList.add(cls);
+    });
+    section.addEventListener('dragleave', (e) => {
+      if (!section.contains(e.relatedTarget as Node | null)) section.classList.remove('drop-before', 'drop-after', 'drop-into');
+    });
+    section.addEventListener('drop', (e) => {
+      const drag = this.drag;
+      const cls = mark();
+      this.endDrag();
+      if (!drag || !cls) return;
+      e.preventDefault();
+      if (drag.kind === 'topic') this.hub.moveTopic(drag.id, group.key);
+      else this.moveGroup(groups.map((g) => g.key), drag.id, group.key);
+    });
+  }
+
+  private moveGroup(shown: string[], key: string, target: string): void {
+    const order = reorderGroups(shown, this.prefs.order, key, target);
+    if (order === this.prefs.order) return;
+    this.prefs = { ...this.prefs, order };
+    this.savePrefs();
   }
 
   /** A topic's row and its delete button, shown on hover or keyboard focus ("All" has none). */
@@ -98,7 +210,11 @@ export class TopicsView {
     remove.setAttribute('aria-label', remove.title);
     remove.append(icon(ICONS.remove));
     remove.addEventListener('click', () => this.askDelete(x, remove));
+    row.dataset.nav = `t:${x.id}`;
     const slot = h('div', 'topic-slot');
+    slot.draggable = true;
+    slot.addEventListener('dragstart', (e) => this.dragStart(e, 'topic', x.id, slot));
+    slot.addEventListener('dragend', () => this.endDrag());
     slot.append(row, remove);
     return slot;
   }
@@ -141,7 +257,7 @@ export class TopicsView {
   }
 
   private focusRow(id: string | null): void {
-    const rows = [...this.column.querySelectorAll<HTMLButtonElement>('.topic')];
+    const rows = this.rows();
     (rows.find((r) => (r.dataset.topic ?? null) === id) ?? rows[0])?.focus();
   }
 
@@ -173,14 +289,41 @@ export class TopicsView {
       .join('\n');
   }
 
+  /** Arrows move between rows; on a header Left folds and Right opens; Alt+↑/↓ moves the group, or the topic to the next group. */
   private onKey(e: KeyboardEvent): void {
-    const rows = [...this.column.querySelectorAll<HTMLButtonElement>('.topic')];
+    const rows = this.rows();
     const at = rows.indexOf(document.activeElement as HTMLButtonElement);
     if (at < 0) return;
-    const remove = rows[at]?.nextElementSibling;
+    const row = rows[at] as HTMLButtonElement;
+    const remove = row.nextElementSibling;
     if ((e.key === 'Delete' || e.key === 'Backspace') && remove instanceof HTMLButtonElement) {
       e.preventDefault();
       remove.click();
+      return;
+    }
+    const nav = row.dataset.nav ?? '';
+    const groups = groupTopics(this.topics, this.prefs.order);
+    const keys = groups.map((g) => g.key);
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      const step = e.key === 'ArrowUp' ? -1 : 1;
+      if (nav.startsWith('g:')) {
+        const key = nav.slice(2);
+        const target = keys[keys.indexOf(key) + step];
+        if (target !== undefined) this.moveGroup(keys, key, target);
+      } else if (nav.startsWith('t:')) {
+        const id = nav.slice(2);
+        const target = keys[keys.indexOf(groups.find((g) => g.topics.some((x) => x.id === id))?.key ?? '') + step];
+        if (target !== undefined) this.hub.moveTopic(id, target);
+      }
+      return;
+    }
+    if (nav.startsWith('g:') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const folded = row.getAttribute('aria-expanded') === 'false';
+      if (folded === (e.key === 'ArrowRight')) {
+        e.preventDefault();
+        row.click();
+      }
       return;
     }
     const to = e.key === 'ArrowDown' ? at + 1 : e.key === 'ArrowUp' ? at - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? rows.length - 1 : -2;

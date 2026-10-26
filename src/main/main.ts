@@ -852,6 +852,7 @@ class Hub {
     on('session:compact', (id, instructions) => isStr(id) && isStr(instructions) && instructions.length <= 4000 && mgr.compact(id, instructions));
     on('session:clear', (id) => isStr(id) && mgr.clear(id));
     on('topic:delete', (topic) => isTopicId(topic) && mgr.deleteTopic(topic));
+    on('topic:move', (topic, group) => isTopicId(topic) && (group === null || (isStr(group) && group.length <= 1000)) && mgr.moveTopic(topic, group ?? undefined));
     on('session:cost', (id) => isStr(id) && void mgr.showCost(id));
     handle('cost:history', async (from, to) => {
       const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
