@@ -14,6 +14,7 @@ import {
   type SessionView,
 } from '../shared/types';
 import { effortsFor, splitRecent } from '../shared/models';
+import { modelKey, type CliUpdate } from '../shared/news';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
@@ -464,6 +465,7 @@ export class ChatView {
       h('span', '', shown),
       h('span', 'cbtn-muted', [s.effort ? effortLabel(s.effort) : '', s.ultracode && s.ultracodeAccess === 'allowed' ? t('chat.ultracode') : '', note].filter(Boolean).join(' · ')),
       icon(ICONS.chevron, 'ico small'),
+      ...(this.providers.some((p) => p.connected && p.news.unseen) ? [h('span', 'news-dot')] : []),
     );
     this.modelBtn.title = t('chat.modelTitle');
     this.modelBtn.classList.toggle('warn', s.fallbackFrom !== '');
@@ -654,8 +656,18 @@ export class ChatView {
     let applied: Effort | null = null;
     // Same for Ultracode, a switch of the session itself.
     let ultracode: boolean | null = null;
+    // What was new at each provider when its tab was first shown: the tags stay while the menu is open, though the
+    // providers are told they were seen at once (the next menu has none).
+    const looked = new Map<string, string[]>();
+    const lookAt = (id: string) => {
+      const p = this.providers.find((x) => x.id === id);
+      if (!p?.connected || looked.has(id)) return;
+      looked.set(id, p.news.models);
+      if (p.news.unseen) this.hub.ackNews(p.id);
+    };
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
+        lookAt(tab);
         menu.replaceChildren();
         // Only the models list scrolls: the provider above and the effort below stay in view, however long the list.
         const root = h('div', 'model-menu');
@@ -666,6 +678,10 @@ export class ChatView {
           const b = h('button', p.id === tab ? 'seg active' : 'seg', p.label);
           b.classList.toggle('off', !p.connected);
           b.title = p.connected ? '' : t('chat.providerOff');
+          if (p.connected && p.id !== tab && !looked.has(p.id) && p.news.unseen) {
+            b.append(h('span', 'news-dot'));
+            b.title = t('chat.newTip', { provider: p.label });
+          }
           b.addEventListener('click', () => {
             if (!p.connected) return openSettings(close);
             tab = p.id;
@@ -681,10 +697,18 @@ export class ChatView {
         if (pinned && tab === current) list.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
         else if (models.length === 0) list.append(h('div', 'menu-note', t('chat.modelsLater')));
         // The newest models of each family first, the model in use among them; the others behind "See more".
-        const { recent, older } = splitRecent(pinned && tab === current ? [] : models, tab === current ? s.model : '');
+        const split = splitRecent(pinned && tab === current ? [] : models, tab === current ? s.model : '');
+        // A new model is shown at once, even if it would be under "See more".
+        const newKeys = new Set(looked.get(tab) ?? []);
+        const isNew = (m: ModelOption) => newKeys.has(modelKey(m));
+        const shownFirst = new Set([...split.recent, ...split.older.filter(isNew)]);
+        const recent = models.filter((m) => shownFirst.has(m));
+        const older = split.older.filter((m) => !isNew(m));
         const open = unfolded.has(tab);
+        const update = this.providers.find((p) => p.id === tab)?.news.cli;
+        if (update) list.append(this.cliUpdateBox(update));
         const addModel = (model: ModelOption) => {
-          const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model);
+          const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model, isNew(model));
           row.addEventListener('click', () => {
             // Provider and model in one go: the session moves to the provider if it is not there already.
             if (tab === current) this.hub.setModel(s.id, model.value);
@@ -768,10 +792,34 @@ export class ChatView {
     });
   }
 
-  private menuRow(label: string, hint: string, checked: boolean): HTMLButtonElement {
+  /** "Update available: claude 2.1.287 → 2.1.311", with the command that suits how the program was installed. */
+  private cliUpdateBox(update: CliUpdate): HTMLElement {
+    const box = h('div', 'cli-update');
+    box.append(h('div', 'cli-update-title', t('chat.cliUpdate', { tool: update.tool, current: update.current, latest: update.latest })));
+    const note = update.method === 'brew' ? t('chat.cliUpdate.brew') : update.method === 'app' ? t('chat.cliUpdate.app') : '';
+    if (note) box.append(h('div', 'cli-update-note', note));
+    if (update.command) {
+      const row = h('div', 'cli-update-cmd');
+      const copy = h('button', 'btn ghost small', t('chat.cliUpdate.copy'));
+      copy.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void navigator.clipboard.writeText(update.command).then(() => {
+          copy.textContent = t('chat.cliUpdate.copied');
+          window.setTimeout(() => (copy.textContent = t('chat.cliUpdate.copy')), 1500);
+        });
+      });
+      row.append(h('code', '', update.command), copy);
+      box.append(row);
+    }
+    return box;
+  }
+
+  private menuRow(label: string, hint: string, checked: boolean, isNew = false): HTMLButtonElement {
     const row = h('button', checked ? 'menu-row checked' : 'menu-row');
     const text = h('span', 'menu-text');
-    text.append(h('span', 'menu-title', label));
+    const title = h('span', 'menu-title', label);
+    if (isNew) title.append(h('span', 'news-tag', t('chat.new')));
+    text.append(title);
     if (hint) text.append(h('span', 'menu-hint', hint));
     row.append(checked ? icon(ICONS.check) : h('span', 'ico'), text);
     return row;

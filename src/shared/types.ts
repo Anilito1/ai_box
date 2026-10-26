@@ -1,6 +1,7 @@
 import type { Capabilities, CapResult, McpDraft, McpSource } from './capabilities';
 import type { TurnRecord } from './costs';
 import type { Lang } from './i18n';
+import type { NewsToast, ProviderNews } from './news';
 import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
@@ -414,6 +415,8 @@ export interface ProviderBadge {
   /** The account its sessions run on ("default" for Anthropic), empty when not connected. */
   accountId: string;
   models: ModelOption[];
+  /** What is new at this provider: models never seen, a newer version of its program. */
+  news: ProviderNews;
   /** Anthropic only: the plan of the account in use ("max", "pro"…), empty when not read; Ultracode is shown by it. */
   plan?: string;
   /** Anthropic only: what that plan allows of Ultracode. */
@@ -753,6 +756,10 @@ export interface HubApi {
   finishSetup(): Promise<void>;
   relaunch(): void;
   onUpdate(cb: (state: UpdateState) => void): void;
+  /** A discovery at a connected provider (a new model, a newer program), told once. */
+  onNews(cb: (toast: NewsToast) => void): void;
+  /** The user looked at a provider's news (opened its menu): the dots and the "New" tags go. */
+  ackNews(provider: ProviderId): void;
   updateState(): Promise<UpdateState>;
   /** Asks the official repository now. */
   checkUpdate(): Promise<UpdateState>;
