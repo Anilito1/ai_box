@@ -32,7 +32,7 @@ When a mission splits into independent jobs, the master can run several copies o
 
 ### Topics
 
-With several jobs going, the master's conversation is filed by topic. A red badge marks where the master waits for your answer; reply right there.
+With several jobs going, the master's conversation is filed by topic. A red badge marks where the master waits for your answer; reply right there. A finished topic goes with its cross, history and all; the master's own conversation stays.
 
 ![Topics, with a badge on the one waiting for you](docs/media/topics.png)
 
@@ -53,7 +53,7 @@ Every session is a plain Claude Code session: your `CLAUDE.md` files, plugins, M
 
 ### "/" commands
 
-In any composer: `/compact`, `/clear`, `/model`, `/effort`, `/mode`, `/cost`, then the session's own Claude Code commands and skills.
+In any composer: `/compact`, `/clear`, `/model`, `/effort`, `/mode`, `/cost`, then the session's own Claude Code commands and skills. The "/" button beside the model opens the same list.
 
 <img src="docs/media/slash.png" width="540" alt="Slash command menu">
 
