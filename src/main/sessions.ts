@@ -661,6 +661,38 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * The user deleted one of the master's topics and its history: the items filed only under it leave the conversation
+   * shown (and stay out at the next start), those of other topics too just leave it, an approval still waiting stays.
+   * The master's own conversation (Claude Code's transcript) is untouched.
+   */
+  deleteTopic(topic: string): void {
+    const master = this.sessions.get(MASTER_ID);
+    if (!master || !this.topics.has(topic)) return;
+    const ids = [...master.items.values()].filter((i) => i.topic === topic || i.also?.includes(topic)).map((i) => i.id);
+    this.topics.remove(topic, ids);
+    for (const id of ids) {
+      const item = master.items.get(id) as ChatItem;
+      const kept = this.kept(item);
+      if (kept) master.items.set(id, kept);
+      else master.items.delete(id);
+    }
+    for (const id of ids) this.pendingItems.get(MASTER_ID)?.delete(id);
+    this.emit('items', MASTER_ID, [...master.items.values()], true);
+    this.changed();
+  }
+
+  /** An item of the master without the topics the user deleted; null when it was only theirs (a waiting approval stays). */
+  private kept(item: ChatItem): ChatItem | null {
+    if (!this.topics.wasRemoved(item.id)) return item;
+    const topics = this.topics.without(item.id, [item.topic, ...(item.also ?? [])].filter((x): x is string => !!x));
+    if (topics.length === 0 && !(item.kind === 'permission' && item.state === 'pending')) return null;
+    const bare = { ...item };
+    delete bare.topic;
+    delete bare.also;
+    return withTopics(bare, topics);
+  }
+
+  /**
    * /clear: the session goes on in a new, empty conversation (the last one stays in Claude Code's history). A post's
    * handoff note goes with the first message of the new one, as after any renewal. Its worktree, if any, stays.
    */
@@ -1495,7 +1527,9 @@ export class SessionManager extends EventEmitter {
     if (master) {
       for (const [id, topics] of this.topics.replay(steps)) {
         const item = history.get(id);
-        if (item) history.set(id, withTopics(item, topics));
+        // [] : only in topics the user deleted.
+        if (item && topics.length === 0) history.delete(id);
+        else if (item) history.set(id, withTopics(item, topics));
       }
       this.changed();
     }
@@ -1514,7 +1548,12 @@ export class SessionManager extends EventEmitter {
   }
 
   private upsert(s: Session, item: ChatItem): void {
-    if (s.id === MASTER_ID) item = this.fileItem(s, item);
+    if (s.id === MASTER_ID) {
+      // Part of a topic the user deleted (a reply still streaming, a tool's result): it stays out.
+      const kept = this.kept(this.fileItem(s, item));
+      if (!kept) return;
+      item = kept;
+    }
     s.items.set(item.id, item);
     if (s.items.size > ITEMS_MAX) {
       for (const key of [...s.items.keys()].slice(0, ITEMS_TRIM)) s.items.delete(key);

@@ -494,6 +494,8 @@ export interface HubApi {
   compact(id: string, instructions: string): void;
   /** Starts the session over in a new, empty conversation. */
   clear(id: string): void;
+  /** Deletes one of the master's topics and the history filed under it; the master's own conversation stays. */
+  deleteTopic(topic: string): void;
   /** Says the session's cost and tokens in its conversation. */
   showCost(id: string): void;
   /** Turns logged in [from, to), oldest first, and when the log started. */

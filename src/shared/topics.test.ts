@@ -403,3 +403,76 @@ test('live, a request about several jobs is added to each topic its reply names,
   tracker.end();
   assert.deepEqual(calls, []);
 });
+
+test('deleting a topic takes its history and its workers away, keeps the other topics, and a reuse starts empty', () => {
+  const { tracker } = setup();
+  tracker.shown('u1', { user: true }, false);
+  tracker.declare(call('pay', { title: 'Pay', awaiting: true, workers: ['hub-pay'] }));
+  tracker.declare(call('docs', { title: 'Docs' }));
+  tracker.end();
+  // u1 asked about both jobs: it stays, under the other one; a1 was only Pay's.
+  assert.ok(tracker.remove('pay', ['u1', 'a1']));
+  assert.equal(tracker.remove('pay', []), false);
+  assert.deepEqual(tracker.list().map((x) => x.id), ['docs']);
+  assert.equal(tracker.linkOf('hub-pay'), undefined);
+  assert.deepEqual(tracker.without('u1', ['pay', 'docs']), ['docs']);
+  assert.deepEqual(tracker.without('a1', ['pay']), []);
+  assert.ok(tracker.wasRemoved('a1'));
+  assert.ok(!tracker.wasRemoved('a2'));
+  // Its worker's next message is filed afresh, not under the deleted topic.
+  assert.equal(tracker.shown('p1', { worker: 'hub-pay' }, false), null);
+  tracker.end();
+  // Named again: a new topic (it needs a title), empty, without the badge it had.
+  tracker.shown('u2', { user: true }, false);
+  assert.equal(tracker.declare(call('pay')), null);
+  const again = tracker.declare(call('pay', { title: 'Pay again' }));
+  assert.deepEqual(again && { title: again.title, awaiting: again.awaiting, workers: again.workers }, { title: 'Pay again', awaiting: false, workers: [] });
+  assert.deepEqual(tracker.reply('a2'), ['pay']);
+});
+
+test('a deleted topic stays deleted at the next start; named again since, it comes back with its new messages only', () => {
+  const steps: ReplayStep[] = [
+    { kind: 'input', id: 'u1', input: { user: true } },
+    { kind: 'topic', call: call('pay', { title: 'Pay', awaiting: true }) },
+    { kind: 'wrote', worker: 'hub-pay' },
+    { kind: 'item', id: 'a1' },
+    { kind: 'topic', call: call('docs', { title: 'Docs' }) },
+    { kind: 'item', id: 'a2', text: true },
+    { kind: 'input', id: 'u2', input: { user: true } },
+    { kind: 'item', id: 'a3', text: true },
+  ];
+  const live = setup();
+  live.tracker.restore(undefined, 'c');
+  const before = live.tracker.replay(steps);
+  // u1 (the request) and a2 (words about both jobs) are under Pay and Docs, a1 (its thinking) under Pay only.
+  const ids = [...before].filter(([, topics]) => topics.includes('pay')).map(([id]) => id);
+  assert.deepEqual(ids, ['u1', 'a1', 'a2']);
+  live.tracker.remove('pay', ids);
+
+  const restart = () => {
+    const again = setup();
+    again.tracker.restore(JSON.parse(JSON.stringify(live.tracker.state('c'))), 'c');
+    return again.tracker;
+  };
+  let tracker = restart();
+  let filed = tracker.replay(steps);
+  assert.deepEqual(tracker.list().map((x) => x.id), ['docs']);
+  assert.equal(tracker.linkOf('hub-pay'), undefined);
+  // Only Pay's: gone ([]); also in Docs: kept there.
+  assert.deepEqual(Object.fromEntries(filed), { u1: ['docs'], a1: [], a2: ['docs'] });
+
+  // The master names Pay again afterwards: it is back with what came after, the old messages stay out.
+  const later: ReplayStep[] = [...steps, { kind: 'input', id: 'u3', input: { user: true } }, { kind: 'topic', call: call('pay', { title: 'Pay 2' }) }, { kind: 'item', id: 'a4', text: true }];
+  tracker = restart();
+  filed = tracker.replay(later);
+  assert.equal(tracker.get('pay')?.title, 'Pay 2');
+  assert.equal(tracker.get('pay')?.awaiting, false);
+  assert.deepEqual(filed.get('a1'), []);
+  assert.deepEqual(filed.get('a4'), ['pay']);
+  assert.deepEqual(filed.get('u3'), ['pay']);
+
+  // Another conversation: nothing of it applies.
+  const other = setup();
+  other.tracker.restore(JSON.parse(JSON.stringify(live.tracker.state('c'))), 'other');
+  assert.equal(other.tracker.wasRemoved('a1'), false);
+});

@@ -1,5 +1,5 @@
 import { implicitWorker, type Topic } from '../shared/topics';
-import type { ChatItem } from '../shared/types';
+import type { ChatItem, HubApi } from '../shared/types';
 import type { ChatView } from './chat';
 import { h, icon, ICONS, openMenu } from './dom';
 import { t, tn } from './i18n';
@@ -31,6 +31,7 @@ export class TopicsView {
   constructor(
     private readonly pane: HTMLElement,
     private readonly view: ChatView,
+    private readonly hub: HubApi,
   ) {
     this.column.setAttribute('aria-label', t('topics.nav'));
     this.column.hidden = true;
@@ -97,10 +98,70 @@ export class TopicsView {
 
   private renderColumn(by: Map<string, number>, total: number): void {
     const focused = this.column.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.index : undefined;
-    const rows = [this.row(null, t('topics.all'), total, t('topics.allTip')), ...this.topics.map((x) => this.row(x.id, x.title, by.get(x.id) ?? 0, this.tip(x)))];
+    const all = this.row(null, t('topics.all'), total, t('topics.allTip'));
+    const slots = this.topics.map((x) => this.slot(x, by.get(x.id) ?? 0));
+    const rows = [all, ...slots.map((slot) => slot.firstElementChild as HTMLButtonElement)];
     rows.forEach((row, i) => (row.dataset.index = String(i)));
-    this.column.replaceChildren(rows[0] as HTMLElement, h('div', 'topics-sep'), ...rows.slice(1));
+    this.column.replaceChildren(all, h('div', 'topics-sep'), ...slots);
     if (focused !== undefined) rows[Math.min(Number(focused), rows.length - 1)]?.focus();
+  }
+
+  /** A topic's row and its delete button, shown on hover or keyboard focus ("All" has none). */
+  private slot(x: Topic, waiting: number): HTMLDivElement {
+    const row = this.row(x.id, x.title, waiting, this.tip(x));
+    const remove = h('button', 'topic-remove');
+    remove.type = 'button';
+    // Reached with Tab from the topic shown; on any row, Delete asks the same.
+    remove.tabIndex = row.tabIndex;
+    remove.title = t('topics.delete', { title: x.title });
+    remove.setAttribute('aria-label', remove.title);
+    remove.append(icon(ICONS.remove));
+    remove.addEventListener('click', () => this.askDelete(x, remove));
+    const slot = h('div', 'topic-slot');
+    slot.append(row, remove);
+    return slot;
+  }
+
+  /** A confirmation first: a stray click never takes a topic's history away. */
+  private askDelete(x: Topic, anchor: HTMLElement): void {
+    openMenu(
+      anchor,
+      (menu, close) => {
+        const box = h('div', 'menu-confirm topic-confirm');
+        box.setAttribute('role', 'alertdialog');
+        const text = h('div', 'topic-confirm-text', t('topics.deleteAsk', { title: x.title }));
+        text.id = 'topic-confirm-text';
+        box.setAttribute('aria-labelledby', text.id);
+        const yes = h('button', 'btn danger small', t('topics.deleteYes'));
+        yes.addEventListener('click', () => {
+          close();
+          this.delete(x.id);
+        });
+        const no = h('button', 'btn ghost small', t('setup.cancel'));
+        no.addEventListener('click', () => {
+          close();
+          this.focusRow(x.id);
+        });
+        const actions = h('div', 'menu-confirm-actions');
+        actions.append(yes, no);
+        box.append(text, h('div', 'topic-confirm-hint', t('topics.deleteHint')), actions);
+        menu.append(box);
+      },
+      true,
+    );
+    document.querySelector<HTMLElement>('#menu .topic-confirm .btn.ghost')?.focus();
+  }
+
+  /** Gone from the list once the hub has taken it out; the one shown, "All" comes back at once. */
+  private delete(id: string): void {
+    if (this.selected === id) this.select(null);
+    this.hub.deleteTopic(id);
+    this.focusRow(null);
+  }
+
+  private focusRow(id: string | null): void {
+    const rows = [...this.column.querySelectorAll<HTMLButtonElement>('.topic')];
+    (rows.find((r) => (r.dataset.topic ?? null) === id) ?? rows[0])?.focus();
   }
 
   private row(id: string | null, title: string, waiting: number, tip: string): HTMLButtonElement {
@@ -109,6 +170,7 @@ export class TopicsView {
     row.type = 'button';
     // One stop in the tab order, on the topic shown; the arrows move between the others.
     row.tabIndex = current ? 0 : -1;
+    if (id) row.dataset.topic = id;
     if (current) row.setAttribute('aria-current', 'true');
     row.append(h('span', 'topic-title', title));
     if (waiting > 0) row.append(badge(waiting));
@@ -134,6 +196,12 @@ export class TopicsView {
     const rows = [...this.column.querySelectorAll<HTMLButtonElement>('.topic')];
     const at = rows.indexOf(document.activeElement as HTMLButtonElement);
     if (at < 0) return;
+    const remove = rows[at]?.nextElementSibling;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && remove instanceof HTMLButtonElement) {
+      e.preventDefault();
+      remove.click();
+      return;
+    }
     const to = e.key === 'ArrowDown' ? at + 1 : e.key === 'ArrowUp' ? at - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? rows.length - 1 : -2;
     if (to === -2) return;
     e.preventDefault();

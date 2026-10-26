@@ -41,7 +41,7 @@ settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models);
-const topicsView = new TopicsView($('pane-master'), masterView);
+const topicsView = new TopicsView($('pane-master'), masterView, hub);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 
 interface Card {

@@ -9,7 +9,8 @@ import { slugify } from './team';
 
 /** `worker`: longest session name slug a worker can have ("<post>-<job>" of 48, plus "-2"…). */
 /** `links`: workers whose topic is remembered; `also`: further topics of one message. */
-export const TOPIC_LIMITS = { id: 48, title: 60, question: 200, workers: 12, topics: 80, worker: 64, links: 400, also: 12 } as const;
+/** `removed`: topics the user deleted that are remembered, `removedItems`: the items each one took away. */
+export const TOPIC_LIMITS = { id: 48, title: 60, question: 200, workers: 12, topics: 80, worker: 64, links: 400, also: 12, removed: 40, removedItems: 1500 } as const;
 
 /** A topic the hub made for a worker the master never filed (older conversations): a slug never holds a colon. */
 const IMPLICIT = 'worker:';
@@ -152,6 +153,8 @@ export interface TopicState {
   conversation: string;
   topics: Topic[];
   links: [string, string][];
+  /** Topics the user deleted, with the items filed under them then: the replay of the transcript leaves them out. */
+  removed?: [string, string[]][];
 }
 
 const newTurn = (): Turn => ({
@@ -179,6 +182,8 @@ export class TopicTracker {
   /** Workers about to start under a name already taken: the topic the new one gets (null: the reply's, later). */
   private expected = new Map<string, string | null>();
   private ctx: Context;
+  /** Topics the user deleted: the items filed under them then, which no longer belong to them. */
+  private removed = new Map<string, Set<string>>();
   /** Off while a transcript is replayed: its topics have no real time yet. */
   private pruning = true;
 
@@ -213,8 +218,44 @@ export class TopicTracker {
     this.topics.clear();
     this.links.clear();
     this.expected.clear();
+    this.removed.clear();
     this.ctx.turn = newTurn();
     this.ctx.queue = [];
+  }
+
+  /**
+   * The user deleted a topic and its history (`items`: those filed under it). It leaves the list, its workers lose
+   * their link (their next message is filed afresh), the turn under way forgets it; named again later, it starts empty.
+   */
+  remove(id: string, items: string[]): boolean {
+    if (!this.topics.has(id)) return false;
+    this.drop(id);
+    for (const [w, topic] of this.expected) if (topic === id) this.expected.set(w, null);
+    const { turn, queue } = this.ctx;
+    turn.named = turn.named.filter((t) => t !== id);
+    if (turn.topic === id) turn.topic = turn.named.at(-1) ?? null;
+    if (turn.lastTool === id) turn.lastTool = null;
+    turn.created.delete(id);
+    for (const [w, topic] of turn.workerTopics) if (topic === id) turn.workerTopics.delete(w);
+    for (const input of [...turn.inputs, ...queue]) {
+      if (input.topic === id) Object.assign(input, { topic: null, soft: false, byReply: false });
+      input.also = input.also.filter((t) => t !== id);
+    }
+    const before = this.removed.get(id) ?? new Set<string>();
+    this.removed.delete(id);
+    this.removed.set(id, new Set([...before, ...items].slice(-TOPIC_LIMITS.removedItems)));
+    if (this.removed.size > TOPIC_LIMITS.removed) this.removed.delete(this.removed.keys().next().value as string);
+    return true;
+  }
+
+  /** An item's topics without those the user deleted while it was filed under them; [] when it was only theirs. */
+  without(item: string, topics: string[]): string[] {
+    return topics.filter((t) => !this.removed.get(t)?.has(item));
+  }
+
+  /** The item was filed under a topic the user deleted. */
+  wasRemoved(item: string): boolean {
+    return [...this.removed.values()].some((ids) => ids.has(item));
   }
 
   /**
@@ -425,16 +466,24 @@ export class TopicTracker {
       this.pruning = true;
     }
     this.prune();
+    // What the user deleted stays deleted: [] for an item that was only theirs. A deleted topic named again since
+    // comes back with what was filed under it afterwards, else not at all.
+    for (const ids of this.removed.values()) for (const id of ids) if (!filed.has(id)) filed.set(id, []);
+    const used = new Set<string>();
     for (const [id, topics] of filed) {
-      const left = topics.filter((t) => this.topics.has(t));
+      const kept = this.without(id, topics);
+      const left = kept.filter((t) => this.topics.has(t));
+      for (const t of left) used.add(t);
       if (left.length > 0) filed.set(id, left);
+      else if (kept.length === 0 && this.wasRemoved(id)) filed.set(id, []);
       else filed.delete(id);
     }
+    for (const id of this.removed.keys()) if (!used.has(id)) this.drop(id);
     return filed;
   }
 
   state(conversation: string): TopicState {
-    return { conversation, topics: this.list(), links: [...this.links] };
+    return { conversation, topics: this.list(), links: [...this.links], removed: [...this.removed].map(([id, items]) => [id, [...items]]) };
   }
 
   /** Topics saved with this conversation; anything malformed is dropped. */
@@ -454,9 +503,16 @@ export class TopicTracker {
         at: t.at,
       });
     }
-    if (!Array.isArray(s.links)) return;
-    for (const pair of s.links) {
-      if (Array.isArray(pair) && isWorker(pair[0]) && typeof pair[1] === 'string' && this.topics.has(pair[1])) this.links.set(pair[0], pair[1]);
+    if (Array.isArray(s.links)) {
+      for (const pair of s.links) {
+        if (Array.isArray(pair) && isWorker(pair[0]) && typeof pair[1] === 'string' && this.topics.has(pair[1])) this.links.set(pair[0], pair[1]);
+      }
+    }
+    if (!Array.isArray(s.removed)) return;
+    for (const pair of s.removed.slice(-TOPIC_LIMITS.removed)) {
+      if (!Array.isArray(pair) || !isTopicId(pair[0]) || !Array.isArray(pair[1])) continue;
+      const items = (pair[1] as unknown[]).filter((v): v is string => typeof v === 'string' && v.length <= 200);
+      this.removed.set(pair[0], new Set(items.slice(-TOPIC_LIMITS.removedItems)));
     }
   }
 
@@ -516,9 +572,11 @@ export class TopicTracker {
   private prune(): void {
     if (!this.pruning || this.topics.size <= TOPIC_LIMITS.topics) return;
     const old = [...this.topics.values()].filter((t) => !t.awaiting).sort((a, b) => a.at - b.at);
-    for (const t of old.slice(0, this.topics.size - TOPIC_LIMITS.topics)) {
-      this.topics.delete(t.id);
-      for (const [w, id] of this.links) if (id === t.id) this.links.delete(w);
-    }
+    for (const t of old.slice(0, this.topics.size - TOPIC_LIMITS.topics)) this.drop(t.id);
+  }
+
+  private drop(id: string): void {
+    this.topics.delete(id);
+    for (const [w, topic] of this.links) if (topic === id) this.links.delete(w);
   }
 }
