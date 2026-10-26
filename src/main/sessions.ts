@@ -7,7 +7,7 @@ import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from 
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
-import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, runsClaude } from '../shared/accounts';
+import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, pinsModel, runsClaude } from '../shared/accounts';
 import {
   capEffort,
   fromTemplate,
@@ -660,6 +660,12 @@ export class SessionManager extends EventEmitter {
       : firstAccount(cfg.accounts, s.accountId, this.postOf(s)?.account, cfg.workerAccount);
   }
 
+  /** The account's sessions run one model of its own (an OpenAI account's, or a named one of an Anthropic-compatible server). */
+  private pinned(account: string): boolean {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    return !!a && pinsModel(a);
+  }
+
   private kindOf(account: string): AccountKind | 'default' {
     return this.opts.cfg.accounts.find((a) => a.id === account)?.kind ?? 'default';
   }
@@ -680,7 +686,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private accountBadges(): AccountBadge[] {
-    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind }))];
+    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, pinned: false }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, pinned: pinsModel(a) }))];
   }
 
   /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
@@ -1293,7 +1299,7 @@ export class SessionManager extends EventEmitter {
     try {
       const init = await q.ready();
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
-      if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount))) this.modelInfos = init.models;
+      if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount)) && !this.pinned(s.runAccount)) this.modelInfos = init.models;
       else if (init.models.length > 0 && this.kindOf(s.runAccount) === 'codex') this.setCatalog(s.runAccount, init.models);
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
@@ -1375,7 +1381,7 @@ export class SessionManager extends EventEmitter {
   /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
   private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
     const account = s.runAccount || DEFAULT_ACCOUNT;
-    if (this.kindOf(account) === 'openai' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
+    if (this.kindOf(account) === 'openai' || this.kindOf(account) === 'anthropic-compatible' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
     this.usageCheckedAt.set(account, Date.now());
     try {
       const limits = await q.rateLimits();
@@ -2799,7 +2805,7 @@ export class SessionManager extends EventEmitter {
   private modelFits(account: string, model: string): boolean {
     if (!model) return false;
     const kind = this.kindOf(account);
-    if (kind === 'openai') return false;
+    if (this.pinned(account)) return false;
     if (kind === 'codex') {
       const catalog = this.catalogs.get(account) ?? [];
       return catalog.length === 0 ? !/^(default|opus|sonnet|haiku|fable|claude-)/i.test(model) : catalog.some((m) => m.value === model);
@@ -2823,7 +2829,7 @@ export class SessionManager extends EventEmitter {
   private applyModel(s: Session, modelId: string): void {
     if (!modelId) return;
     // On a bridged account the model is the account's: shown as it is, the Claude choice kept for the next account.
-    if (s.runAccount && this.kindOf(s.runAccount) === 'openai') {
+    if (s.runAccount && this.pinned(s.runAccount)) {
       s.modelLabel = modelId;
       return;
     }

@@ -16,6 +16,10 @@ const URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/i;
 export const isAccountRef = (v: unknown): v is string => typeof v === 'string' && (v === DEFAULT_ACCOUNT || ACCOUNT_ID.test(v));
 /** The account runs Claude models: Claude Code talks to Anthropic itself, no bridge in between. */
 export const runsClaude = (kind: AccountKind | 'default') => kind !== 'openai' && kind !== 'codex';
+/** The account has a server address of its own, and models to name. */
+export const hasServer = (kind: AccountKind | 'default') => kind === 'openai' || kind === 'anthropic-compatible';
+/** Its sessions run one model of the account's, whatever model is asked for. An Anthropic-compatible account without one leaves Claude's names to its server. */
+export const pinsModel = (a: Pick<Account, 'kind' | 'model'>) => a.kind === 'openai' || (a.kind === 'anthropic-compatible' && a.model !== '');
 /** The program that runs the sessions of an account. */
 export const harnessOf = (kind: AccountKind | 'default'): HarnessId => (kind === 'codex' ? 'codex' : 'claude');
 /** A server on this computer (LM Studio, llama.cpp, Ollama…): it usually needs no key. */
@@ -29,14 +33,14 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '');
 export function normalizeAccount(raw: unknown): Account {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = ACCOUNT_KINDS.includes(o.kind as AccountKind) ? (o.kind as AccountKind) : 'claude';
-  const openai = kind === 'openai';
+  const server = hasServer(kind);
   return {
     id: str(o.id),
     kind,
     name: str(o.name).trim().replace(/\s+/g, ' '),
-    baseUrl: openai ? str(o.baseUrl).trim().replace(/\/+$/, '') || OPENAI_URL : '',
-    model: openai ? str(o.model).trim() : '',
-    smallModel: openai ? str(o.smallModel).trim() : '',
+    baseUrl: server ? str(o.baseUrl).trim().replace(/\/+$/, '') || (kind === 'openai' ? OPENAI_URL : '') : '',
+    model: server ? str(o.model).trim() : '',
+    smallModel: server ? str(o.smallModel).trim() : '',
     isolated: kind === 'codex' && o.isolated === true,
   };
 }
@@ -58,10 +62,11 @@ export function checkAccount(a: Account, others: Account[]): AccountError | null
   // The master and the commands name accounts: "default" is the Claude access of Settings › Claude.
   if (a.name.toLowerCase() === DEFAULT_ACCOUNT) return fail('name', 'reserved');
   if (rest.some((o) => o.name.toLowerCase() === a.name.toLowerCase())) return fail('name', 'taken');
-  if (a.kind !== 'openai') return null;
+  if (!hasServer(a.kind)) return null;
   if (a.baseUrl.length > ACCOUNT_LIMITS.baseUrl || !URL_RE.test(a.baseUrl)) return fail('baseUrl', 'format');
-  if (!a.model) return fail('model', 'required');
-  if (!MODEL.test(a.model)) return fail('model', 'format');
+  // An Anthropic-compatible server maps Claude's names itself: a model is optional there.
+  if (!a.model && a.kind === 'openai') return fail('model', 'required');
+  if (a.model && !MODEL.test(a.model)) return fail('model', 'format');
   if (a.smallModel && !MODEL.test(a.smallModel)) return fail('smallModel', 'format');
   return null;
 }

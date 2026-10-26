@@ -41,7 +41,7 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
-import { accountDir, accountEnv, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, removeClaudeDir, removeCodexDir } from './accounts';
+import { accountDir, accountEnv, checkAnthropicCompatible, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, removeClaudeDir, removeCodexDir } from './accounts';
 import { agentFiles } from './agents';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
@@ -339,8 +339,8 @@ class Hub {
       const refused = await checkApiKey(key);
       return refused ? { ...none, error: refused } : { ...none, ready: true, detail: `sk-ant-…${key.slice(-4)}` };
     }
-    const status = await checkOpenAI(a.baseUrl, key);
-    return { ...status, detail: [hostOf(a.baseUrl), a.model].join(' · ') };
+    const status = a.kind === 'anthropic-compatible' ? await checkAnthropicCompatible(a.baseUrl, key) : await checkOpenAI(a.baseUrl, key);
+    return { ...status, detail: [hostOf(a.baseUrl), a.model, status.detail === 'unchecked' ? 'unchecked' : ''].filter(Boolean).join(' · ') };
   }
 
   /**
@@ -364,14 +364,14 @@ class Hub {
         const refused = await checkApiKey(typed);
         if (refused) return fail(refused, 'key');
       }
-    } else if (account.kind === 'openai') {
+    } else if (account.kind === 'openai' || account.kind === 'anthropic-compatible') {
       if (typed && !isOpenAIKey(typed)) return fail('format', 'key');
       const k = typed ?? (before ? this.secrets.get(`account:${before.id}`) : '');
       if (!k && !isLocalUrl(account.baseUrl)) return fail('required', 'key');
-      status = await checkOpenAI(account.baseUrl, k);
+      status = account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
       if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
     }
-    const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai') && typed !== null;
+    const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai' || account.kind === 'anthropic-compatible') && typed !== null;
     if (storesKey && typed && !this.secrets.available()) return fail('no-keychain', 'key');
     if (!account.id) account.id = `a-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
     if (storesKey) await this.secrets.set(`account:${account.id}`, typed || null);

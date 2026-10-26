@@ -640,7 +640,7 @@ export class ChatView {
     const s = this.session;
     if (!s) return;
     // A worker on an OpenAI account runs that account's model: only its effort is picked here.
-    const bridged = this.accounts.find((a) => a.id === s.account)?.kind === 'openai';
+    const bridged = !!this.accounts.find((a) => a.id === s.account)?.pinned;
     const models = this.modelsFor(s);
     openMenu(this.modelBtn, (menu, close) => {
       menu.append(h('div', 'menu-label', t('chat.model')));

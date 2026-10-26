@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { checkAccount, findAccount, firstAccount, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL } = await import('./accounts');
+const { checkAccount, findAccount, firstAccount, hasServer, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL, pinsModel } = await import('./accounts');
+const { PRESETS } = await import('./presets');
 type Account = import('./types').Account;
 
 const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '', isolated: false });
@@ -66,4 +67,26 @@ test('hosts', () => {
   assert.ok(!isLocalUrl('https://localhost.example.com/v1'));
   assert.ok(isOpenAIHost('https://api.openai.com/v1'));
   assert.ok(!isOpenAIHost('https://openrouter.ai/api/v1'));
+});
+
+test('an Anthropic-compatible account needs an address, not a model; a model, once named, pins its sessions', () => {
+  const deepseek = normalizeAccount({ kind: 'anthropic-compatible', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/anthropic/' });
+  assert.equal(deepseek.baseUrl, 'https://api.deepseek.com/anthropic');
+  assert.equal(checkAccount(deepseek, []), null);
+  assert.deepEqual(checkAccount({ ...deepseek, baseUrl: '' }, []), { field: 'baseUrl', problem: 'format' });
+  assert.deepEqual(checkAccount({ ...deepseek, model: '-bad' }, []), { field: 'model', problem: 'format' });
+  assert.equal(pinsModel(deepseek), false, 'Claude’s names go out, the server maps them');
+  assert.equal(pinsModel({ ...deepseek, model: 'deepseek-v4-pro' }), true);
+  assert.equal(pinsModel(openai({ model: 'gpt-5' })), true);
+  assert.equal(pinsModel(claude('', 'x')), false);
+  assert.equal(hasServer('codex'), false);
+  assert.equal(hasServer('anthropic-compatible'), true);
+});
+
+test('the presets are valid accounts of their own kind, with distinct ids', () => {
+  assert.equal(new Set(PRESETS.map((p) => p.id)).size, PRESETS.length);
+  for (const p of PRESETS) {
+    const a = normalizeAccount({ kind: p.kind, name: p.label, baseUrl: p.baseUrl, model: p.kind === 'openai' ? 'some-model' : p.model });
+    assert.equal(checkAccount(a, []), null, p.id);
+  }
 });

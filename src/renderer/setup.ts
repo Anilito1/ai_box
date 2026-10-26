@@ -1,4 +1,5 @@
-import { ACCOUNT_LIMITS, ACCOUNTS_MAX, DEFAULT_ACCOUNT, normalizeAccount, OPENAI_URL } from '../shared/accounts';
+import { ACCOUNT_LIMITS, ACCOUNTS_MAX, DEFAULT_ACCOUNT, hasServer, normalizeAccount, OPENAI_URL } from '../shared/accounts';
+import { presetsOf, PRESETS } from '../shared/presets';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
@@ -151,6 +152,8 @@ export class SetupView {
   private accountDraft: Account | null = null;
   /** The key typed for it, kept across redraws; empty = keep the stored one. */
   private accountKey = '';
+  /** The preset the account being added started from (its key page), else empty. */
+  private accountPreset = '';
   /** Field the last save refused, outlined. */
   private accountField = '';
   /** Each account's last check, by id. */
@@ -1181,11 +1184,11 @@ export class SetupView {
     const title = h('div', 'team-row-title');
     title.append(h('b', '', a.name), h('span', 'team-row-session', t(`account.kind.${a.kind}`)));
     const tags = h('div', 'team-tags');
-    if (a.kind === 'openai') tags.append(h('span', 'setup-tag', hostOf(a.baseUrl)), h('span', 'setup-tag', a.smallModel ? `${a.model} · ${a.smallModel}` : a.model));
+    if (hasServer(a.kind)) tags.append(h('span', 'setup-tag', hostOf(a.baseUrl)), ...(a.model ? [h('span', 'setup-tag', a.smallModel ? `${a.model} · ${a.smallModel}` : a.model)] : []));
     const st = this.accountStates.get(a.id);
     if (st === undefined) void this.checkAccount(a.id);
     if (!st || st === 'checking') tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
-    else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && a.kind !== 'openai' ? [h('span', 'setup-tag', st.detail)] : []));
+    else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && !hasServer(a.kind) ? [h('span', 'setup-tag', st.detail)] : []));
     else if ((a.kind === 'claude' || a.kind === 'codex') && !st.error) tags.append(h('span', 'setup-pill warn', t('setup.accounts.signedOut')));
     else tags.append(h('span', 'setup-pill warn', this.accountErrorText(st.error)));
     text.append(title, tags);
@@ -1219,6 +1222,7 @@ export class SetupView {
   private editAccount(a: Account): void {
     this.accountDraft = a;
     this.accountKey = '';
+    this.accountPreset = '';
     this.accountField = '';
     this.note = null;
     this.render();
@@ -1246,33 +1250,55 @@ export class SetupView {
     mark('name', nameField);
     el.append(nameField);
 
-    if (d.kind === 'openai') {
-      const urlField = this.field(t('setup.accounts.baseUrl'), t('setup.accounts.baseUrl.hint'));
-      const url = this.input(d.baseUrl || OPENAI_URL, OPENAI_URL);
+    if (hasServer(d.kind) && !d.id) {
+      // A provider that needs only an address: picking it fills the address (and models) in.
+      const presetField = this.field(t('setup.accounts.preset'), t('setup.accounts.preset.hint'));
+      const pick = h('select', 'setup-select');
+      pick.setAttribute('aria-label', t('setup.accounts.preset'));
+      pick.append(new Option(t('setup.accounts.preset.none'), ''), ...presetsOf(d.kind).map((p) => new Option(p.label, p.id)));
+      pick.value = this.accountPreset;
+      pick.addEventListener('change', () => {
+        const p = PRESETS.find((x) => x.id === pick.value);
+        this.accountPreset = p?.id ?? '';
+        if (p) {
+          d.baseUrl = p.baseUrl;
+          d.model = p.model;
+          d.smallModel = p.smallModel;
+          if (!d.name.trim()) d.name = p.label;
+        }
+        this.render();
+      });
+      presetField.append(pick);
+      el.append(presetField);
+    }
+    if (hasServer(d.kind)) {
+      const urlField = this.field(t('setup.accounts.baseUrl'), t(d.kind === 'openai' ? 'setup.accounts.baseUrl.hint' : 'setup.accounts.baseUrl.hint.compat'));
+      const placeholder = d.kind === 'openai' ? OPENAI_URL : 'https://api.deepseek.com/anthropic';
+      const url = this.input(d.baseUrl || (d.kind === 'openai' ? OPENAI_URL : ''), placeholder);
       url.classList.add('wide');
       url.addEventListener('input', () => (d.baseUrl = url.value));
       urlField.append(row(url));
       mark('baseUrl', urlField);
       el.append(urlField);
     }
-    if (d.kind === 'anthropic-key' || d.kind === 'openai') {
+    if (d.kind === 'anthropic-key' || hasServer(d.kind)) {
       const stored = !!d.id && v.accountKeys.includes(d.id);
       const hint = !v.secureStorage ? t('setup.err.keychain', { app: APP_NAME }) : stored ? t('setup.accounts.key.keep') : t(`setup.accounts.key.hint.${d.kind}`);
       const keyField = this.field(t('setup.accounts.key'), hint);
-      const key = this.input(this.accountKey, stored ? '••••••••' : d.kind === 'openai' ? 'sk-…' : 'sk-ant-…', 'password');
+      const key = this.input(this.accountKey, stored ? '••••••••' : d.kind === 'anthropic-key' ? 'sk-ant-…' : 'sk-…', 'password');
       key.addEventListener('input', () => (this.accountKey = key.value));
-      keyField.append(row(key), this.link(t(`setup.accounts.key.where.${d.kind}`), d.kind === 'openai' ? 'https://platform.openai.com/api-keys' : 'https://console.anthropic.com/settings/keys'));
+      keyField.append(row(key), this.keyLink(d));
       mark('key', keyField);
       el.append(keyField);
     }
-    if (d.kind === 'openai') {
+    if (hasServer(d.kind)) {
       const grid = h('div', 'setup-grid');
       const listId = 'account-models';
       const models = h('datalist');
       models.id = listId;
       models.append(...this.accountModels.map((m) => new Option(m, m)));
       const field = (key: 'model' | 'smallModel', placeholder: string) => {
-        const f = this.field(t(`setup.accounts.${key}`), t(`setup.accounts.${key}.hint`));
+        const f = this.field(t(`setup.accounts.${key}`), t(d.kind === 'openai' ? `setup.accounts.${key}.hint` : (`setup.accounts.${key}.hint.compat` as Key)));
         const input = this.input(d[key], placeholder);
         input.setAttribute('list', listId);
         input.addEventListener('input', () => (d[key] = input.value));
@@ -1280,7 +1306,7 @@ export class SetupView {
         mark(key, f);
         return f;
       };
-      grid.append(field('model', 'gpt-5'), field('smallModel', 'gpt-5-mini'));
+      grid.append(field('model', d.kind === 'openai' ? 'gpt-5' : ''), field('smallModel', d.kind === 'openai' ? 'gpt-5-mini' : ''));
       el.append(grid, models);
       if (this.accountModels.length > 0 && d.model && !this.accountModels.includes(d.model.trim())) el.append(h('div', 'setup-hint', t('setup.accounts.modelUnlisted', { model: d.model })));
     }
@@ -1413,6 +1439,14 @@ export class SetupView {
     f.append(row);
     if (codex && !codex.found) f.append(h('div', 'setup-hint', t('setup.accounts.codexMissing')), this.link(t('setup.accounts.codexInstall'), 'https://github.com/openai/codex'));
     return f;
+  }
+
+  /** Where to create the key of the account being edited: its preset's page, else its kind's. */
+  private keyLink(d: Account): HTMLElement {
+    const preset = PRESETS.find((p) => p.id === this.accountPreset);
+    const url = preset?.keyUrl || (d.kind === 'anthropic-key' ? 'https://console.anthropic.com/settings/keys' : d.kind === 'openai' ? 'https://platform.openai.com/api-keys' : '');
+    const label = preset?.keyUrl ? t('setup.accounts.key.whereOf', { name: preset.label }) : t(`setup.accounts.key.where.${d.kind === 'anthropic-key' ? 'anthropic-key' : 'openai'}`);
+    return url ? this.link(label, url) : h('span');
   }
 
   private accountErrorText(code: string): string {

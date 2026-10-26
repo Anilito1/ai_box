@@ -80,10 +80,11 @@ export interface TeamRole {
  * An account sessions can run on, besides the Claude access of Settings › Claude ("default"). `claude`: a Claude
  * account signed in through Claude Code's own sign-in, in a Claude Code folder of its own; `anthropic-key`: an
  * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge;
+ * `anthropic-compatible`: any server that speaks Anthropic's Messages API (DeepSeek…), reached by Claude Code directly;
  * `codex`: a ChatGPT account signed in through Codex's own sign-in, driven by the Codex program (its own harness).
  */
-export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'codex';
-export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'codex'];
+export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'anthropic-compatible' | 'codex';
+export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'anthropic-compatible', 'codex'];
 
 export interface Account {
   /** "a-" + 8 characters, made by the main process. */
@@ -91,7 +92,7 @@ export interface Account {
   kind: AccountKind;
   /** What the user calls it ("Perso", "Work"): unique, shown in the menus and given to the master. */
   name: string;
-  /** openai only: the server's base URL (".../v1"), the model the work runs on, and the one for small background calls. */
+  /** openai and anthropic-compatible: the server's base URL (".../v1"), the model the work runs on, and the one for small background calls. */
   baseUrl: string;
   model: string;
   smallModel: string;
@@ -104,6 +105,8 @@ export interface AccountBadge {
   id: string;
   name: string;
   kind: AccountKind | 'default';
+  /** Its sessions run the account's own model: the model menu has nothing to pick. */
+  pinned: boolean;
 }
 
 /** An account checked on demand: signed in or not, with what (an email and a plan, a model…). */

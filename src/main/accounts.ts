@@ -125,6 +125,21 @@ export function accountEnv(account: Account, ctx: AccountEnvContext): { set: Rec
       prepareCodexDir(dir);
       return { set: { CODEX_HOME: dir }, unset };
     }
+    case 'anthropic-compatible': {
+      // Claude Code talks to the server itself. With no model named, Claude's own names go out and the server maps
+      // them (DeepSeek: names that start with "claude"); with one, every name lands on it.
+      const small = account.smallModel || account.model;
+      return {
+        set: {
+          ANTHROPIC_BASE_URL: account.baseUrl,
+          ...(ctx.key ? { ANTHROPIC_API_KEY: ctx.key } : {}),
+          ...(account.model
+            ? { ANTHROPIC_MODEL: account.model, ANTHROPIC_DEFAULT_OPUS_MODEL: account.model, ANTHROPIC_DEFAULT_SONNET_MODEL: account.model, ANTHROPIC_DEFAULT_HAIKU_MODEL: small, ANTHROPIC_SMALL_FAST_MODEL: small }
+            : {}),
+        },
+        unset: ACCESS_VARS,
+      };
+    }
     case 'openai': {
       // Every Claude model name lands on the account's models (the bridge maps the rest the same way).
       const small = account.smallModel || account.model;
@@ -184,6 +199,30 @@ export function removeCodexDir(dataDir: string, id: string): void {
   const dir = accountDir(dataDir, id);
   if (!dir.startsWith(join(dataDir, 'accounts') + sep) || !existsSync(dir)) return;
   rmSync(dir, { recursive: true, force: true });
+}
+
+/**
+ * Checks a server that speaks Anthropic's Messages API with its model list, a free call. Not every server has one:
+ * a 404 or 405 only means the key cannot be checked before a first request.
+ */
+export async function checkAnthropicCompatible(baseUrl: string, key: string): Promise<AccountStatus> {
+  const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
+  if (!key && !isLocalUrl(baseUrl)) return { ...none, error: 'no-key' };
+  try {
+    const root = baseUrl.replace(/\/+$/, '');
+    const res = await fetch(`${root}${/\/v1$/.test(root) ? '' : '/v1'}/models`, {
+      headers: { 'anthropic-version': '2023-06-01', ...(key ? { 'x-api-key': key, authorization: `Bearer ${key}` } : {}) },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.status === 401 || res.status === 403) return { ...none, error: httpCode(res.status) };
+    if (res.status === 404 || res.status === 405 || res.status === 501) return { ready: true, detail: 'unchecked', error: '', models: [] };
+    if (!res.ok) return { ...none, error: httpCode(res.status) };
+    const body = (await res.json().catch(() => ({}))) as { data?: { id?: unknown }[] };
+    const models = (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string').sort().slice(0, 500);
+    return { ready: true, detail: '', error: '', models };
+  } catch (err) {
+    return { ...none, error: errorCode(err) };
+  }
 }
 
 /** Claude Code's own sign-out for an account's folder, quietly: the folder goes right after. */
