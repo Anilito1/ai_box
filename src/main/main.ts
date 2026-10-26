@@ -1,5 +1,6 @@
 import './shellPath';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -38,6 +39,7 @@ import {
 import { agentFiles } from './agents';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
 import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
+import { CostLog } from './costLog';
 import { errorCode } from './errors';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
@@ -211,6 +213,7 @@ class Hub {
   readonly dataDir = app.getPath('userData');
   readonly cfg: HubConfig;
   readonly secrets = new Secrets(this.dataDir);
+  readonly costLog = new CostLog(this.dataDir);
   readonly mgr: SessionManager;
   private readonly device = new DeviceFlow();
   private executable = '';
@@ -227,6 +230,7 @@ class Hub {
       executable: () => this.executable,
       sessionEnv: () => this.sessionEnv(),
       persist: () => this.save(),
+      costLog: this.costLog,
     });
   }
 
@@ -324,6 +328,26 @@ class Hub {
     on('session:resume', (id) => isStr(id) && mgr.resume(id));
     on('session:remove', (id) => isStr(id) && mgr.remove(id));
     on('session:open', (id) => isStr(id) && mgr.open(id));
+    handle('session:commands', (id) => (isStr(id) ? mgr.commands(id) : []));
+    on('session:compact', (id, instructions) => isStr(id) && isStr(instructions) && instructions.length <= 4000 && mgr.compact(id, instructions));
+    on('session:clear', (id) => isStr(id) && mgr.clear(id));
+    on('session:cost', (id) => isStr(id) && void mgr.showCost(id));
+    handle('cost:history', async (from, to) => {
+      const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+      if (!ok(from) || !ok(to) || from >= to) throw new Error(t('cost.badRange'));
+      return { records: await this.costLog.read(from, to), since: this.costLog.since };
+    });
+    handle('cost:export', async (csv, name) => {
+      if (!win || !isStr(csv) || csv.length > 50_000_000 || !isStr(name) || !/^[\w.-]{1,80}\.csv$/.test(name)) return false;
+      const r = await dialog.showSaveDialog(win, { title: t('cost.exportTitle'), defaultPath: join(app.getPath('downloads'), name), filters: [{ name: 'CSV', extensions: ['csv'] }] });
+      if (r.canceled || !r.filePath) return false;
+      try {
+        await writeFile(r.filePath, `﻿${csv}`, 'utf8'); // The mark lets Excel read the accents.
+        return true;
+      } catch {
+        return false;
+      }
+    });
     handle('repo:graph', (path, filter, limit) => {
       const c = checkout(path);
       if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error(t('repo.badRequest'));

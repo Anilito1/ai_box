@@ -13,6 +13,8 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 - **Model and effort per mission.** The master rates each task (ambiguity, scope, production risk, security, reasoning, duration) and picks the model and effort that are good enough at the lowest cost, among the models you allow (Opus and Sonnet by default) and up to the effort you allow. It says its choice in one line. A model or effort you set on a post, or pick by hand on a worker, always wins.
 - **Every session is a real Claude Code session.** Same model, effort, `CLAUDE.md` files, plugins and MCP servers as when you run `claude` yourself. You can open any worker beside the master and write to it directly.
 - **Live view.** Status, context use, cost, background tasks, permission requests, and an animated mascot per session that reacts to what the session is doing.
+- **"/" commands.** In any composer, `/` lists the session's commands: `/compact [instructions]`, `/clear` (a new conversation, after a confirmation), `/model`, `/effort`, `/mode` (same choices and rules as the menus), `/cost`, `/help`, then Claude Code's own commands and skills of that session, sent as typed. An unknown command is refused and nothing is sent.
+- **API cost by period.** Click **Σ API cost** in the status bar: today, yesterday, 7 or 30 days, this month or chosen dates, with the cost and tokens per session, model and day, and a CSV export. Each turn's cost is logged as Claude Code estimates it (with a subscription, an equivalent at API prices); the history starts when you install this version.
 - **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
 - **Closed sessions resume.** Idle ad-hoc workers close after 15 minutes, permanent ones fall asleep after 5; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
 - **English and French**, for the interface and for the instructions the sessions receive.
@@ -117,6 +119,7 @@ The hub asks for the `repo`, `read:org` and `workflow` scopes (push to your repo
 - `config.json`: your settings (no secret). Settings of the first versions are migrated on the first start (your old file is kept as `config.legacy.json`, and a file already in the new format is never replaced by a migration); choose the repos to follow again in **Settings › Repos**.
 - `secrets.json`: the API key and GitHub token, encrypted with the OS keychain through Electron [safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage) (DPAPI, Keychain, libsecret/KWallet). On Linux without a keychain, the hub refuses to store secrets: set `ANTHROPIC_API_KEY` in your environment instead.
 - `state.json` and `attachments/`: the session list and the images you paste (deleted after 30 days). Conversations themselves are Claude Code's own transcripts, in `~/.claude/projects`.
+- `usage/`: one line per turn (time, session, model, cost and tokens), a file per month, read only when the cost panel opens.
 
 ## Security
 
@@ -153,6 +156,7 @@ The macOS code paths (login-shell `PATH`, Terminal for the sign-ins, app menu, w
 
 ```sh
 npm run typecheck   # TypeScript
+npm test            # unit tests (src/**/*.test.ts)
 npm run build       # bundles into dist/
 npm start           # build + run (add -- --user-data-dir=<folder> for a separate profile)
 ```

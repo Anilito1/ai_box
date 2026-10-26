@@ -13,6 +13,7 @@
     "build": "node build.mjs",
     "start": "node build.mjs && electron .",
     "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.mjs",
     "dist": "node build.mjs && electron-builder",
     "dist:dir": "node build.mjs && electron-builder --dir",
     "notices": "node scripts/notices.mjs"

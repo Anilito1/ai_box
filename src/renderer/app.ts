@@ -1,6 +1,7 @@
 import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { ChatView } from './chat';
+import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
@@ -168,6 +169,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
   if (s.status === 'attention') return { text: t('card.attention'), cls: 'warn' };
   if (s.tree?.install === 'running' && !isClosed(s)) return { text: t('card.installing'), cls: 'live' };
   if (s.tree?.state === 'kept' && isClosed(s)) return { text: t('card.treeKept', { reasons: s.tree.kept.map((k) => t(`tree.why.${k}`)).join(' · ') }), cls: 'warn' };
+  if (s.compacting && !isClosed(s)) return { text: `▸ ${t('slash.compacting')}`, cls: 'live' };
   if (s.status === 'busy') {
     const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
@@ -272,7 +274,13 @@ function renderStatusbar(rate: RateLimits | null): void {
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
-  const right: HTMLElement[] = [sbItem(t('sb.cost'), fmtCost(total), '', t('sb.costHint'))];
+  // The Σ opens the cost by period.
+  const cost = h('button', 'sb-item sb-cost');
+  cost.title = `${t('sb.costHint')}\n${t('cost.open')}`;
+  cost.setAttribute('aria-haspopup', 'dialog');
+  cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(total)));
+  cost.addEventListener('click', () => toggleCostPanel(hub, cost));
+  const right: HTMLElement[] = [cost];
   if (rate?.fiveHourPct != null) {
     right.push(h('span', 'sb-sep'), sbItem(t('sb.5h'), fmtPct(rate.fiveHourPct), level(rate.fiveHourPct), resetTime(rate.fiveHourResetsAt, false)));
   }
@@ -372,6 +380,7 @@ function commands(): Command[] {
   if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
   list.push(
     { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
+    { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
   );

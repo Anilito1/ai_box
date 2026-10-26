@@ -67,6 +67,7 @@ export const ICONS = {
   down: 'M8 3.5v9M4.5 9L8 12.5L11.5 9',
   edit: 'M10.5 3l2.5 2.5l-7 7H3.5V10z',
   moon: 'M12.5 9.6A5 5 0 0 1 6.4 3.5a5 5 0 1 0 6.1 6.1z',
+  info: 'M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 7.5v3.5M8 5.2h.01',
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */

@@ -61,6 +61,7 @@ export class WorkingLine {
   private activity = '';
   private background: string[] = [];
   private mode: 'busy' | 'waiting' | 'background' = 'busy';
+  private compacting = false;
 
   constructor() {
     this.root.append(this.glyph, this.verb, this.meta, h('span', 'working-hint', t('work.escHint')));
@@ -68,7 +69,8 @@ export class WorkingLine {
   }
 
   /** Busy: animated from `since`. Attention: frozen on the permission prompt. Otherwise shown only for background tasks. */
-  update(status: Status | undefined, since: number | null, activity: string, background: string[] = []): void {
+  update(status: Status | undefined, since: number | null, activity: string, background: string[] = [], compacting = false): void {
+    this.compacting = compacting;
     const working = status === 'busy' || status === 'attention';
     const on = working || (status !== 'exited' && background.length > 0);
     this.root.hidden = !on;
@@ -105,7 +107,9 @@ export class WorkingLine {
         ? t('work.waiting')
         : this.mode === 'background'
           ? t('work.background')
-          : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
+          : this.compacting
+            ? t('slash.compacting')
+            : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
       if (!reducedMotion.matches)

@@ -16,6 +16,7 @@ import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
+import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
 // Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
@@ -98,6 +99,7 @@ export class ChatView {
   private readonly attachNote = h('div', 'attach-note');
   private readonly fileInput = h('input');
   private readonly working = new WorkingLine();
+  private readonly slash: SlashMenu;
   /** The session's Clawd, large, in the header of a panel that asks for one. */
   private readonly mascot: Avatar | null;
   private readonly nodes = new Map<string, HTMLElement>();
@@ -115,6 +117,7 @@ export class ChatView {
   private attachments: Attachment[] = [];
   /** Images still being decoded or re-encoded: sending waits for them so none is dropped. */
   private preparing = 0;
+  private submitting = false;
   private noteTimer = 0;
   private session: SessionView | null = null;
   private items: Items | undefined;
@@ -174,8 +177,24 @@ export class ChatView {
     // Grows with its text through CSS (field-sizing), without measuring on every keystroke.
     this.input = h('textarea', 'composer-input');
     this.input.rows = 1;
-    this.input.addEventListener('input', () => this.syncSend());
+    this.slash = new SlashMenu(this.input, hub, {
+      session: () => this.session,
+      models: () => this.models,
+      openModelMenu: () => this.openModelMenu(),
+      openModeMenu: (bypass) => this.openModeMenu(bypass),
+      note: (text) => this.attachError(text),
+      clearText: () => {
+        this.input.value = '';
+        this.syncSend();
+      },
+    });
+    this.input.addEventListener('input', () => {
+      this.syncSend();
+      this.slash.update();
+    });
+    this.input.addEventListener('blur', () => this.slash.close());
     this.input.addEventListener('keydown', (e) => {
+      if (this.slash.onKey(e)) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this.submit();
@@ -260,7 +279,7 @@ export class ChatView {
     const bar = h('div', 'composer-bar');
     bar.append(attachBtn, this.modeBtn, this.modelBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
     const box = h('div', 'composer-box');
-    box.append(this.attachStrip, this.attachNote, this.input, bar, this.fileInput);
+    box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
       if (e.target === box) e.preventDefault();
     });
@@ -303,6 +322,7 @@ export class ChatView {
       this.input.value = draft?.text ?? '';
       this.attachments = draft?.attachments ?? [];
       this.renderAttachments();
+      this.slash.reset();
       this.reset(items);
     }
     this.renderChrome();
@@ -363,7 +383,7 @@ export class ChatView {
   private syncWorking(): void {
     const s = this.session;
     const last = lastOf(this.items);
-    this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background);
+    this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background, s?.compacting);
     if (s) this.mascot?.update(s, last);
   }
 
@@ -422,18 +442,35 @@ export class ChatView {
     this.sendBtn.title = stop ? t('chat.interrupt') : this.preparing > 0 ? t('chat.preparing') : t('chat.send');
   }
 
+  /** A "/" command runs here (or is refused with a note, nothing sent); anything else goes to the session. */
   private submit(): void {
-    if (!this.hasContent() || this.preparing > 0 || !this.session) return;
-    this.hub.send(
-      this.session.id,
-      this.input.value.trim(),
-      this.attachments.map((a) => a.image),
-    );
-    this.input.value = '';
-    this.attachments = [];
-    this.renderAttachments();
-    this.syncSend();
-    this.scrollToEnd();
+    if (!this.hasContent() || this.preparing > 0 || !this.session || this.submitting) return;
+    const id = this.session.id;
+    const text = this.input.value;
+    const attachments = [...this.attachments];
+    // Claude Code's commands may still be loading: one submit at a time.
+    this.submitting = true;
+    void this.slash
+      .intercept(text.trim())
+      .then((r) => {
+        // Another conversation was opened while the commands loaded: the draft stays where it was.
+        if (r.handled || this.session?.id !== id) return;
+        this.hub.send(
+          id,
+          r.text,
+          attachments.map((a) => a.image),
+        );
+        // Only what was sent leaves the composer: text typed or images added meanwhile stay.
+        if (this.input.value === text) this.input.value = '';
+        for (const a of attachments) {
+          const i = this.attachments.indexOf(a);
+          if (i >= 0) this.attachments.splice(i, 1);
+        }
+        this.renderAttachments();
+        this.syncSend();
+        this.scrollToEnd();
+      })
+      .finally(() => (this.submitting = false));
   }
 
   /** Adds images to the draft they were picked for, even if another session is shown by the time they are ready. */
@@ -496,10 +533,13 @@ export class ChatView {
     if (this.session) this.hub.interrupt(this.session.id);
   }
 
-  private openModeMenu(): void {
+  /** `bypass`: opens straight on the confirmation that "Allow everything" asks for (/mode bypass). */
+  private openModeMenu(bypass = false): void {
     const s = this.session;
     if (!s) return;
+    let confirm = () => {};
     openMenu(this.modeBtn, (menu, close) => {
+      confirm = () => this.confirmBypass(menu, s.id, close);
       menu.append(h('div', 'menu-label', t('chat.modeMenu')));
       for (const mode of MENU_MODES) {
         const row = this.menuRow(modeLabel(mode), modeHint(mode), s.mode === mode);
@@ -512,6 +552,7 @@ export class ChatView {
         menu.append(row);
       }
     });
+    if (bypass) confirm();
   }
 
   /** Same explicit confirmation as in the settings before a session runs without any approval. */

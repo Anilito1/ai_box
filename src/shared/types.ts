@@ -1,5 +1,7 @@
+import type { TurnRecord } from './costs';
 import type { Lang } from './i18n';
 import type { KeepReason } from './parallel';
+import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
 
 export { APP_NAME } from './brand';
@@ -476,6 +478,17 @@ export interface HubApi {
   repoDetails(path: string, id: string): Promise<CommitDetails>;
   repoBranches(path: string): Promise<RepoBranch[]>;
   repoAction(path: string, action: RepoAction): Promise<RepoActionResult>;
+  /** Claude Code's commands and skills for a session's composer (those it runs as typed). */
+  sessionCommands(id: string): Promise<CliCommand[]>;
+  compact(id: string, instructions: string): void;
+  /** Starts the session over in a new, empty conversation. */
+  clear(id: string): void;
+  /** Says the session's cost and tokens in its conversation. */
+  showCost(id: string): void;
+  /** Turns logged in [from, to), oldest first, and when the log started. */
+  costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number }>;
+  /** Asks where to save the CSV, then writes it; false when cancelled or not written. */
+  exportCost(csv: string, name: string): Promise<boolean>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
   send(id: string, text: string, images: ImageInput[]): void;

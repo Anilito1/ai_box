@@ -18,9 +18,12 @@ import {
   type Query,
   type SDKMessage,
   type SDKUserMessage,
+  type SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { addUsage, sumUsage, totalsOf, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
+import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import {
   capEffort,
   fromTemplate,
@@ -50,6 +53,7 @@ import {
   type TeamRole,
 } from '../shared/types';
 import { mainRepoPath, masterCwd, prepareRole, type HubConfig } from './config';
+import type { CostLog } from './costLog';
 import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
 import {
@@ -123,7 +127,6 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   sessionId: string;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
-  costBase: number;
   items: Map<string, ChatItem>;
   query: Query | null;
   inbox: Inbox | null;
@@ -170,6 +173,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   noteSentTo: string;
   /** The note is on its way with a first message: until the conversation exists, it is not added again. */
   noteSending: boolean;
+  /** The conversation opened on a slash command, which carried no note: its first real message still does. */
+  noteDue: boolean;
   /** Id of the post an extra instance works for, else null (the post's own worker has roleId instead). */
   instanceOf: string | null;
   /** The worktree the hub made for it, else null. */
@@ -183,6 +188,14 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   retiring: Promise<string> | null;
   /** Ends with its Claude Code process's stream. */
   exit: Promise<void> | null;
+  /**
+   * Running totals its Claude Code process started from (a resumed conversation carries its earlier turns), and the
+   * last ones a result reported: each turn's spending is the difference.
+   */
+  usageBase: Promise<Totals | null | 'unknown'>;
+  usageSeen: Totals | null;
+  /** Commands and skills its Claude Code process offers. */
+  commands: SlashCommand[];
 }
 
 type Persisted = {
@@ -226,6 +239,8 @@ export interface ManagerOptions {
   sessionEnv(): { set: Record<string, string>; unset: string[] };
   /** Writes the settings: the master's tools change the team. */
   persist(): void;
+  /** Where each turn's cost goes. */
+  costLog: CostLog;
 }
 
 /** `notes`: the master's changes that a choice the user made by hand kept from applying. */
@@ -272,6 +287,8 @@ interface Prompt {
   shown?: string;
   /** The hub asking a permanent worker for its handoff note. */
   handoff?: boolean;
+  /** A slash command: Claude Code reads the text as typed, so nothing (handoff note, news of the team) is added to it. */
+  command?: boolean;
 }
 
 /** Tools whose input a permission card shows as it is: the command to run, the edit to make. */
@@ -348,10 +365,14 @@ const randomTag = () => randomUUID().replace(/-/g, '');
 const shortPath = (dir: string) => dir.split(/[\\/]/).filter(Boolean).slice(-2).join('/') || dir;
 /** A path on another computer (UNC, device): the master's paths never go there. */
 const isNetworkPath = (dir: string) => /^[\\/]{2}/.test(dir.trim());
+/** "51.7K" / "51,7 k": a token count in the user's language. */
+const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
   private modelInfos: ModelInfo[] = [];
+  /** Commands of the last session that started: offered to one that has not run yet. */
+  private lastCommands: SlashCommand[] = [];
   private rateLimits: RateLimits | null = null;
   private usageCheckedAt = 0;
   private reposCache: { at: number; text: string } | null = null;
@@ -464,7 +485,7 @@ export class SessionManager extends EventEmitter {
     // The user took the worker over: its turn no longer answers the master, and it stays open.
     s.owesReport = false;
     s.closeWhenDone = false;
-    this.deliver(s, { text: textForModel, images, shown });
+    this.deliver(s, { text: textForModel, images, shown, command: parseSlash(shown) !== null });
   }
 
   interrupt(id: string): void {
@@ -596,6 +617,72 @@ export class SessionManager extends EventEmitter {
 
   decide(id: string, requestId: string, decision: PermissionDecision): void {
     this.sessions.get(id)?.pending.get(requestId)?.(decision);
+  }
+
+  // ---------- slash commands (composer) ----------
+
+  /** Claude Code's commands and skills for a session's composer; one that has not run yet gets those of the last that did. */
+  commands(id: string): CliCommand[] {
+    const s = this.sessions.get(id);
+    const list = s?.commands.length ? s.commands : this.lastCommands;
+    return list.map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint, aliases: c.aliases ?? [] })).filter(visibleCli);
+  }
+
+  /** /compact: Claude Code summarizes the conversation so far; the conversation shows it compacting, then what is left. */
+  compact(id: string, instructions: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (!s.started) return this.notice(s, t('notice.nothingToCompact'), 'info');
+    this.send(id, `/compact ${instructions}`.trim());
+  }
+
+  /**
+   * /clear: the session goes on in a new, empty conversation (the last one stays in Claude Code's history). A post's
+   * handoff note goes with the first message of the new one, as after any renewal. Its worktree, if any, stays.
+   */
+  clear(id: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (this.ended(s)) return this.refuse(id, '/clear', t('refuse.ended'));
+    if (s.query && this.isWorking(s)) return this.notice(s, t('notice.clearBusy'), 'info');
+    const running = !!s.inbox;
+    if (running) {
+      const q = s.query;
+      s.noteFresh = false; // Not the renewal teardown() would announce: this one is said below.
+      s.inbox?.close();
+      this.teardown(s);
+      q?.close();
+    }
+    Object.assign(s, { sessionId: randomUUID(), started: false, historyLoad: null, lastMessage: '', noteFresh: false, handoffDone: false, error: '' });
+    if (s.metrics) s.metrics = { ...s.metrics, contextTokens: 0, contextPct: 0 };
+    s.items.clear();
+    this.pendingItems.delete(s.id);
+    this.emit('items', s.id, [], true);
+    this.notice(s, t(s.roleId && s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
+    if (running && !this.orphan(s)) void this.launch(s, false);
+    this.changed();
+  }
+
+  /** /cost: what the session spent, its tokens from the turns the log has, said in its conversation. */
+  async showCost(id: string): Promise<void> {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const { costLog } = this.opts;
+    const mine = (await costLog.read(s.createdAt, Date.now() + 1)).filter((r) => r.id === id);
+    const used = mine.reduce((sum, r) => addUsage(sum, sumUsage(r.models)), ZERO);
+    const lines = [t('notice.cost', { cost: `$${(s.metrics?.costUsd ?? 0).toFixed(2)}` })];
+    if (mine.length > 0) {
+      lines.push(
+        tn('notice.costTokens', mine.length, {
+          input: tokens(used.input),
+          output: tokens(used.output),
+          read: tokens(used.cacheRead),
+          write: tokens(used.cacheWrite),
+        }),
+      );
+    }
+    if (s.createdAt < costLog.since) lines.push(t('notice.costSince', { date: new Date(costLog.since).toLocaleDateString(lang(), { day: 'numeric', month: 'long' }) }));
+    this.notice(s, lines.join(' · '), 'info');
   }
 
   // ---------- views ----------
@@ -778,8 +865,9 @@ export class SessionManager extends EventEmitter {
     if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
     const q = query({ prompt: inbox, options });
     s.query = q;
-    // A post's cost runs on across its conversations.
-    s.costBase = resume || s.roleId ? (s.metrics?.costUsd ?? 0) : 0;
+    s.usageSeen = null;
+    // A resumed conversation's results carry the totals it saved: its turns count from there. A new one starts at zero.
+    s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
     void this.onReady(s, q);
     s.exit = this.consume(s, q);
@@ -859,13 +947,17 @@ export class SessionManager extends EventEmitter {
           s.started = true;
           // The note is in this conversation now: its later prompts never carry it again.
           if (s.noteSending) Object.assign(s, { noteSentTo: msg.session_id, noteSending: false });
+          // Another conversation in the same process: its totals start again from zero.
+          if (s.usageSeen && msg.session_id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
           s.sessionId = msg.session_id;
           s.mode = msg.permissionMode;
           if (msg.effort) s.effort = msg.effort;
           this.applyModel(s, msg.model);
         } else if (msg.subtype === 'compact_boundary') {
           s.compacting = false;
-          this.notice(s, t('notice.compacted'), 'info');
+          this.compacted(s, msg.compact_metadata.pre_tokens, msg.compact_metadata.post_tokens);
+        } else if (msg.subtype === 'commands_changed') {
+          s.commands = this.lastCommands = msg.commands;
         } else if (msg.subtype === 'status') {
           const compacting = msg.status === 'compacting';
           if (compacting && !s.compacting) this.event(s, 'compacting');
@@ -965,8 +1057,9 @@ export class SessionManager extends EventEmitter {
         break;
       }
       case 'result': {
-        const costBefore = s.metrics?.costUsd ?? s.costBase;
         s.liveId = null;
+        // A local command (/context, /usage…) is never replayed: the CLI's own count says what still waits.
+        if (typeof msg.queued_turn_count === 'number') s.queued = Math.min(s.queued, msg.queued_turn_count);
         s.retrying = false;
         s.compacting = false;
         s.status = s.pending.size > 0 ? 'attention' : 'idle';
@@ -998,9 +1091,7 @@ export class SessionManager extends EventEmitter {
         const windows = Object.values(msg.modelUsage ?? {}).map((m) => m.contextWindow);
         const size = Math.max(s.metrics?.contextSize ?? 0, ...windows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, size);
-        if (s.metrics) s.metrics.costUsd = s.costBase + msg.total_cost_usd;
-        const costAfter = s.metrics?.costUsd ?? costBefore;
-        if (COST_MILESTONES.some((m) => costBefore < m && costAfter >= m)) this.event(s, 'cost_milestone');
+        this.countTurn(s, totalsOf(msg.total_cost_usd, msg.modelUsage));
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
@@ -1053,6 +1144,7 @@ export class SessionManager extends EventEmitter {
     try {
       const init = await q.initializationResult();
       if (init.models.length > 0) this.modelInfos = init.models;
+      if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
       return; // The session failed to start: consume() reports it.
     }
@@ -1081,11 +1173,55 @@ export class SessionManager extends EventEmitter {
   }
 
   private setContext(s: Session, tokens: number, size: number): void {
-    const metrics: Metrics = s.metrics ?? { contextTokens: 0, contextSize: 0, contextPct: null, costUsd: s.costBase };
+    const metrics: Metrics = s.metrics ?? { contextTokens: 0, contextSize: 0, contextPct: null, costUsd: 0 };
     metrics.contextTokens = tokens;
     metrics.contextSize = size || metrics.contextSize;
     metrics.contextPct = metrics.contextSize ? (tokens / metrics.contextSize) * 100 : null;
     s.metrics = metrics;
+  }
+
+  /** The running totals a resumed conversation starts from, read before its first turn ends. */
+  private usageTotals(q: Query): Promise<Totals | 'unknown'> {
+    return q
+      .initializationResult()
+      .then(() => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }))
+      .then(
+        (u) => totalsOf(u.session.total_cost_usd, u.session.model_usage),
+        () => 'unknown' as const, // API unavailable: the first result only sets the base, later turns count.
+      );
+  }
+
+  private costRole(s: Session): CostRole {
+    return s.role === 'master' ? 'master' : s.roleId ? 'post' : s.instanceOf ? 'instance' : 'worker';
+  }
+
+  /** A result's running totals: what the turn spent goes to the cost log and to the session's cost (card, status bar). */
+  private countTurn(s: Session, totals: Totals): void {
+    const prev = s.usageSeen;
+    // A zeroed result (a crash) or one below the last: the next real one carries the totals.
+    if (Object.keys(totals.models).length === 0 || (prev && totals.cost + 1e-9 < prev.cost)) return;
+    s.usageSeen = totals;
+    const at = Date.now();
+    const role = this.costRole(s);
+    void (prev ? Promise.resolve(prev) : s.usageBase).then((before) => {
+      if (before === 'unknown') return;
+      const models = turnDelta(before, totals);
+      if (!models) return;
+      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models });
+      if (!s.metrics) return;
+      const costBefore = s.metrics.costUsd;
+      s.metrics.costUsd += sumUsage(models).cost;
+      if (COST_MILESTONES.some((m) => costBefore < m && (s.metrics?.costUsd ?? 0) >= m)) this.event(s, 'cost_milestone');
+      this.changed();
+    });
+  }
+
+  /** After a compaction, the context it left: in the meter at once, and said in the conversation. */
+  private compacted(s: Session, before: number, after: number | undefined): void {
+    const size = s.metrics?.contextSize ?? 0;
+    if (after === undefined || !size) return this.notice(s, t('notice.compacted'), 'info');
+    this.setContext(s, after, size);
+    this.notice(s, t('notice.compactedTo', { before: tokens(before), after: tokens(after), pct: Math.max(1, Math.round((after / size) * 100)) }), 'info');
   }
 
   /** Plan limits (5 h / 7 days) from the SDK's experimental /usage API, at most once a minute. */
@@ -1191,13 +1327,17 @@ export class SessionManager extends EventEmitter {
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
     const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission;
-    void this.launch(s, s.started, lostMission ? { ...prompt, text: `${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
+    void this.launch(s, s.started, lostMission ? { ...prompt, command: false, text:`${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
   /** The first message of a post's conversation after a context renewal carries its handoff note. */
   private withNote(s: Session, prompt: Prompt): Prompt {
-    if (!s.roleId || !s.note || s.started || prompt.handoff || s.noteSending || s.noteSentTo === s.sessionId) return prompt;
-    s.noteSending = true;
+    if (!s.roleId || !s.note || (s.started && !s.noteDue) || prompt.handoff || s.noteSending || s.noteSentTo === s.sessionId) return prompt;
+    if (prompt.command) {
+      s.noteDue = true;
+      return prompt;
+    }
+    Object.assign(s, { noteSending: true, noteDue: false });
     return { ...prompt, text: `${prompt.text}\n\n${handoffBlock(s.note)}` };
   }
 
@@ -1209,7 +1349,7 @@ export class SessionManager extends EventEmitter {
     const { cfg } = this.opts;
     const post = this.postOf(s);
     const key = s.role === 'master' ? rosterKey(cfg) : post ? roleKey(post) : '';
-    if (key === s.seen || !s.query) return prompt;
+    if (prompt.command || key === s.seen || !s.query) return prompt;
     s.seen = key;
     const news = s.role === 'master' ? rosterBlock(cfg) : post ? postUpdate(post, undefined, !!s.instanceOf) : '';
     return { ...prompt, text: `${prompt.text}\n\n${news}` };
@@ -2393,7 +2533,6 @@ export class SessionManager extends EventEmitter {
       error: '',
       sessionId: randomUUID(),
       started: false,
-      costBase: 0,
       items: new Map(),
       query: null,
       inbox: null,
@@ -2421,6 +2560,7 @@ export class SessionManager extends EventEmitter {
       userEffort: false,
       noteSentTo: '',
       noteSending: false,
+      noteDue: false,
       instanceOf: null,
       tree: null,
       readOnly: false,
@@ -2428,6 +2568,9 @@ export class SessionManager extends EventEmitter {
       installFailed: false,
       retiring: null,
       exit: null,
+      usageBase: Promise.resolve(null),
+      usageSeen: null,
+      commands: [],
     };
     this.sessions.set(id, s);
     return s;
