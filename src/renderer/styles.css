@@ -96,7 +96,6 @@
   --head-h: 40px;
   --topics-w: 184px;
   --controls-w: 150px;
-  --controls-h: var(--head-h);
 
   /* elevation */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -259,8 +258,8 @@ kbd,
     'status status';
 }
 
-/* ---------- top of the window: no band of its own. The brand tops the sidebar, the panes' headers run up to the edge and
-   carry the window controls (native ones drawn by Electron's overlay on the right, over the rightmost header). ---------- */
+/* ---------- top of the window: no band of its own. The brand tops the sidebar, the master's header runs along the rest
+   and carries the window controls (native ones drawn by Electron's overlay on the right); an open worker sits under it. ---------- */
 .brand {
   display: flex;
   flex: none;
@@ -1441,7 +1440,7 @@ kbd,
 }
 .topics {
   position: absolute;
-  top: var(--head-h);
+  top: 0;
   bottom: 0;
   left: 0;
   z-index: 1;
@@ -1667,6 +1666,13 @@ kbd,
 .workspace {
   grid-area: main;
   display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.panes {
+  display: flex;
+  flex: 1;
   min-width: 0;
   min-height: 0;
 }
@@ -1832,8 +1838,8 @@ kbd,
 .pane-head :is(button, .ph-name, .ph-mission, .ph-cwd, .ph-update) {
   -webkit-app-region: no-drag;
 }
-/* The header at the right edge leaves room for the native window controls. */
-.workspace:not(.expanded) > .pane-master > .pane-head {
+/* The master's header tops the whole workspace: it leaves room for the native window controls. */
+.workspace > .pane-head {
   padding-right: calc(var(--controls-w) + var(--sp-2));
 }
 .ph-name {
@@ -1859,8 +1865,7 @@ kbd,
 .ph-close {
   margin-right: -8px;
 }
-/* Open worker: its Clawd as a portrait, the name, status and mission beside it. The title sits level with the window
-   controls (it stops short of them, and of the close button), the mission starts under their row. */
+/* Open worker, under the master's header: its Clawd as a portrait, the name, status and mission beside it. */
 .pane-head.portrait {
   position: relative;
   flex: none;
@@ -1907,22 +1912,14 @@ kbd,
   -webkit-box-orient: vertical;
 }
 .pane-head.portrait .ph-title {
-  padding-right: calc(var(--controls-w) + var(--ctl-md) + var(--sp-3));
+  margin-right: calc(var(--ctl-md) + var(--sp-2));
+  overflow: hidden;
 }
 .pane-head.portrait .ph-close {
   position: absolute;
   top: calc((var(--head-h) - var(--ctl-md)) / 2);
-  right: calc(var(--controls-w) + var(--sp-2));
+  right: var(--sp-2);
   margin: 0;
-}
-/* Too narrow to share the first row with the controls: the title moves under it (a Mac has none: nothing to move). */
-@container (max-width: 480px) {
-  .pane-head.portrait {
-    padding-top: calc(var(--controls-h) + var(--sp-2));
-  }
-  .pane-head.portrait .ph-title {
-    padding-right: 0;
-  }
 }
 
 /* ---------- message stream ---------- */
@@ -3963,7 +3960,6 @@ kbd,
 /* macOS draws its window buttons at the top left (over the brand), and none at the right. */
 .platform-darwin {
   --controls-w: 0px;
-  --controls-h: 0px;
 }
 .platform-darwin .brand {
   padding-left: 84px;

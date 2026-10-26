@@ -53,6 +53,8 @@ const headActions = h('div', 'ph-actions');
 headActions.append(updateSlot, mcpButton, skillsButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
+// The master's header is the window's top bar: it spans the open worker too, which opens under it.
+workspace.prepend($('pane-master').querySelector('.pane-head') as HTMLElement);
 const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null, (account) => snapshot.accounts.find((a) => a.id === account)?.limitedUntil ?? null, () => snapshot.providers);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
 const capsView = new CapsView(hub);
