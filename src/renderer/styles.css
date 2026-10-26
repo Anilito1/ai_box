@@ -95,7 +95,8 @@
   /* The header of a pane, and the native window controls that share its row (none on a Mac: its buttons are at the left). */
   --head-h: 40px;
   --topics-w: 184px;
-  --controls-w: 150px;
+  /* What Electron's title bar overlay really takes at the right (0 without one): the page is told where its free area ends. */
+  --controls-w: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 
   /* elevation */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -1975,10 +1976,9 @@ kbd,
   min-width: 0;
   white-space: nowrap;
 }
-/* The folder gives way first; the name only shrinks once the folder is gone. */
+/* A long name and the folder shrink to an ellipsis; the status always stays in view. */
 .pane-head.portrait .ph-name {
-  flex-shrink: 0;
-  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   font-size: var(--fs-xl);
   text-overflow: ellipsis;
@@ -2008,6 +2008,12 @@ kbd,
   top: calc((var(--head-h) - var(--ctl-md)) / 2);
   right: var(--sp-2);
   margin: 0;
+}
+/* A narrow panel leaves the title row to the name and the status: the folder chip goes. */
+@container (max-width: 400px) {
+  .pane-head.portrait .ph-cwd {
+    display: none;
+  }
 }
 
 /* ---------- message stream ---------- */
@@ -2564,6 +2570,13 @@ kbd,
 }
 .cbtn-model > span:not([class]) {
   flex: 0 1 auto;
+}
+/* The effort and a fallback note beside the model's name give way before it. */
+.cbtn-model > .cbtn-muted {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cbtn-icon {
   padding: 0 7px;
