@@ -68,6 +68,7 @@ import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { openTerminal } from './terminal';
 import { installTool, setToolsDir, type Tool } from './providers/tools';
+import { ProviderNewsWatch } from './news';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
 
@@ -262,6 +263,7 @@ class Hub {
   private executable = '';
   private codex = '';
   private gemini = '';
+  private readonly news: ProviderNewsWatch;
   /** The Google sign-ins in progress (a browser is open), by account: the way to cancel each. */
   private readonly googleLogins = new Map<string, () => void>();
   private gh = '';
@@ -271,6 +273,12 @@ class Hub {
     this.cfg = loadConfig(this.dataDir, systemLang());
     setToolsDir(join(this.dataDir, 'tools'));
     setLang(this.cfg.language);
+    this.news = new ProviderNewsWatch({
+      dataDir: this.dataDir,
+      toolsDir: join(this.dataDir, 'tools'),
+      publish: (news) => this.mgr.setProviderNews(news),
+      notify: (toast) => send('hub:news', toast),
+    });
     this.mgr = new SessionManager({
       cfg: this.cfg,
       dataDir: this.dataDir,
@@ -383,7 +391,8 @@ class Hub {
     // Ultracode is offered by the plan of each Claude Code sign-in, and by the Claude Code installed.
     const plans: Record<string, string> = { [OWN_ACCOUNT]: claude.status.account?.plan ?? '' };
     claudeAccounts.forEach((a, i) => (plans[a.id] = others[i].status.account?.plan ?? ''));
-    this.mgr.setPlans(plans, await claudeVersion(claude.executable, this.mgr.toolEnv()));
+    const claudeVersionText = await claudeVersion(claude.executable, this.mgr.toolEnv());
+    this.mgr.setPlans(plans, claudeVersionText);
     const viewOf = (r: { executable: string; status: { account: { ready: boolean; provider: string; email: string; plan: string; source: string } | null; error: string } }): MethodView => {
       const who = r.status.account;
       return {
@@ -414,7 +423,7 @@ class Hub {
         method: anthropicOn ? (viaKey ? 'apikey' : 'cli') : '',
         methods: { cli: anthropic, apikey: anthropicKey },
         accounts,
-        cli: { found: claude.executable !== '', version: '', outdated: false },
+        cli: { found: claude.executable !== '', version: claudeVersionText, outdated: false },
       },
       {
         id: 'openai',
@@ -449,6 +458,18 @@ class Hub {
           : { connected: false, accountId: '', method: '' },
     };
     this.mgr.setProviderStates(states);
+    // What is new at the connected providers (models, program versions): told in the background, never holds the views back.
+    void this.news
+      .check({
+        connected: { anthropic: anthropicOn, openai: states.openai?.connected, deepseek: deepseek.connected, gemini: states.gemini?.connected },
+        offered: this.mgr.providerOffers(),
+        programs: {
+          anthropic: { path: claude.executable, version: claudeVersionText },
+          openai: { path: this.codex, version: codexVersionText },
+          gemini: { path: this.gemini, version: geminiVersionText },
+        },
+      })
+      .catch(() => undefined);
     return views;
   }
 
@@ -922,6 +943,9 @@ class Hub {
     // The providers' blocks in Settings › Accounts.
     const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'google' || v === 'apikey' ? v : null);
     handle('providers:state', () => this.providerViews());
+    on('providers:ack-news', (provider) => {
+      if (isProviderId(provider)) this.news.acknowledge(provider);
+    });
     handle('providers:install', (provider) => (isProviderId(provider) ? this.installCli(provider) : { ok: false, error: 'unsupported', field: '', opened: false, views: [] }));
     handle('providers:connect', (provider, method, key) => {
       const m = methodOf(method);

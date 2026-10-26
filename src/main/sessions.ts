@@ -9,6 +9,7 @@ import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/pa
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
+import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff } from '../shared/passation';
@@ -399,6 +400,8 @@ export class SessionManager extends EventEmitter {
   private readonly usageCheckedAt = new Map<string, number>();
   /** Which providers are connected, as the main process last checked them. */
   private providerStates: Partial<Record<ProviderId, ProviderState>> = {};
+  /** What is new at each provider (models, program version), as the main process read it. */
+  private providerNews: Partial<Record<ProviderId, ProviderNews>> = {};
   private plans = new Map<string, string>();
   /** The version of the Claude Code installed, empty when unknown. */
   private claudeVersion = '';
@@ -753,6 +756,16 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
+  setProviderNews(news: Partial<Record<ProviderId, ProviderNews>>): void {
+    this.providerNews = news;
+    this.changed();
+  }
+
+  /** The models each provider offers now (the menu's, without the default), for the news to compare with what was seen. */
+  providerOffers(): Partial<Record<ProviderId, { value: string; label: string }[]>> {
+    return Object.fromEntries(this.providerBadges().map((p) => [p.id, p.models.filter((m) => m.value !== 'default').map((m) => ({ value: m.value, label: m.label }))]));
+  }
+
   /** The master reads which providers are connected and what models each has. */
   private syncProviderLines(): void {
     setProviderLines(
@@ -771,7 +784,7 @@ export class SessionManager extends EventEmitter {
       const account = 'account' in r ? r.account : '';
       const models = account ? (isBuiltinAccount(account) ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
       const plan = def.id === 'anthropic' && account ? this.planOf(account) : undefined;
-      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models, ...(plan !== undefined ? { plan, ultracodeAccess: this.ultracodeAccessOf(account) } : {}) };
+      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models, news: account ? (this.providerNews[def.id] ?? NO_NEWS) : NO_NEWS, ...(plan !== undefined ? { plan, ultracodeAccess: this.ultracodeAccessOf(account) } : {}) };
     });
   }
 

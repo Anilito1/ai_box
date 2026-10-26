@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, TeamRole } from '../shared/types';
+import type { NewsToast } from '../shared/news';
 import type { UpdateState } from '../shared/update';
 
 const api: HubApi = {
@@ -92,6 +93,10 @@ const api: HubApi = {
   onUpdate: (cb) => {
     ipcRenderer.on('hub:update', (_e, state: UpdateState) => cb(state));
   },
+  onNews: (cb) => {
+    ipcRenderer.on('hub:news', (_e, toast: NewsToast) => cb(toast));
+  },
+  ackNews: (provider) => ipcRenderer.send('providers:ack-news', provider),
   updateState: () => ipcRenderer.invoke('update:state'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   installUpdate: (choice) => ipcRenderer.invoke('update:install', choice),

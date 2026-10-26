@@ -5675,3 +5675,102 @@ input[type='radio']:focus-visible {
 .provider-tabs .seg.off {
   opacity: 0.5;
 }
+
+/* ---------- what is new at a provider ---------- */
+.news-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  flex: none;
+  vertical-align: middle;
+}
+.cbtn .news-dot {
+  margin-left: 0;
+  align-self: flex-start;
+  margin-top: 8px;
+  margin-left: -2px;
+}
+.news-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+}
+.cli-update {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 4px 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+}
+.cli-update-title {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.cli-update-note {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.cli-update-cmd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.cli-update-cmd code {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  background: var(--hover-strong);
+  color: var(--text-2);
+  font: 11.5px / 1.4 var(--font-mono);
+}
+.news-stack {
+  position: fixed;
+  right: var(--sp-3);
+  top: 60px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+  pointer-events: none;
+}
+.news-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 8px 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.news-toast > .ico {
+  margin-top: 1px;
+  color: var(--accent);
+}
+.news-toast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
