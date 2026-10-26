@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, TeamRole } from '../shared/types';
+import type { UpdateState } from '../shared/update';
 
 const api: HubApi = {
   onSnapshot: (cb) => {
@@ -66,6 +67,14 @@ const api: HubApi = {
   agentFiles: () => ipcRenderer.invoke('team:agents'),
   finishSetup: () => ipcRenderer.invoke('setup:finish'),
   relaunch: () => ipcRenderer.send('app:relaunch'),
+  onUpdate: (cb) => {
+    ipcRenderer.on('hub:update', (_e, state: UpdateState) => cb(state));
+  },
+  updateState: () => ipcRenderer.invoke('update:state'),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  installUpdate: (choice) => ipcRenderer.invoke('update:install', choice),
+  answerUpdate: (go) => ipcRenderer.send('update:answer', go),
+  openUpdateFolder: () => ipcRenderer.send('update:open-folder'),
 };
 
 contextBridge.exposeInMainWorld('hub', api);

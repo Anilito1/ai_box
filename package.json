@@ -5,6 +5,10 @@
   "description": "Desktop hub for Claude Code: one master session plans the work and drives worker sessions, each in its own repo.",
   "author": "Anilito1 (https://github.com/Anilito1)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anilito1/claude-hub.git"
+  },
   "main": "dist/main.mjs",
   "engines": {
     "node": ">=22.12"

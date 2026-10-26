@@ -15,6 +15,8 @@ await Promise.all([
     external: ['electron', '@anthropic-ai/claude-agent-sdk', 'zod'],
   }),
   build({ ...common, entryPoints: ['src/preload/preload.ts'], outfile: 'dist/preload.cjs', platform: 'node', format: 'cjs', external: ['electron'] }),
+  // Installs an update once the hub has closed, run by the user's Node.js: Node's own modules only.
+  build({ ...common, entryPoints: ['src/main/updateHelper.ts'], outfile: 'dist/update-helper.mjs', platform: 'node', format: 'esm' }),
   build({ ...renderer, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js' }),
   // three.js and the mascot model (four fifths of the renderer) load after the first paint, from their own file.
   // The model is embedded in the bundle: three.js loads files with fetch(), which refuses file:// URLs.

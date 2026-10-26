@@ -22,6 +22,7 @@ import {
 } from '../shared/types';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
+import { updateSection } from './update';
 
 type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
@@ -1495,6 +1496,6 @@ export class SetupView {
     this.head(el, APP_NAME, t('setup.about.lead'));
     const list = h('ul', 'setup-list');
     list.append(h('li', '', t('setup.about.version', { version: v.version })), h('li', '', t('setup.about.license')), h('li', '', t('setup.about.data')));
-    el.append(list, h('p', 'setup-fine', t('setup.about.trademark')));
+    el.append(list, updateSection(), h('p', 'setup-fine', t('setup.about.trademark')));
   }
 }

@@ -248,9 +248,10 @@ kbd,
   display: grid;
   height: 100vh;
   grid-template-columns: var(--side-w) 1fr;
-  grid-template-rows: 36px 1fr 26px;
+  grid-template-rows: 36px auto 1fr 26px;
   grid-template-areas:
     'title title'
+    'banner banner'
     'side main'
     'status status';
 }
@@ -4670,4 +4671,205 @@ input[type='radio']:focus-visible {
     transition-delay: 0s !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- update: a banner across the top of the window, and its block in Settings › About ---------- */
+/* It opens by growing its grid row (0fr to 1fr): the panes below slide down instead of jumping. */
+.update-banner {
+  display: grid;
+  grid-area: banner;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows var(--dur-3) var(--ease-out),
+    visibility 0s linear var(--dur-3);
+}
+.update-banner.open {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition:
+    grid-template-rows var(--dur-3) var(--ease-out),
+    visibility 0s;
+}
+.update-banner-clip {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+.update-banner-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 40px;
+  padding: 5px var(--sp-2) 5px var(--sp-4);
+}
+.update-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+}
+.update-banner-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.update-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-md);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    transform var(--dur-1) var(--ease-out);
+}
+.update-banner-btn:active {
+  transform: scale(0.97);
+}
+.update-banner-btn.primary {
+  border-color: transparent;
+  background: var(--accent-fill);
+  color: var(--text-on-accent);
+}
+.update-banner-btn.primary:hover {
+  background: var(--accent-fill-hover);
+}
+.update-banner-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--ctl-md);
+  height: var(--ctl-md);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  opacity: 0.8;
+  cursor: pointer;
+}
+.update-banner-close[hidden] {
+  display: none;
+}
+.update-banner-close:hover {
+  opacity: 1;
+}
+.update-banner-btn:focus-visible,
+.update-banner-close:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.update-banner-more:not(:empty) {
+  padding: 0 var(--sp-4) var(--sp-2);
+}
+.update-banner-more .tech-details {
+  margin-top: 0;
+}
+/* An install at work: a band of light runs along the banner's lower edge. */
+.update-banner-bar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+.update-banner-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: currentColor;
+  animation: update-run 1.4s var(--ease-in-out) infinite;
+}
+@keyframes update-run {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner,
+  .update-banner.open {
+    transition: none;
+  }
+  .update-banner-bar > span {
+    width: 100%;
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* The app's blue for an update (the logo's, the accent's), amber when the copy is left alone, red for a failure. */
+.update-banner[data-tone='accent'] {
+  background: var(--accent-fill);
+  color: var(--text-on-accent);
+}
+.update-banner[data-tone='accent'] .update-banner-btn {
+  border-color: color-mix(in srgb, var(--text-on-accent) 45%, transparent);
+}
+.update-banner[data-tone='accent'] .update-banner-btn:hover {
+  background: color-mix(in srgb, var(--text-on-accent) 14%, transparent);
+}
+.update-banner[data-tone='accent'] .update-banner-btn.primary {
+  border-color: transparent;
+  background: var(--text-on-accent);
+  color: var(--accent-fill);
+}
+.update-banner[data-tone='accent'] .update-banner-btn.primary:hover {
+  background: color-mix(in srgb, var(--text-on-accent) 88%, var(--accent-fill));
+}
+.update-banner[data-tone='accent'] .tech-details summary {
+  color: inherit;
+}
+.update-banner[data-tone='warn'] {
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+  color: var(--text);
+}
+.update-banner[data-tone='error'] {
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+  color: var(--text);
+}
+.update-banner[data-tone='neutral'] {
+  border-bottom: 1px solid var(--line);
+  background: var(--raise);
+  color: var(--text);
+}
+
+.update-about {
+  margin: 18px 0 0;
+}
+.update-about-lead {
+  max-width: 620px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+.update-about .tech-details {
+  margin-top: 6px;
+}
+.update-about .setup-row {
+  margin-top: 10px;
+}
+.update-modes-label {
+  margin-top: 14px;
+}
+.update-modes {
+  max-width: 620px;
+  margin: 0;
 }

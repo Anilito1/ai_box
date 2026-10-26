@@ -3,6 +3,7 @@ import type { Lang } from './i18n';
 import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
+import type { UpdateChoice, UpdateMode, UpdateState } from './update';
 
 export { APP_NAME } from './brand';
 
@@ -400,6 +401,8 @@ export interface HubSettings {
     /** Sessions get this GitHub access for git and gh (a token source puts the token in their environment). */
     shareWithSessions: boolean;
   };
+  /** When the hub installs its own updates (a source checkout of the official repository). */
+  updates: UpdateMode;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */
@@ -539,4 +542,17 @@ export interface HubApi {
   /** Ends the first-run setup and starts the master. */
   finishSetup(): Promise<void>;
   relaunch(): void;
+  onUpdate(cb: (state: UpdateState) => void): void;
+  updateState(): Promise<UpdateState>;
+  /** Asks the official repository now. */
+  checkUpdate(): Promise<UpdateState>;
+  /**
+   * "Update" (or "Realign", after a rewrite of the official history: confirmed in a native dialog). With sessions at
+   * work, `ask` gets the state back with `confirm` set, and the window asks: `when-quiet` or `now`.
+   */
+  installUpdate(choice: UpdateChoice): Promise<UpdateState>;
+  /** The answer to a countdown to an unattended restart. */
+  answerUpdate(go: boolean): void;
+  /** Opens the hub's own folder (local modifications to look at). */
+  openUpdateFolder(): void;
 }

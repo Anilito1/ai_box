@@ -342,6 +342,13 @@ const en = {
   'workers.readOnly': '  read-only: shares its folder',
   'startup.quit': 'Quit',
   'startup.copy': 'Copy the details',
+  'update.installing': '{app} is installing an update and will open by itself in a moment.',
+  'update.ok': 'OK',
+  'update.cancel': 'Cancel',
+  'update.realign.title': 'Realign with the official version',
+  'update.realign.detail': 'The official history of {app} was rewritten, and this copy still has the old one. None of its commits holds work of your own: it can take the official version.\n\nYour current commits stay on the branch {branch}. {app} then installs the official version and restarts.',
+  'update.realign.go': 'Realign',
+  'update.realign.busy': 'Sessions are working. Realign once they are done.',
   'terminal.close': 'Done. Press Enter to close this window. ',
 };
 
@@ -695,6 +702,13 @@ const fr: Record<Key, string> = {
   'workers.readOnly': '  lecture seule : partage son dossier',
   'startup.quit': 'Quitter',
   'startup.copy': 'Copier les détails',
+  'update.installing': '{app} installe une mise à jour et s’ouvrira tout seul dans un instant.',
+  'update.ok': 'OK',
+  'update.cancel': 'Annuler',
+  'update.realign.title': 'Réaligner sur la version officielle',
+  'update.realign.detail': 'L’historique officiel de {app} a été réécrit, et cette copie a encore l’ancien. Aucun de ses commits ne contient de travail à toi : elle peut reprendre la version officielle.\n\nTes commits actuels restent sur la branche {branch}. {app} installe ensuite la version officielle et redémarre.',
+  'update.realign.go': 'Réaligner',
+  'update.realign.busy': 'Des sessions travaillent. Réaligne quand elles auront fini.',
   'terminal.close': 'Terminé. Appuie sur Entrée pour fermer cette fenêtre. ',
 };
 

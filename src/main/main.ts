@@ -36,6 +36,7 @@ import {
   type SettingsView,
   type TeamRole,
 } from '../shared/types';
+import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
 import { agentFiles } from './agents';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
 import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
@@ -50,6 +51,7 @@ import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { openTerminal } from './terminal';
+import { installRunning, Updater } from './updater';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
@@ -66,6 +68,9 @@ app.setPath(
 
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
+let updater: Updater | undefined;
+/** A restart from the settings: an update left for the close waits, the new hub starts right away. */
+let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
 let rendererReady = false;
 
@@ -208,6 +213,7 @@ const handle = <T>(channel: string, fn: (...args: unknown[]) => T | Promise<T>) 
   });
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const systemLang = (): Lang => ((app.getPreferredSystemLanguages()[0] ?? app.getLocale()).toLowerCase().startsWith('fr') ? 'fr' : 'en');
 
 class Hub {
   readonly dataDir = app.getPath('userData');
@@ -215,14 +221,14 @@ class Hub {
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
   readonly mgr: SessionManager;
+  readonly updater: Updater;
   private readonly device = new DeviceFlow();
   private executable = '';
   private gh = '';
   private masterStarted = false;
 
   constructor() {
-    const system = app.getPreferredSystemLanguages()[0] ?? app.getLocale();
-    this.cfg = loadConfig(this.dataDir, system.toLowerCase().startsWith('fr') ? 'fr' : 'en');
+    this.cfg = loadConfig(this.dataDir, systemLang());
     setLang(this.cfg.language);
     this.mgr = new SessionManager({
       cfg: this.cfg,
@@ -231,6 +237,21 @@ class Hub {
       sessionEnv: () => this.sessionEnv(),
       persist: () => this.save(),
       costLog: this.costLog,
+    });
+    this.updater = new Updater({
+      dataDir: this.dataDir,
+      cfg: this.cfg,
+      sessions: this.mgr,
+      repoBusy: () => repoWatchers.some((r) => r.status.busy !== null),
+      env: () => this.mgr.toolEnv(),
+      window: () => win,
+      send: (state) => send('hub:update', state),
+      // The user chose (or nothing runs): no second question; sessions cut pick up after the restart.
+      restart: (relaunch) => {
+        quitting = true;
+        if (relaunch) app.relaunch();
+        app.quit();
+      },
     });
   }
 
@@ -541,10 +562,16 @@ class Hub {
       this.save();
       this.startMaster();
     });
+    handle('update:state', () => this.updater.view());
+    handle('update:check', () => this.updater.check(true));
+    handle('update:install', (choice) => this.updater.install(UPDATE_CHOICES.includes(choice as UpdateChoice) ? (choice as UpdateChoice) : 'ask'));
+    on('update:answer', (go) => typeof go === 'boolean' && this.updater.answer(go));
+    on('update:open-folder', () => this.updater.openFolder());
     on('app:relaunch', () => {
       // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
       if (!confirmQuit(mgr)) return;
       quitting = true;
+      relaunching = true;
       app.relaunch();
       app.quit();
     });
@@ -562,6 +589,14 @@ class Hub {
 }
 
 async function start(): Promise<void> {
+  // An update is installing while the hub is closed: it starts the hub again once done.
+  const dataDir = app.getPath('userData');
+  if (installRunning(dataDir)) {
+    setLang(loadConfig(dataDir, systemLang()).language);
+    dialog.showMessageBoxSync({ type: 'info', title: APP_NAME, message: t('update.installing'), buttons: [t('update.ok')] });
+    app.quit();
+    return;
+  }
   const hub = new Hub();
   await hub.init();
   const mgr = hub.mgr;
@@ -584,6 +619,8 @@ async function start(): Promise<void> {
   // A first run waits for the setup: the master needs Claude access before it starts.
   hub.startMaster();
   hub.setWatchers();
+  updater = hub.updater;
+  updater.start();
 }
 
 // Groups the taskbar button under the app's own identity and icon instead of Electron's.
@@ -609,6 +646,8 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
   });
   app.on('will-quit', () => {
+    if (!relaunching) updater?.atQuit();
+    updater?.stop();
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
   });

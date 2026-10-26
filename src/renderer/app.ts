@@ -8,6 +8,7 @@ import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palet
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
 import './tooltip';
+import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
 
 declare global {
@@ -383,6 +384,7 @@ function commands(): Command[] {
     { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
+    { title: t('update.check'), run: checkForUpdates },
   );
   for (const s of layout(snapshot.sessions).closed) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
   return list;
@@ -452,6 +454,8 @@ hub.onRepos((paths) => {
   $('repos-empty').hidden = paths.length > 0;
 });
 hub.ready();
+// An unattended restart waits while a message is being written or the settings are open.
+initUpdates(hub, () => setup.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''));
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {
