@@ -1,218 +1,116 @@
 # Claude Hub
 
-A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one **master** session, it splits the work and runs **worker** sessions for you, each in its own repository, and reports back.
+**One chat, a whole team.** You talk to one master [Claude Code](https://code.claude.com/docs) session; it splits the work and runs workers in parallel, each in its own repo, while you watch.
 
-![Claude Hub: the master, three workers and the git panel](docs/screenshots/main.png)
+![Claude Hub: the master starts two workers, one asks a question, both report back](docs/media/demo.gif)
 
 > **Unofficial project.** Claude Hub is not made, endorsed or supported by Anthropic. Claude and Claude Code are trademarks of Anthropic PBC. Claude Hub runs the Claude Code you install yourself and uses your own Claude access.
 
 ## What it does
 
-- **Master and workers.** The master is a Claude Code session with a few extra tools (`spawn_worker`, `message_worker`, `list_workers`, `worker_report`, `close_worker`, `list_repos`, `topic`). It writes a self-contained brief for each mission and starts a worker in the right folder. Workers report to the master; the master summarizes for you. Independent missions run in parallel; workers that touch the same thing talk to each other.
-- **A team of permanent workers.** In **Settings › Team**, give workers a post (backend, frontend, QA, DevOps, docs… from ready-made posts or your own `.claude/agents` subagents): a description that tells the master when to use it, standing instructions, working folders, a model and effort or "auto", a permission mode. The master hands a post the tasks of its scope first and starts ad-hoc workers for the rest. A permanent worker keeps its conversation from one mission to the next, sleeps when it has nothing to do (nothing runs), and wakes when the master writes to it. When its context is well filled, it writes a handoff note before falling asleep and its next mission starts a fresh conversation with that note. You can also ask the master to add or change a post (`list_roles`, `create_role`, `update_role`, `delete_role`); a deletion waits for your confirmation, and only you change a post's permission mode.
-- **Model and effort per mission.** The master rates each task (ambiguity, scope, production risk, security, reasoning, duration) and picks the model and effort that are good enough at the lowest cost, among the models you allow (Opus and Sonnet by default) and up to the effort you allow. It says its choice in one line. A model or effort you set on a post, or pick by hand on a worker, always wins.
-- **Every session is a real Claude Code session.** Same model, effort, `CLAUDE.md` files, plugins and MCP servers as when you run `claude` yourself. You can open any worker beside the master and write to it directly.
-- **Topics.** When several jobs run at once, the master's conversation is filed by topic: the master names the topic of each reply (hub tool `topic`), and its card opens into a column beside the conversation, **All** first, then one topic per job, the most recent first. A topic shows only its messages (yours, the master's, its workers' and the hub's notes), and what you write there reaches the master in that topic. A red badge marks the topics where the master waits for your answer, a go-ahead or an approval, until you answer there. A narrow window folds the column into a menu in the master's header. A conversation from before this version is grouped by worker.
-- **Live view.** Status, context use, cost, background tasks, permission requests, and an animated mascot per session that reacts to what the session is doing.
-- **"/" commands.** In any composer, `/` lists the session's commands: `/compact [instructions]`, `/clear` (a new conversation, after a confirmation), `/model`, `/effort`, `/mode` (same choices and rules as the menus), `/cost`, `/help`, then Claude Code's own commands and skills of that session, sent as typed. An unknown command is refused and nothing is sent.
-- **API cost by period.** Click **Σ API cost** in the status bar: a small popover with the cost of today, 7 days, 30 days or this month, split by session (hover a line for its model and tokens). Each turn's cost is logged as Claude Code estimates it (with a subscription, an equivalent at API prices); the history starts when you install this version.
-- **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
-- **Closed sessions resume.** Idle ad-hoc workers close after 15 minutes, permanent ones fall asleep after 5; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
-- **Updates itself.** A clone of the official repository installs new versions when nothing is running, and never over your own changes (see [Updating](#updating)).
-- **English and French**, for the interface and for the instructions the sessions receive.
-- **Keyboard and appearance.** Ctrl+K (⌘K on a Mac) opens the commands, Ctrl+1 to 9 switch between the master and the workers, Ctrl+, opens the settings, Ctrl+Shift+G folds the git panel. Light and dark follow the system.
+### A master and its workers
 
-## Requirements
+Tell the master what you want. It writes a brief for each job, starts a worker in the right folder and sums up their reports for you. Workers ask the master when they are stuck, and talk to each other when their work overlaps.
 
-- Windows 10/11, macOS 12 or later (Apple silicon or Intel) or Linux. Developed and tested on Windows 11; macOS is reviewed but not yet run, see [macOS](#macos).
-- [Node.js](https://nodejs.org) 22.12 or later and [git](https://git-scm.com) (on a Mac: `xcode-select --install`).
-- A Claude subscription or an **Anthropic API key** from the [Claude Console](https://console.anthropic.com/settings/keys). The first-run setup signs Claude Code in for you through Claude Code's own sign-in.
-- Optional: a GitHub account, and the [GitHub CLI](https://cli.github.com) (the easiest way to connect GitHub).
+### The right model for each job
 
-## Install and run from source
+The master rates each task (scope, risk, reasoning needed) and picks the model and effort that do the job at the lowest cost, among the ones you allow. What you set by hand always wins.
+
+![The master's plan: a model and an effort per job](docs/media/model.png)
+
+### A permanent team
+
+In **Settings › Team**, give workers a post: backend, frontend, QA, DevOps, docs, or one of your own subagents. A post keeps its memory from one mission to the next, sleeps when idle (nothing runs) and wakes when the master writes to it. When its context fills up, it leaves itself a handoff note and starts fresh. You can ask the master to add or change a post.
+
+![Settings › Team](docs/media/team.png)
+
+### Reinforcements
+
+When a mission splits into independent jobs, the master can run several copies of one post at once, each in its own git worktree and branch, so they never step on each other.
+
+<img src="docs/media/reinforcements.png" width="300" alt="The backend post asleep, two of its copies at work on their own branches">
+
+### Topics
+
+With several jobs going, the master's conversation is filed by topic. A red badge marks where the master waits for your answer; reply right there.
+
+![Topics, with a badge on the one waiting for you](docs/media/topics.png)
+
+### Real Claude Code sessions
+
+Every session is a plain Claude Code session: your `CLAUDE.md` files, plugins, MCP servers and models. Open any worker beside the master to watch it or talk to it directly.
+
+![A worker opened beside the master](docs/media/sessions.png)
+
+### Git and cost at hand
+
+<table>
+<tr>
+<td width="50%" valign="top"><b>Git panel.</b> Branches, worktrees, changes and the graph of the repos you follow. Commit, pull and push without leaving the hub.<br><br><img src="docs/media/git.png" width="300" alt="Git panel"></td>
+<td width="50%" valign="top"><b>Cost.</b> Every card shows its cost and how full its context is. <b>Σ API cost</b> opens the spend by day, week or month, split by session.<br><br><img src="docs/media/cost.png" width="330" alt="API cost popover"></td>
+</tr>
+</table>
+
+### "/" commands
+
+In any composer: `/compact`, `/clear`, `/model`, `/effort`, `/mode`, `/cost`, then the session's own Claude Code commands and skills.
+
+<img src="docs/media/slash.png" width="540" alt="Slash command menu">
+
+### A Clawd for every session
+
+Each session gets an animated 3D Clawd that shows what it is doing: typing, searching, delegating, celebrating, sleeping.
+
+<img src="docs/media/clawd.gif" width="420" alt="Clawd types, searches, delegates, celebrates and sleeps">
+
+### And also
+
+**Ctrl+K** (⌘K) for every command, Ctrl+1…9 to switch sessions. English and French. Light and dark themes. Idle and closed sessions resume with their whole conversation. A copy cloned from GitHub updates itself, never over your own changes. Light on your machine: the mascots and animations stop when nothing happens.
+
+![Command palette, and the update banner](docs/media/palette.png)
+
+## Quick start
+
+**You need:** Windows, macOS or Linux · [Node.js](https://nodejs.org) 22.12+ · [git](https://git-scm.com) (on a Mac: `xcode-select --install`) · a Claude subscription or an [Anthropic API key](https://console.anthropic.com/settings/keys). GitHub is optional.
 
 ```sh
-git clone https://github.com/<you>/claude-hub.git
+git clone https://github.com/Anilito1/claude-hub.git
 cd claude-hub
 npm install
 npm start
 ```
 
-`npm start` builds the app and opens it. On the first run Electron downloads its binary (about 100 MB). Running from source uses the Claude Code binary that npm installs with the Agent SDK: you do not need to install Claude Code separately.
+The first start downloads Electron (about 100 MB); Claude Code comes with the install. A short setup then asks for your language, your Claude access, GitHub (optional), the folders that hold your repos and the repos to follow. Everything stays editable in **Settings**.
 
-To try the hub without touching your own settings, give it a folder of its own: `npm start -- --user-data-dir=/path/to/test-profile`.
+**Signing in.** The hub never asks for your Claude credentials. **Sign in with Claude Code** opens a terminal with Claude Code's own sign-in (`claude auth login`), as Anthropic's [rules](https://code.claude.com/docs/en/legal-and-compliance) require. Or paste an API key; it is stored encrypted by your OS keychain.
 
-### Build an installer yourself
+**Updates** are automatic: when a new version is on GitHub, a blue banner offers **Update**, and the hub builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close the hub, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
 
-This project is published **as source only**: no installer is released, and nothing in the repository publishes one (`"publish": null`). The reason: an installer bundles the Claude Agent SDK's JavaScript, which is Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance), not under this project's MIT license. Building one for yourself is fine:
+Running several sessions at once uses your plan or API budget faster: keep an eye on the cost and limits in the status bar.
 
-```sh
-npm run dist        # installer for the current platform, in release/
-npm run dist:dir    # unpacked app only, quicker
-```
+## Before you start: safety
 
-On a Mac, `npm run dist` makes a `.dmg` and a `.zip` for Apple silicon and for Intel (a Mac build is made on a Mac). Your builds are not code-signed: Windows SmartScreen warns, and macOS Gatekeeper refuses a downloaded copy until you open it with right-click › Open (an app you built yourself opens directly). A built app does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` (on macOS and Linux, the `PATH` of your login shell, even when the app starts from the Finder or a launcher) or in `~/.local/bin`.
+Claude Hub gives AI agents your computer.
 
-On macOS, closing the window keeps the hub and its sessions running (the Dock icon brings it back); **Cmd+Q** quits, and asks first if sessions are at work.
+- **Sessions act as you.** They read and change files and run commands, within the permission mode you choose. Anything they read can try to steer them (prompt injection).
+- **A worker loads its repo's Claude Code setup** (`CLAUDE.md`, `.claude/settings.json` hooks, `.mcp.json`). Only send workers into repos you trust.
+- **Leaving your folders needs your yes.** A worker that would work outside your folders and followed repos waits for you, whatever the mode.
+- **"Allow everything" removes every approval**, including MCP confirmations before a `DROP` or `DELETE`. It is off unless you turn it on; use it only where you can afford to lose things.
+- **No telemetry.** The hub itself only talks to `api.anthropic.com` (to check a key), GitHub, and the git remotes you follow.
 
-## Updating
-
-A copy cloned from the official repository updates itself. A moment after it starts, then every 4 hours, the hub runs `git fetch` on `origin` (with your own git credentials, or the GitHub sign-in you gave the hub) and compares your `main` with `origin/main`. When there is a new version, a blue banner across the top of the window says so, with **Update**. **Settings › About** shows the same, with **Check for updates** (also in the commands, Ctrl+K / ⌘K).
-
-**Update** does everything: it gets the new version, moves your copy onto it, builds it and restarts the hub, whose sessions pick up where they were; the banner shows each step. If a session is at work, the banner asks first: **Update when they are done** (it installs by itself as soon as everything is quiet) or **Now** (the sessions are interrupted and pick up after the restart). **Later** (the cross) hides the banner until the next start or the next version.
-
-An update never touches work in progress:
-
-- it installs only on `main`, with no local modification (untracked files included), and only by a fast-forward (`git merge --ff-only`), with the repository's hooks switched off;
-- by itself, never while a session works (a turn, an approval, a background task, a subagent);
-- `npm ci` runs only when `package-lock.json` changed: the hub then closes for about a minute, a small helper run by your Node.js installs and builds, and opens the hub again (Electron and Claude Code cannot be replaced while the hub runs on Windows); otherwise everything happens inside the hub, which only restarts at the end;
-- if anything fails, the previous commit, dependencies and build are put back: the banner says what happened, with the details folded, and the previous version keeps running.
-
-**Settings › About › Install updates by themselves**: *When nothing is running* (the default: once no session works and you have left the hub alone for a few minutes, a 30-second countdown you can put off, then the restart), *At the next start* (installed when you close the hub), or *Never* (only when you click **Update**). The default keeps every copy current, which is the point of the updates, and a restart costs nothing: the sessions pick up.
-
-The hub leaves your copy as it is, and says why, when it has local modifications or commits that are not on GitHub (nothing is shown while `main` only has commits you have not pushed yet), when it is on another branch, when `origin` is not the official repository (`repository` in `package.json`: a fork or a changed remote updates by hand), or when it is a built app (`npm run dist`: build a new one from the latest source). Offline, or without access to the repository, it stays silent and tries again later.
-
-If the official history is ever rewritten and your copy holds nothing of its own, the banner offers **Realign with the official version**: after your confirmation, a branch `backup/pre-update-<date>` keeps your current commits, then the copy is reset onto `origin/main`.
-
-### First update after the history rewrite
-
-The official history was rewritten on 26 October 2026. A copy cloned before that day also predates the automatic updates: update it **once** by hand. This replaces your copy with the official version: **local modifications and local commits are lost**, so copy anything you want to keep first. Close the hub, then in the `claude-hub` folder, on the `main` branch:
-
-macOS (Terminal):
-
-```sh
-git fetch origin
-git reset --hard origin/main
-npm install
-npm start
-```
-
-Windows (PowerShell):
-
-```powershell
-git fetch origin
-git reset --hard origin/main
-npm install
-npm start
-```
-
-From then on, updates are automatic.
-
-## First run
-
-A short setup opens the first time, and every choice stays editable later in **Settings** (the gear at the top right of the master’s conversation):
-
-1. **General**: language.
-2. **Claude**: where the sessions get Claude from. The hub checks that Claude Code has access. If not, **Sign in with Claude Code** opens a terminal window running Claude Code's own sign-in (`claude auth login`): your browser shows Anthropic's page, and the step turns to *Ready* by itself once you are signed in. A built app without Claude Code offers **Install in a terminal** first (Anthropic's installer). Or choose an API key.
-3. **GitHub** (optional): connect so the git panel can fetch, pull and push without prompts. The best way available comes first (see [GitHub](#github)).
-4. **Workspace**: the folders that hold your repos. The master runs in the first one.
-5. **Repos**: the repos the git panel follows and the master knows best. Your local repos and, once GitHub is connected, your GitHub repos, with search. Nothing is picked for you; a repo that is only on GitHub is cloned into your first working folder.
-6. **Sessions**: permission mode, default models and effort, the models the master may pick for a mission, and your own instructions for the master (which repo a request is usually about, when to commit or deploy, how to report…).
-
-![First-run setup: the repos to follow](docs/screenshots/setup-repos.png)
-
-## Claude access and Anthropic's rules
-
-Claude Hub has **no Claude.ai sign-in of its own**, on purpose. Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) (section *Authentication and credential use*) says:
-
-> Anthropic does not permit third-party developers to offer Claude.ai login into their own applications, or to route requests through Free, Pro, or Max plan credentials on behalf of their users. Moreover, developers may not collect, store, or intermediate Claude.ai credentials or session tokens — sign-in to a Claude account must complete through Anthropic's own flow.
-
-and, right after:
-
-> Nor does it prevent an end user from signing in to the unmodified Claude Code binary with their own Claude subscription […]
-
-So the hub never shows a login form and never touches a credential. Its **Sign in with Claude Code** button only opens a terminal window running the unmodified Claude Code binary (`claude auth login`); you sign in there, through Anthropic's own flow in your browser, and Claude Code keeps the result in its own storage. The hub then only asks Claude Code whether it has access (`accountInfo`, no request to the API).
-
-| Choice | What the hub does |
-|---|---|
-| **Claude Code's own sign-in** | Nothing: it runs Claude Code, which uses whatever you set up in it (`claude auth login` or `/login`, Anthropic's own flow, or your environment). The hub never reads those credentials. |
-| **Anthropic API key** | Checks the key with Anthropic, stores it encrypted, passes it to the sessions as `ANTHROPIC_API_KEY`. Billed to your Console account. |
-
-![First-run setup: Claude access](docs/screenshots/setup-claude.png)
-
-Running several sessions at once uses your plan or your API budget faster: keep an eye on the cost and limits shown in the status bar.
-
-## GitHub
-
-All optional; the setup shows the best way available first:
-
-- **Sign in with GitHub** (OAuth device flow, one click): you type a short code on github.com. Only offered once a Client ID of a GitHub OAuth App is set (see below); none ships with this repository. The token is stored encrypted.
-- **GitHub CLI**: signed in, the hub lets `gh` answer git's credential requests (no token is copied). Installed but signed out, **Sign in with the GitHub CLI** opens a terminal window with `gh auth login --web`, and the hub connects by itself once you approved it in the browser. Not installed: a link to [cli.github.com](https://cli.github.com).
-- **Personal access token**: **Create a token on GitHub** opens the form with the `repo`, `read:org` and `workflow` scopes ticked (classic token); a fine-grained one with Contents: read and write works too.
-
-![First-run setup: GitHub](docs/screenshots/setup-github.png)
-
-The hub's own git commands get the sign-in through a credential helper set in their environment (`GIT_CONFIG_*`), never through your git config files. **Let the sessions use this account** (off by default) gives the sessions the same helper; with a token, they also receive it as `GH_TOKEN`, which a session can read. Left off, sessions use your own git setup (credential manager, `gh auth setup-git`, SSH keys).
-
-### Creating the OAuth App (for the device flow)
-
-If you build Claude Hub yourself, create your own OAuth App and paste its Client ID in **Settings › GitHub › Advanced** (or set `DEFAULT_CLIENT_ID` in `src/main/github.ts` for your builds):
-
-1. GitHub › **Settings** › **Developer settings** › **OAuth Apps** › **New OAuth App** (or [github.com/settings/applications/new](https://github.com/settings/applications/new)).
-2. **Application name**: anything (e.g. "Claude Hub"). **Homepage URL**: your repository URL. **Authorization callback URL**: required by the form but unused by the device flow; put your homepage URL.
-3. Tick **Enable Device Flow**, then **Register application**.
-4. Copy the **Client ID**. Do **not** create a client secret: the device flow does not use one.
-
-The hub asks for the `repo`, `read:org` and `workflow` scopes (push to your repos, list organization repos, push workflow files).
-
-## Where your data lives
-
-| | Windows | macOS | Linux |
-|---|---|---|---|
-| Settings, state, secrets | `%APPDATA%\claude-hub` | `~/Library/Application Support/claude-hub` | `~/.config/claude-hub` |
-
-- `config.json`: your settings (no secret). Settings of the first versions are migrated on the first start (your old file is kept as `config.legacy.json`, and a file already in the new format is never replaced by a migration); choose the repos to follow again in **Settings › Repos**.
-- `secrets.json`: the API key and GitHub token, encrypted with the OS keychain through Electron [safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage) (DPAPI, Keychain, libsecret/KWallet). On Linux without a keychain, the hub refuses to store secrets: set `ANTHROPIC_API_KEY` in your environment instead.
-- `state.json` and `attachments/`: the session list and the images you paste (deleted after 30 days). Conversations themselves are Claude Code's own transcripts, in `~/.claude/projects`.
-- `usage/`: one line per turn (time, session, model, cost and tokens), a file per month, read only when the cost popover opens.
-- `update/`: the last update's job, result and log (`helper.log`, no secret), and the build kept aside while one installs.
-
-## Security
-
-Claude Hub gives AI agents your computer. Read this before using it on anything that matters.
-
-- **Sessions act as you.** Every session can read and change files and run commands with your account's rights, within the permission mode you chose. Content the sessions read (a README, a web page, an issue, another worker's message) can try to steer them: that is prompt injection, and no prompt is a security boundary.
-- **A worker loads its repo's Claude Code configuration**, exactly like `claude` started in that folder: `CLAUDE.md`, `.claude/settings.json` (including hooks, which run commands) and `.mcp.json`. Only let workers into repos you trust, and read a repo you clone from someone else before starting a worker in it.
-- **Folders.** A post, or a worker the master starts, that would work outside your working folders and followed repos waits for your yes in the master's conversation, whatever the permission mode. The master never changes a post's permission mode.
-- **Permission modes.** The default is **Claude Code's own default** (auto mode where your account has it, otherwise it asks). **Ask** shows every approval in the conversation. Approvals and MCP confirmations of a worker appear in its conversation; the master cannot grant them for you.
-- **⚠ "Allow everything" (bypass) removes every approval**: sessions run any command, commit, push, deploy or SQL, and MCP servers' confirmations (before a `DROP` or `DELETE`, for instance) are accepted automatically. Use it only on a machine, accounts and repos you can afford to lose, and keep backups. It is never on unless you turn it on, after an explicit confirmation.
-- **The window is locked down**: sandboxed renderer with context isolation, strict Content-Security-Policy, sanitized Markdown, no navigation or pop-ups, and every message from the window to the hub is checked to come from its own page. Secrets never reach the window.
-- **What leaves your computer**: the sessions talk to Anthropic like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds, and on its own repository at start and every 4 hours (see [Updating](#updating)). No telemetry.
-- **Updates come only from the official repository**: the one `package.json` names (`repository`), compared with the URL git really fetches. A changed remote or a fork is never updated by itself. The install runs nothing from the repository but its own `npm ci` and `npm run build`; git runs with the repository's hooks switched off.
-
-Found a vulnerability? Please open a private security advisory on the repository rather than a public issue.
-
-## macOS
-
-The macOS code paths (login-shell `PATH`, Terminal for the sign-ins, app menu, window close and full screen, Keychain, worktrees under `/private` links, `.dmg`/`.zip` for both architectures) were reviewed but have **not run on a Mac yet**. Please go through this list once and report what fails (about 30 minutes, nothing here touches your real settings):
-
-1. **Start from a fresh clone**: `npm install`, then `npm start -- --user-data-dir="$HOME/claude-hub-test"`. The window opens; its three buttons sit at the left, centred in the title bar, clear of the logo; dragging the title bar moves the window.
-2. **Claude, signed in**: the Claude step says *Ready* with your account.
-3. **Claude, signed out**: quit, then `CLAUDE_CONFIG_DIR="$(mktemp -d)" npm start -- --user-data-dir="$HOME/claude-hub-test2"`. **Sign in with Claude Code** opens Terminal with Claude Code's sign-in; once you signed in in the browser, the step turns to *Ready* by itself within a few seconds.
-4. **GitHub CLI signed out**: with `GH_CONFIG_DIR="$(mktemp -d)"` added to the line above, **Sign in with the GitHub CLI** opens Terminal with `gh auth login`; once approved, the step says *Connected* by itself. Without `gh` installed, the token comes first, with **Create a token on GitHub**.
-5. **From the Finder**: `npm run dist:dir`, then open `release/mac-arm64/Claude Hub.app` (`release/mac/` on Intel) by double-clicking. Claude Code, `gh` and `git` are still found (the hub reads your login shell's `PATH`: Homebrew, nvm…).
-6. **Keychain**: save a token or an API key: macOS asks once for the keychain (*Always Allow*); after a restart it is still there. `npm start` and the built app use different keychain entries: a secret saved in one must be entered again in the other.
-7. **Keyboard**: ⌘K opens the commands, ⌘1…9 switch sessions, ⌘, opens the settings, ⌘⇧G folds the git panel; ⌘C, ⌘V, ⌘A and ⌘Z work in every text field; the hints show ⌘, not Ctrl.
-8. **Window**: ⌘W hides the window and the Dock icon brings it back; ⌘M then the Dock icon restores it; in full screen, ⌘W leaves no black Space; ⌘Q while a session works asks first.
-9. **Worktrees**: in a test repo with a remote under your home folder, create a post (Settings › Team), then ask the master for a reinforcement of it on a small task that pushes its branch. A sibling folder `<repo>-<post>-<topic>` appears; after the worker closes, the folder and its local branch are gone (the branch stays on the remote). Do it once more with a repo under `/tmp` (a link to `/private/tmp`).
-10. **Git panel**: fetch, pull, push and commit on a test repo; a rejected push is explained in words.
-11. **Privacy prompts**: when the hub first scans Desktop or Documents, macOS may ask for access; refusing only hides those repos.
-12. **Packaged**: `npm run dist` writes a `.dmg` and a `.zip` for `arm64` and `x64` in `release/`; the app opens.
-13. **Updates**: after the [first update by hand](#first-update-after-the-history-rewrite), **Settings › About** says *up to date*. When the next commit reaches GitHub, **Check for updates** (⌘K) shows the blue banner; **Update** shows its steps, then the hub opens again on the new version with its conversations, and the banner says it was updated. When an update changes `package-lock.json`, the hub closes for about a minute and opens again by itself; `~/Library/Application Support/claude-hub/update/helper.log` ends with `done: installed`.
+Found a vulnerability? Please open a private security advisory rather than a public issue.
 
 ## Development
 
 ```sh
 npm run typecheck   # TypeScript
-npm test            # unit tests (src/**/*.test.ts)
+npm test            # unit tests
 npm run build       # bundles into dist/
-npm start           # build + run (add -- --user-data-dir=<folder> for a separate profile)
+npm start -- --user-data-dir=<folder>   # run with a separate profile
 ```
 
-The code: `src/main` (Electron main process: sessions, hub tools, settings, GitHub, git), `src/preload` (the bridge the window uses), `src/renderer` (DOM, no framework), `src/shared` (types and i18n helpers). Strings live in `src/main/i18n.ts`, `src/renderer/i18n.ts` and the prompts in `src/main/prompts.ts`.
-
-**Renaming the app** takes three places: `APP_NAME` (and `LOGO`) in `src/shared/brand.ts`, `build.productName` in `package.json`, and the images in `assets/` (`icon.ico`, `icon.png` at 512×512, `logo.png`). Keep `build.appId` and `APP_ID`: the settings folder and the Windows taskbar identity do not depend on the name. On macOS, the keychain entry that protects the stored secrets follows the app's name: after a rename, enter the API key and GitHub sign-in again.
+`npm run dist` builds an installer for your platform (not signed, and not published: it would bundle Anthropic's Agent SDK, which is under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance)). A built app finds the Claude Code you install yourself. macOS is reviewed but not yet tested on a real Mac: reports are welcome.
 
 ## License
 
-[MIT](LICENSE). The code the app bundles (three.js, marked, DOMPurify, and the commit graph ported from [Visual Studio Code](https://github.com/microsoft/vscode)) is listed with its licenses in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (`npm run notices` rewrites it). The Claude Agent SDK and Claude Code are Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); they are installed from npm or by you, not shipped in this repository.
+[MIT](LICENSE). Bundled third-party code (three.js, marked, DOMPurify, the commit graph from VS Code) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The Claude Agent SDK and Claude Code are Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); they are installed from npm or by you, not shipped in this repository.
