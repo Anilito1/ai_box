@@ -87,7 +87,12 @@ const en = {
   'tool.spawn.mission':
     'Complete, self-contained brief: goal, context, constraints, deliverable, done criteria, rights (commit/push/deploy). The worker does not see your conversation.',
   'tool.spawn.cwd': 'Absolute root of the folder concerned (see list_repos; default: {cwd})',
-  'tool.model': 'Model of this mission, one of the allowed ones (see your rules on models and effort). Left out: the usual one, or the previous one for a permanent worker',
+  'tool.model': "Model of this mission, one of the allowed ones (see your rules on models and effort); with provider, a model of that provider (see the providers in your rules). Left out: the usual one, or the previous one for a permanent worker",
+  'tool.provider':
+    "Provider the worker runs on: one of {list}. Name only the provider (\"deepseek\", \"openai\"): the hub finds its connected account, and refuses a provider that is not connected. Left out: the post's provider, else the workers' usual one. Given to message_worker, the worker restarts on it with its conversation. Pair it with model, a model of that provider.",
+  'provider.off': 'not connected',
+  'provider.notConnected': '{name} is not connected: the user connects it in Settings › Accounts. Providers: {list}.',
+  'provider.unknown': 'Unknown provider "{name}". Providers: {list}.',
   'tool.effort': 'Effort of this mission: low, medium, high, xhigh, max (capped at the highest effort allowed). Left out: the usual one, or the previous one for a permanent worker',
   'tool.message':
     "Writes to a worker: instruction, answer to its question, go-ahead for commit/push/deploy. It receives it as an instruction from the user. A closed worker is restarted, a permanent one woken, with its whole conversation; a working one reads it at the end of its current step. To a permanent worker with nothing in progress, the message is its new mission: give model and effort when its post is in auto.",
@@ -469,7 +474,12 @@ const fr: Record<Key, string> = {
   'tool.spawn.mission':
     'Brief complet et autonome : objectif, contexte, contraintes, livrable, critère de fin, droits (commit/push/deploy). Le worker ne voit pas ta conversation.',
   'tool.spawn.cwd': 'Racine absolue du dossier concerné (voir list_repos ; défaut : {cwd})',
-  'tool.model': "Modèle de cette mission, parmi les modèles autorisés (voir tes règles sur les modèles et l'effort). Omis : le modèle habituel, ou le précédent pour un permanent",
+  'tool.model': "Modèle de cette mission, parmi les modèles autorisés (voir tes règles sur les modèles et l'effort) ; avec provider, un modèle de ce fournisseur (voir les fournisseurs dans tes règles). Omis : le modèle habituel, ou le précédent pour un permanent",
+  'tool.provider':
+    "Fournisseur sur lequel le worker tourne : parmi {list}. Donne seulement le fournisseur (\"deepseek\", \"openai\") : le hub trouve son compte connecté, et refuse un fournisseur non connecté. Omis : le fournisseur de son poste, sinon celui des workers. Passé à message_worker, le worker redémarre dessus avec sa conversation. À associer à model, un modèle de ce fournisseur.",
+  'provider.off': 'non connecté',
+  'provider.notConnected': "{name} n'est pas connecté : l'utilisateur le connecte dans Réglages › Comptes. Fournisseurs : {list}.",
+  'provider.unknown': 'Fournisseur inconnu « {name} ». Fournisseurs : {list}.',
   'tool.effort': "Effort de cette mission : low, medium, high, xhigh, max (plafonné à l'effort maximal autorisé). Omis : l'effort habituel, ou le précédent pour un permanent",
   'tool.message':
     "Écrit à un worker : consigne, réponse à sa question, go pour commit/push/deploy. Il le reçoit comme une consigne de l'utilisateur. Un worker fermé est relancé, un permanent réveillé, avec toute sa conversation ; un worker au travail le lit à la fin de son étape en cours. Pour un permanent sans travail en cours, le message est sa nouvelle mission : donne modèle et effort quand son poste est en auto.",

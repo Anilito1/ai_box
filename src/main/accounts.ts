@@ -104,6 +104,8 @@ export interface AccountEnvContext {
   key: string;
   /** The bridge's address for this account and its token. */
   bridge: { url: string; token: string };
+  /** The model a session picked among the account's (an OpenAI account's sessions each run their own). */
+  model?: string;
 }
 
 /** The environment that puts a session on an extra account: what to add, and what of the user's own to remove. */
@@ -141,15 +143,16 @@ export function accountEnv(account: Account, ctx: AccountEnvContext): { set: Rec
       };
     }
     case 'openai': {
-      // Every Claude model name lands on the account's models (the bridge maps the rest the same way).
-      const small = account.smallModel || account.model;
+      // Every Claude model name lands on the session's model, else the account's (the bridge maps the rest the same way).
+      const model = ctx.model || account.model;
+      const small = ctx.model ? model : account.smallModel || account.model;
       return {
         set: {
           ANTHROPIC_BASE_URL: ctx.bridge.url,
           ANTHROPIC_AUTH_TOKEN: ctx.bridge.token,
-          ANTHROPIC_MODEL: account.model,
-          ANTHROPIC_DEFAULT_OPUS_MODEL: account.model,
-          ANTHROPIC_DEFAULT_SONNET_MODEL: account.model,
+          ANTHROPIC_MODEL: model,
+          ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+          ANTHROPIC_DEFAULT_SONNET_MODEL: model,
           ANTHROPIC_DEFAULT_HAIKU_MODEL: small,
           ANTHROPIC_SMALL_FAST_MODEL: small,
         },

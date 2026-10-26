@@ -19,6 +19,9 @@ test('pickModel: the account decides, Claude Code small calls go to the small mo
   assert.equal(pickModel('claude-haiku-4-5-20251001', target), 'gpt-5-mini');
   assert.equal(pickModel('claude-haiku-4-5', { model: 'gpt-5', smallModel: '' }), 'gpt-5');
   assert.equal(pickModel(undefined, target), 'gpt-5');
+  assert.equal(pickModel('gpt-4.1', target), 'gpt-4.1', 'a model of the server picked for the session goes as asked');
+  assert.equal(pickModel('default', target), 'gpt-5');
+  assert.equal(pickModel('claude-sonnet-5', target), 'gpt-5');
 });
 
 test('reasoningOf: effort and thinking budget', () => {

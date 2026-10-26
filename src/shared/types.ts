@@ -14,6 +14,7 @@ export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
 export type HarnessId = 'claude' | 'codex';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 import type { FallbackConfig } from './fallback';
+import type { ProviderId, ProviderMethod } from './providers';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk';
 
 /** Image formats the Messages API accepts. */
@@ -106,6 +107,8 @@ export interface AccountBadge {
   id: string;
   name: string;
   kind: AccountKind | 'default';
+  /** The provider block it belongs to, empty for an older account none of them stands for. */
+  provider: ProviderId | '';
   /** Epoch seconds when the account's limit ends, while it is limited. */
   limitedUntil: number | null;
   /** Its sessions run the account's own model: the model menu has nothing to pick. */
@@ -385,6 +388,47 @@ export interface HubSnapshot {
   topics: Topic[];
   /** The accounts a session can be switched to, "default" first. */
   accounts: AccountBadge[];
+  /** The providers, connected or not, with the models of each. */
+  providers: ProviderBadge[];
+}
+
+/** What the composer and the post editor show of a provider. */
+export interface ProviderBadge {
+  id: ProviderId;
+  label: string;
+  connected: boolean;
+  /** The account its sessions run on ("default" for Anthropic), empty when not connected. */
+  accountId: string;
+  models: ModelOption[];
+}
+
+/** One way of connecting a provider, as its block in Settings › Accounts shows it. */
+export interface MethodView {
+  connected: boolean;
+  /** Who it is signed in as, or what the key is. */
+  detail: string;
+  /** An error code (see the settings' errorText), empty when fine. */
+  error: string;
+}
+
+/** What a provider action answers: done or why not, and the blocks as they are now. */
+export interface ProviderResult {
+  ok: boolean;
+  error: string;
+  field: string;
+  views: ProviderView[];
+}
+
+/** A provider's block in Settings › Accounts. */
+export interface ProviderView {
+  id: ProviderId;
+  label: string;
+  connected: boolean;
+  /** The method that is connected (the first when several are), else empty. */
+  method: ProviderMethod | '';
+  methods: Partial<Record<ProviderMethod, MethodView>>;
+  /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
+  cli: { found: boolean; version: string; outdated: boolean } | null;
 }
 
 /**
@@ -592,6 +636,8 @@ export interface HubApi {
   setMode(id: string, mode: Mode): void;
   /** Moves a session to another account (an id, "default"); it restarts on it with its conversation. */
   setAccount(id: string, account: string): void;
+  /** Puts a session on a provider (anthropic, openai, deepseek): it moves to the account behind it, if connected. */
+  setProvider(id: string, provider: string): void;
   decide(id: string, requestId: string, decision: PermissionDecision): void;
   stop(id: string): void;
   resume(id: string): void;
@@ -604,6 +650,13 @@ export interface HubApi {
   checkClaude(): Promise<ClaudeStatus>;
   /** The Codex program on this computer: found or not, its version, and whether the hub knows that version. */
   checkCodex(): Promise<CodexCli>;
+  /** The providers' blocks in Settings › Accounts, checked now. */
+  providers(): Promise<ProviderView[]>;
+  /** Connects a provider with an API key (checked with its service, kept in the keychain). */
+  connectProvider(provider: ProviderId, method: ProviderMethod, key: string): Promise<ProviderResult>;
+  /** Opens the program's own sign-in in a terminal window; false when none could open. */
+  loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean>;
+  disconnectProvider(provider: ProviderId, method: ProviderMethod): Promise<ProviderResult>;
   /**
    * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
    * '' to remove it. A key is checked with its service first; `field` names the field refused.

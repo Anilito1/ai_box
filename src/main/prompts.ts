@@ -1,3 +1,4 @@
+import { providerOfAccount } from '../shared/providers';
 import { APP_NAME } from '../shared/brand';
 import type { Lang } from '../shared/i18n';
 import { modelGrid, sessionNameOf, type Tier } from '../shared/team';
@@ -17,6 +18,16 @@ export const defaultMasterName = (l: Lang = lang()) => (l === 'fr' ? 'hub-maitre
 let activeMaster = '';
 /** The running master keeps its name across language changes: workers must address the session that exists. */
 export const setMasterName = (name: string) => (activeMaster = name);
+
+/** A provider as the master reads it: connected or not, and the models it may ask for. */
+export interface ProviderLine {
+  id: string;
+  label: string;
+  connected: boolean;
+  models: string[];
+}
+let providerLines: ProviderLine[] = [];
+export const setProviderLines = (lines: ProviderLine[]) => (providerLines = lines);
 /** The master's session name: workers address it with SendMessage. */
 export const masterName = () => activeMaster || defaultMasterName();
 
@@ -65,17 +76,31 @@ export const rosterKey = (cfg: HubConfig) =>
     cfg.parallel,
     cfg.accounts.map((a) => [a.name, a.kind, a.model]),
     cfg.workerAccount,
+    providerLines,
   ]);
+
+/** The providers, which are connected and what models each has: how the master puts a worker on one. */
+function providersText(l: Lang): string {
+  if (providerLines.length === 0) return '';
+  const list = providerLines
+    .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${p.models.join(', ') || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
+    .join(' ; ');
+  return l === 'fr'
+    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (anthropic, openai ou deepseek) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
+    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (anthropic, openai or deepseek) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
+}
 
 /** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
 function accountsText(cfg: HubConfig, l: Lang): string {
-  if (cfg.accounts.length === 0) return '';
+  // The accounts of the providers are the providers' business (above): only an older, hand-made one is named here.
+  const own = cfg.accounts.filter((a) => providerOfAccount(a) === null);
+  if (own.length === 0) return '';
   const kinds = {
     fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible', 'anthropic-compatible': 'compatible Anthropic', codex: 'Codex (ChatGPT)' },
     en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible', 'anthropic-compatible': 'Anthropic-compatible', codex: 'Codex (ChatGPT)' },
   }[l];
   const usual = cfg.accounts.find((a) => a.id === cfg.workerAccount)?.name ?? 'default';
-  const list = cfg.accounts.map((a) => `${a.name} (${kinds[a.kind]}${a.model ? ` · ${a.model}` : ''})`).join(', ');
+  const list = own.map((a) => `${a.name} (${kinds[a.kind]}${a.model ? ` · ${a.model}` : ''})`).join(', ');
   return l === 'fr'
     ? ` Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle ; un compte Codex (ChatGPT) tourne sur les modèles de Codex : omets model pour son modèle par défaut.`
     : ` Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model; a Codex (ChatGPT) account runs on Codex's models: leave model out for its default.`;
@@ -84,7 +109,7 @@ function accountsText(cfg: HubConfig, l: Lang): string {
 const allowedText = (cfg: HubConfig, l: Lang) =>
   (l === 'fr'
     ? `Modèles autorisés : ${cfg.workerModels.join(', ')} ; effort maximal : ${cfg.workerMaxEffort}. En parallèle : ${cfg.parallel.perPost} instances par poste au plus, ${cfg.parallel.maxWorkers} workers actifs en tout.`
-    : `Allowed models: ${cfg.workerModels.join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`) + accountsText(cfg, l);
+    : `Allowed models: ${cfg.workerModels.join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`) + providersText(l) + accountsText(cfg, l);
 
 /** Added to the next message the master gets once the user changed the team or the allowed models. */
 export function rosterBlock(cfg: HubConfig, l: Lang = lang()): string {

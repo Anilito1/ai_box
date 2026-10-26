@@ -62,7 +62,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, rateLimits: null, topics: [], accounts: [] };
+let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, rateLimits: null, topics: [], accounts: [], providers: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 

@@ -16,8 +16,9 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
-import { checkAccount, isAccountRef, isLocalUrl, normalizeAccount } from '../shared/accounts';
+import { checkAccount, isAccountRef, isLocalUrl, normalizeAccount, OPENAI_URL } from '../shared/accounts';
 import { APP_ID } from '../shared/brand';
+import { DEEPSEEK_URL, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
 import {
   APP_NAME,
@@ -25,9 +26,12 @@ import {
   base64Bytes,
   EFFORTS,
   IMAGE_TYPES,
+  type Account,
   type AccountStatus,
   type ChatItem,
   type CodexCli,
+  type MethodView,
+  type ProviderView,
   type Effort,
   type FoundRepo,
   type HubEventKind,
@@ -258,7 +262,7 @@ class Hub {
       executable: () => this.executable,
       codexExecutable: () => this.codex,
       mcpHub: this.mcpHub,
-      sessionEnv: (account) => this.sessionEnv(account),
+      sessionEnv: (account, model) => this.sessionEnv(account, model),
       persist: () => this.save(),
       costLog: this.costLog,
     });
@@ -300,18 +304,152 @@ class Hub {
    * The access of a session's account (the Claude access chosen in the settings for "default"), plus the GitHub
    * sign-in when the user shares it with the sessions.
    */
-  sessionEnv(account: string): { set: Record<string, string>; unset: string[] } {
+  sessionEnv(account: string, model?: string): { set: Record<string, string>; unset: string[] } {
     const github = this.cfg.github.shareWithSessions ? githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh) : {};
     const extra = this.cfg.accounts.find((a) => a.id === account);
     const access = extra
-      ? accountEnv(extra, { dataDir: this.dataDir, key: this.secrets.get(`account:${extra.id}`), bridge: { url: this.bridge.url(extra.id), token: this.bridge.token() } })
+      ? accountEnv(extra, { dataDir: this.dataDir, key: this.secrets.get(`account:${extra.id}`), bridge: { url: this.bridge.url(extra.id), token: this.bridge.token() }, model })
       : claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
     return { set: { ...access.set, ...github }, unset: access.unset };
   }
 
-  /** Models and limits of the Codex accounts, asked once in the background so the menus have them. */
-  warmCatalogs(): void {
-    for (const a of this.cfg.accounts) if (a.kind === 'codex') void this.checkAccount(a.id).catch(() => undefined);
+  /** Which providers are connected, with their models and limits: asked once in the background, then now and then. */
+  warmProviders(): void {
+    void this.providerViews().catch(() => undefined);
+    setInterval(() => void this.providerViews().catch(() => undefined), 10 * 60_000).unref();
+  }
+
+  /** The account the hub made for a provider's way of connecting, if there is one. */
+  private managed(provider: ProviderId, method: ProviderMethod): Account | undefined {
+    const accounts = this.cfg.accounts;
+    if (provider === 'openai') return method === 'chatgpt' ? accounts.find((a) => a.kind === 'codex') : accounts.find((a) => a.kind === 'openai' && providerOfAccount(a) === 'openai');
+    if (provider === 'deepseek') return accounts.find((a) => a.kind === 'anthropic-compatible' && providerOfAccount(a) === 'deepseek');
+    return undefined;
+  }
+
+  /**
+   * The state of every provider's block, checked now (the programs are asked who is signed in, the servers whether
+   * the key works), and handed to the session manager: the composer, the roster and the master's tools follow it.
+   */
+  async providerViews(): Promise<ProviderView[]> {
+    const method = async (account: Account | undefined, keyDetail = false): Promise<MethodView> => {
+      if (!account) return { connected: false, detail: '', error: '' };
+      const st = await this.checkAccount(account.id);
+      const noSignIn = account.kind === 'codex' && !st.ready && !st.error;
+      return { connected: st.ready, detail: keyDetail && st.ready ? '' : st.detail, error: noSignIn ? '' : st.error };
+    };
+    this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+    const [claude, codexVersionText, chatgpt, apikey, deepseek] = await Promise.all([
+      claudeStatus(this.cfg, this.mgr.environment()),
+      codexVersion(this.codex, this.mgr.toolEnv()),
+      method(this.managed('openai', 'chatgpt')),
+      method(this.managed('openai', 'apikey'), true),
+      method(this.managed('deepseek', 'apikey'), true),
+    ]);
+    this.executable = claude.executable || this.executable;
+    const who = claude.status.account;
+    const anthropic: MethodView = {
+      connected: !!who?.ready,
+      detail: who ? (who.provider === 'cloud' ? 'Cloud' : [who.email, who.plan].filter(Boolean).join(' · ') || who.source) : '',
+      error: !claude.executable ? 'no-claude' : who ? '' : claude.status.error === 'timeout' ? 'timeout' : claude.status.error ? 'probe-failed' : '',
+    };
+    const views: ProviderView[] = [
+      { id: 'anthropic', label: providerDef('anthropic').label, connected: anthropic.connected, method: anthropic.connected ? 'cli' : '', methods: { cli: anthropic }, cli: { found: claude.executable !== '', version: '', outdated: false } },
+      {
+        id: 'openai',
+        label: providerDef('openai').label,
+        connected: chatgpt.connected || apikey.connected,
+        method: chatgpt.connected ? 'chatgpt' : apikey.connected ? 'apikey' : '',
+        methods: { chatgpt, apikey },
+        cli: { found: this.codex !== '', version: codexVersionText, outdated: codexVersionText !== '' && !versionAtLeast(codexVersionText, CODEX_MIN_VERSION) },
+      },
+      { id: 'deepseek', label: providerDef('deepseek').label, connected: deepseek.connected, method: deepseek.connected ? 'apikey' : '', methods: { apikey: deepseek }, cli: null },
+    ];
+    const states: Partial<Record<ProviderId, ProviderState>> = {
+      anthropic: { connected: anthropic.connected, accountId: 'default', method: anthropic.connected ? 'cli' : '' },
+      openai: chatgpt.connected
+        ? { connected: true, accountId: this.managed('openai', 'chatgpt')?.id ?? '', method: 'chatgpt' }
+        : apikey.connected
+          ? { connected: true, accountId: this.managed('openai', 'apikey')?.id ?? '', method: 'apikey' }
+          : { connected: false, accountId: '', method: '' },
+      deepseek: deepseek.connected ? { connected: true, accountId: this.managed('deepseek', 'apikey')?.id ?? '', method: 'apikey' } : { connected: false, accountId: '', method: '' },
+    };
+    this.mgr.setProviderStates(states);
+    return views;
+  }
+
+  /** Connects a provider with an API key: the key is checked with its service, then kept in the keychain. */
+  async connectProvider(provider: ProviderId, method: ProviderMethod, key: unknown) {
+    const out = async (r: { ok: boolean; error: string; field: string }) => ({ ...r, views: await this.providerViews() });
+    const typed = isStr(key) ? key.trim() : '';
+    if (method !== 'apikey' || (provider !== 'deepseek' && provider !== 'openai')) return out({ ok: false, error: 'unsupported', field: '' });
+    if (!typed) return out({ ok: false, error: 'required', field: 'key' });
+    if (!isOpenAIKey(typed)) return out({ ok: false, error: 'format', field: 'key' });
+    if (provider === 'deepseek') {
+      // The Anthropic-style address has no model list: the key is checked against DeepSeek's own.
+      const st = await checkOpenAI('https://api.deepseek.com', typed);
+      if (!st.ready) return out({ ok: false, error: st.error, field: 'key' });
+      const existing = this.managed('deepseek', 'apikey');
+      const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'anthropic-compatible', name: MANAGED_NAMES.deepseek, baseUrl: DEEPSEEK_URL, model: '', smallModel: '', isolated: false }, typed);
+      return out({ ok: r.ok, error: r.error, field: r.field === 'baseUrl' ? 'key' : r.field });
+    }
+    const st = await checkOpenAI(OPENAI_URL, typed);
+    if (!st.ready) return out({ ok: false, error: st.error, field: 'key' });
+    const model = pickOpenAIModel(st.models);
+    if (!model) return out({ ok: false, error: 'no-model', field: 'key' });
+    const existing = this.managed('openai', 'apikey');
+    const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'openai', name: MANAGED_NAMES.openaiKey, baseUrl: OPENAI_URL, model: existing?.model || model, smallModel: '', isolated: false }, typed);
+    return out({ ok: r.ok, error: r.error, field: r.field === 'baseUrl' || r.field === 'model' ? 'key' : r.field });
+  }
+
+  /** Opens the program's own sign-in in a terminal window (Claude Code, Codex): the user signs in there, never here. */
+  async loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean> {
+    if (provider === 'anthropic') {
+      const exe = await claudeExecutable(this.cfg);
+      return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, this.mgr.toolEnv());
+    }
+    if (provider === 'openai' && method === 'chatgpt') {
+      let account = this.managed('openai', 'chatgpt');
+      if (!account) {
+        // The account the hub keeps for it, in a Codex folder of its own (no MCP servers of the user's, its own sign-in).
+        const r = await this.saveAccount({ id: '', kind: 'codex', name: MANAGED_NAMES.chatgpt, baseUrl: '', model: '', smallModel: '', isolated: true }, null);
+        account = this.cfg.accounts.find((a) => a.id === r.id);
+      }
+      return account ? this.loginAccount(account.id) : false;
+    }
+    return false;
+  }
+
+  /** Signs a provider out and forgets what the hub kept for it. Claude Code's own sign-out ends it for the terminal too. */
+  async disconnectProvider(provider: ProviderId, method: ProviderMethod) {
+    const out = async (r: { ok: boolean; error: string }) => ({ ...r, field: '', views: await this.providerViews() });
+    if (provider === 'anthropic') {
+      await claudeLogout(await claudeExecutable(this.cfg), this.mgr.environment());
+      return out({ ok: true, error: '' });
+    }
+    const account = this.managed(provider, method);
+    if (!account) return out({ ok: true, error: '' });
+    const r = await this.deleteAccount(account.id);
+    return out({ ok: r.ok, error: r.error });
+  }
+
+  /** The sign-in of an account that has one (Codex, a Claude account), in a terminal window. */
+  private async loginAccount(id: string): Promise<boolean> {
+    const c = this.cfg.accounts.find((x) => x.id === id && x.kind === 'codex');
+    if (c) {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      if (!this.codex) return false;
+      const set = this.mgr.environment(c.id);
+      if (c.isolated) prepareCodexDir(accountDir(this.dataDir, c.id));
+      // Codex's own sign-in (a browser opens): the user signs in there, through OpenAI's own flow.
+      return openTerminal({ title: `Codex · ${c.name}`, file: this.codex, args: ['login'], ...(c.isolated ? { env: { CODEX_HOME: accountDir(this.dataDir, c.id) } } : {}) }, set);
+    }
+    const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'claude');
+    const exe = a ? await claudeExecutable(this.cfg) : '';
+    if (!a || !exe) return false;
+    const dir = accountDir(this.dataDir, a.id);
+    prepareClaudeDir(dir);
+    return openTerminal({ title: `Claude Code · ${a.name}`, file: exe, args: ['auth', 'login'], env: { CLAUDE_CONFIG_DIR: dir } }, this.mgr.environment(a.id));
   }
 
   /** An account checked now: signed in or not, with what. */
@@ -339,7 +477,11 @@ class Hub {
       const refused = await checkApiKey(key);
       return refused ? { ...none, error: refused } : { ...none, ready: true, detail: `sk-ant-…${key.slice(-4)}` };
     }
-    const status = a.kind === 'anthropic-compatible' ? await checkAnthropicCompatible(a.baseUrl, key) : await checkOpenAI(a.baseUrl, key);
+    // DeepSeek's Anthropic-style address has no model list: its key is asked against DeepSeek's own.
+    const deepseek = providerOfAccount(a) === 'deepseek';
+    const status = deepseek ? await checkOpenAI('https://api.deepseek.com', key) : a.kind === 'anthropic-compatible' ? await checkAnthropicCompatible(a.baseUrl, key) : await checkOpenAI(a.baseUrl, key);
+    // OpenAI's own list: each session picks among its chat models.
+    if (a.kind === 'openai' && status.ready) this.mgr.setCatalog(a.id, chatModels(status.models).map((value) => ({ value, displayName: value, description: '', efforts: [] })));
     return { ...status, detail: [hostOf(a.baseUrl), a.model, status.detail === 'unchecked' ? 'unchecked' : ''].filter(Boolean).join(' · ') };
   }
 
@@ -588,23 +730,23 @@ class Hub {
       const version = await codexVersion(this.codex, mgr.toolEnv());
       return { found: this.codex !== '', version, outdated: version !== '' && !versionAtLeast(version, CODEX_MIN_VERSION) };
     });
-    handle('accounts:login', async (id) => {
-      const c = this.cfg.accounts.find((x) => x.id === id && x.kind === 'codex');
-      if (c) {
-        this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
-        if (!this.codex) return false;
-        const set = this.mgr.environment(c.id);
-        if (c.isolated) prepareCodexDir(accountDir(this.dataDir, c.id));
-        // Codex's own sign-in (a browser opens): the user signs in there, through OpenAI's own flow.
-        return openTerminal({ title: `Codex · ${c.name}`, file: this.codex, args: ['login'], ...(c.isolated ? { env: { CODEX_HOME: accountDir(this.dataDir, c.id) } } : {}) }, set);
-      }
-      const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'claude');
-      const exe = a ? await claudeExecutable(this.cfg) : '';
-      if (!a || !exe) return false;
-      const dir = accountDir(this.dataDir, a.id);
-      prepareClaudeDir(dir);
-      return openTerminal({ title: `Claude Code · ${a.name}`, file: exe, args: ['auth', 'login'], env: { CLAUDE_CONFIG_DIR: dir } }, mgr.environment(a.id));
+    handle('accounts:login', (id) => (isStr(id) ? this.loginAccount(id) : false));
+    // The providers' blocks in Settings › Accounts.
+    const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'apikey' ? v : null);
+    handle('providers:state', () => this.providerViews());
+    handle('providers:connect', (provider, method, key) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.connectProvider(provider, m, key) : { ok: false, error: 'unsupported', field: '', views: [] };
     });
+    handle('providers:login', (provider, method) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.loginProvider(provider, m) : false;
+    });
+    handle('providers:disconnect', (provider, method) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.disconnectProvider(provider, m) : { ok: false, error: 'unsupported', field: '', views: [] };
+    });
+    on('session:provider', (id, provider) => isStr(id) && isProviderId(provider) && mgr.setProvider(id, provider));
     handle('github:gh-status', async () => {
       const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
       return { installed: gh !== '', login };
@@ -755,7 +897,7 @@ async function start(): Promise<void> {
   }
   const hub = new Hub();
   await hub.init();
-  hub.warmCatalogs();
+  hub.warmProviders();
   const mgr = hub.mgr;
   manager = mgr;
   bridge = hub.bridge;

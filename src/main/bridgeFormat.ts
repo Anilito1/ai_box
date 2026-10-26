@@ -48,6 +48,8 @@ export function pickModel(requested: unknown, target: Pick<Target, 'model' | 'sm
   const r = str(requested);
   if (r && (r === target.model || r === target.smallModel)) return r;
   if (/haiku/i.test(r) && target.smallModel) return target.smallModel;
+  // A model of the server itself, picked for the session (gpt-5…): as asked. Claude's names land on the account's.
+  if (r && !/^(claude|default$)|opus|sonnet|haiku|fable/i.test(r)) return r;
   return target.model;
 }
 

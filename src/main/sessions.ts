@@ -9,6 +9,7 @@ import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/pa
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, pinsModel, runsClaude } from '../shared/accounts';
+import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff } from '../shared/passation';
 import {
@@ -36,6 +37,7 @@ import {
   type Metrics,
   type Mode,
   type ModelOption,
+  type ProviderBadge,
   type PermissionDecision,
   type RateLimits,
   type Role,
@@ -60,6 +62,7 @@ import {
   rosterBlock,
   rosterKey,
   setMasterName,
+  setProviderLines,
   tags,
   workerPrompt,
   type InstanceInfo,
@@ -243,7 +246,7 @@ export interface ManagerOptions {
   /** Where the hub's tools are served to programs that reach them over HTTP. */
   mcpHub: McpHub;
   /** Variables added to (set) or removed from (unset) the environment of a session on this account: its access, GitHub. */
-  sessionEnv(account: string): { set: Record<string, string>; unset: string[] };
+  sessionEnv(account: string, model?: string): { set: Record<string, string>; unset: string[] };
   /** Writes the settings: the master's tools change the team. */
   persist(): void;
   /** Where each turn's cost goes. */
@@ -379,6 +382,8 @@ export class SessionManager extends EventEmitter {
   /** Plan limits by account, and when each was last asked. */
   private readonly rateLimits = new Map<string, RateLimits>();
   private readonly usageCheckedAt = new Map<string, number>();
+  /** Which providers are connected, as the main process last checked them. */
+  private providerStates: Partial<Record<ProviderId, ProviderState>> = {};
   /** Accounts that reached a limit, and until when. */
   private readonly cooldowns = new Cooldowns();
   private reposCache: { at: number; text: string } | null = null;
@@ -668,7 +673,56 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userAccount = account !== '';
     // Moved by hand (or by the master): it is no longer "away" from anywhere.
     Object.assign(s, { home: null, fallbackPending: null, fallbackModel: '', backNote: '' });
+    // A model the new account does not have (Claude's on Codex) is dropped; the account's own default applies.
+    if (s.fixedModel && !this.modelFits(this.accountOf(s), s.fixedModel)) Object.assign(s, { fixedModel: '', model: '', modelLabel: '', userModel: false });
     return this.applyAccount(s);
+  }
+
+  // ---------- providers ----------
+
+  /** The providers' connection, as the main process checked it: the composer, the roster and the tools follow. */
+  setProviderStates(states: Partial<Record<ProviderId, ProviderState>>): void {
+    this.providerStates = states;
+    this.syncProviderLines();
+    this.changed();
+  }
+
+  /** The master reads which providers are connected and what models each has. */
+  private syncProviderLines(): void {
+    setProviderLines(
+      this.providerBadges().map((p) => ({
+        id: p.id,
+        label: p.label,
+        connected: p.connected,
+        models: p.id === 'anthropic' ? this.opts.cfg.workerModels : p.models.map((m) => m.value).filter((m) => m !== 'default'),
+      })),
+    );
+  }
+
+  private providerBadges(): ProviderBadge[] {
+    return PROVIDER_DEFS.map((def) => {
+      const r = resolveProvider(this.providerStates, def.id);
+      const account = 'account' in r ? r.account : '';
+      const models = account ? (account === DEFAULT_ACCOUNT ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
+      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models };
+    });
+  }
+
+  /** The user picked a provider for a session (composer): it moves to the account behind it. */
+  setProvider(id: string, provider: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const r = resolveProvider(this.providerStates, provider);
+    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
+    this.setAccount(id, r.account);
+  }
+
+  /** A provider as the master writes it ("deepseek"): the account it runs on, else an error that says what to do. */
+  private providerRef(ref: string): string {
+    const r = resolveProvider(this.providerStates, ref);
+    if ('account' in r) return r.account;
+    const list = this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ');
+    throw new Error(t(r.error === 'unknown' ? 'provider.unknown' : 'provider.notConnected', { name: ref, list }));
   }
 
   /** The settings changed an account, a default or a post: each running session goes where it now belongs. */
@@ -692,7 +746,8 @@ export class SessionManager extends EventEmitter {
   /** The account's sessions run one model of its own (an OpenAI account's, or a named one of an Anthropic-compatible server). */
   private pinned(account: string): boolean {
     const a = this.opts.cfg.accounts.find((x) => x.id === account);
-    return !!a && pinsModel(a);
+    // An OpenAI account whose models are known lets each session pick its own.
+    return !!a && pinsModel(a) && !(a.kind === 'openai' && (this.catalogs.get(account)?.length ?? 0) > 0);
   }
 
   private kindOf(account: string): AccountKind | 'default' {
@@ -715,7 +770,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private accountBadges(): AccountBadge[] {
-    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, pinned: pinsModel(a), limitedUntil: this.limitedSeconds(a.id) }))];
+    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, provider: providerOfAccount(a) ?? ('' as const), pinned: this.pinned(a.id), limitedUntil: this.limitedSeconds(a.id) }))];
   }
 
   /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
@@ -1079,8 +1134,8 @@ export class SessionManager extends EventEmitter {
     const master = this.sessions.get(MASTER_ID);
     const limits = this.rateLimits.get(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT) ?? null;
     const catalogs: Record<string, ModelOption[]> = {};
-    for (const a of this.opts.cfg.accounts) if (a.kind === 'codex') catalogs[a.id] = this.optionsOf(this.catalogs.get(a.id) ?? []);
-    return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges() };
+    for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
+    return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -1203,6 +1258,8 @@ export class SessionManager extends EventEmitter {
     const base = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
     // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
     const append = harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message');
+    // What the session asked for, if its account has it (a fallback step's own model first).
+    const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
     const tools = this.hubTools(s, harness);
     s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
@@ -1216,7 +1273,7 @@ export class SessionManager extends EventEmitter {
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
       // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
-      model: s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '',
+      model: this.launchModel(account, picked),
       effort: s.fixedEffort,
       mode,
       instructions: append,
@@ -1224,7 +1281,7 @@ export class SessionManager extends EventEmitter {
       tools,
       mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
-      env: this.environment(account),
+      env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
       conversation: { id: s.sessionId, resume },
       input: inbox,
       onPermission: (req) => this.askPermission(s, req),
@@ -2093,6 +2150,7 @@ export class SessionManager extends EventEmitter {
       .nullish()
       .describe(t('tool.effort'));
     const account = z.string().nullish().describe(t('tool.account', { list: this.accountBadges().map((a) => a.name).join(', ') }));
+    const provider = z.string().nullish().describe(t('tool.provider', { list: this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ') }));
     const byPost = z.string().describe(t('tool.role.byName'));
     const topicSpec = topicToolSpec();
     const postFields = {
@@ -2119,6 +2177,7 @@ export class SessionManager extends EventEmitter {
             read_only: z.boolean().nullish().describe(t('tool.spawn.readOnly')),
             model,
             effort,
+            provider,
             account,
           },
           (args, extra) =>
@@ -2141,6 +2200,7 @@ export class SessionManager extends EventEmitter {
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
             model,
             effort,
+            provider,
             account,
           },
           (args) => run(() => this.messageWorker(args)),
@@ -2252,11 +2312,13 @@ export class SessionManager extends EventEmitter {
     model?: string | null;
     effort?: Effort | null;
     account?: string | null;
+    provider?: string | null;
   }): Promise<string> {
     const { cfg } = this.opts;
     const mission = args.mission.trim();
     if (!mission) throw new Error(t('spawn.empty'));
-    const accountId = args.account?.trim() ? this.accountRef(args.account) : '';
+    // A provider is how the master names where a worker runs; an account name still works.
+    const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : '';
     const post = args.role?.trim() ? this.findRole(args.role) : null;
     if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
     const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
@@ -2347,11 +2409,12 @@ export class SessionManager extends EventEmitter {
     model?: string | null;
     effort?: Effort | null;
     account?: string | null;
+    provider?: string | null;
   }): Promise<string> {
     const s = this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
-    const accountId = args.account?.trim() ? this.accountRef(args.account) : null;
+    const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : null;
     if (s.retiring) await s.retiring;
     if (this.ended(s)) throw new Error(t('instance.ended', { name: s.name }));
     if (!s.inbox && this.orphan(s)) throw new Error(t('instance.orphan', { name: s.name }));
@@ -2404,9 +2467,15 @@ export class SessionManager extends EventEmitter {
   private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
     const { cfg } = this.opts;
     // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
-    const codex = this.kindOf(account) === 'codex';
+    const own = this.ownCatalog(account);
     const listed = this.catalogOf(account).map((m) => m.value);
-    const allowed = codex ? (listed.length > 0 ? listed : requested.model ? [requested.model.trim()] : []) : cfg.workerModels;
+    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && requested.model ? [requested.model.trim()] : []) : cfg.workerModels;
+    // The master may say "pro" or "flash" for DeepSeek's models.
+    if (own && requested.model && !allowed.some((m) => m.toLowerCase() === requested.model?.trim().toLowerCase())) {
+      const short = requested.model.trim().toLowerCase();
+      const hit = allowed.find((m) => m.toLowerCase().endsWith(`-${short}`));
+      if (hit) requested = { ...requested, model: hit };
+    }
     const choice = resolveChoice({
       requested,
       post: post ? { model: post.model, effort: post.effort } : null,
@@ -3012,8 +3081,23 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The model list of the program an account runs on. */
+  /** The account offers models of its own (Codex, OpenAI's API, DeepSeek) rather than Claude's. */
+  private ownCatalog(account: string): boolean {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    return !!a && (a.kind === 'codex' || a.kind === 'openai' || providerOfAccount(a) === 'deepseek');
+  }
+
   private catalogOf(account: string): AgentModel[] {
-    return this.kindOf(account) === 'codex' ? (this.catalogs.get(account) ?? []) : this.modelInfos;
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    if (a && providerOfAccount(a) === 'deepseek') return DEEPSEEK_MODELS.map((m) => ({ value: m.value, displayName: m.label, description: m.description, efforts: [] }));
+    return this.ownCatalog(account) ? (this.catalogs.get(account) ?? []) : this.modelInfos;
+  }
+
+  /** What the program is asked for: OpenAI's models go by the environment, DeepSeek's by the names its endpoint maps. */
+  private launchModel(account: string, picked: string): string {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    if (!a || !picked || a.kind === 'openai') return a?.kind === 'openai' ? '' : picked;
+    return providerOfAccount(a) === 'deepseek' ? deepseekAlias(picked) : picked;
   }
 
   /** A model the program of this account can take (Claude's names are not Codex's): else the account's own choice stands. */
@@ -3021,9 +3105,9 @@ export class SessionManager extends EventEmitter {
     if (!model) return false;
     const kind = this.kindOf(account);
     if (this.pinned(account)) return false;
-    if (kind === 'codex') {
-      const catalog = this.catalogs.get(account) ?? [];
-      return catalog.length === 0 ? !/^(default|opus|sonnet|haiku|fable|claude-)/i.test(model) : catalog.some((m) => m.value === model);
+    if (this.ownCatalog(account)) {
+      const catalog = this.catalogOf(account);
+      return catalog.length === 0 ? kind === 'codex' && !/^(default|opus|sonnet|haiku|fable|claude-)/i.test(model) : catalog.some((m) => m.value === model);
     }
     return /^(default|best|opusplan|opus|sonnet|haiku|fable|claude-)/i.test(model) || this.modelInfos.some((m) => m.value === model || m.resolvedModel === model);
   }
@@ -3051,6 +3135,15 @@ export class SessionManager extends EventEmitter {
     if (s.runAccount && this.kindOf(s.runAccount) === 'codex') {
       s.model = modelId;
       s.modelLabel = this.catalogOf(s.runAccount).find((m) => m.value === modelId)?.displayName ?? modelId;
+      return;
+    }
+    if (s.runAccount && this.ownCatalog(s.runAccount) && this.kindOf(s.runAccount) !== 'codex') {
+      // OpenAI's API or DeepSeek: the session's pick if the account has it, else what runs; DeepSeek says only its own name.
+      const catalog = this.catalogOf(s.runAccount);
+      const picked = catalog.find((m) => m.value === s.fixedModel);
+      const deepseek = providerOfAccount(this.opts.cfg.accounts.find((x) => x.id === s.runAccount) ?? { kind: 'claude', baseUrl: '' }) === 'deepseek';
+      s.model = picked?.value ?? (deepseek ? '' : modelId);
+      s.modelLabel = picked?.displayName ?? (deepseek ? 'DeepSeek' : modelId);
       return;
     }
     const alias = this.modelInfos.find((m) => m.resolvedModel === modelId && m.value !== 'default')?.value;
@@ -3145,8 +3238,8 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Environment of a Claude Code process started by the hub on an account: the hub's own, without a parent session's variables. */
-  environment(account = DEFAULT_ACCOUNT): Record<string, string> {
-    const { set, unset } = this.opts.sessionEnv(account);
+  environment(account = DEFAULT_ACCOUNT, model?: string): Record<string, string> {
+    const { set, unset } = this.opts.sessionEnv(account, model);
     return { ...this.toolEnv(unset), ...set };
   }
 
