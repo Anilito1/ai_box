@@ -124,6 +124,8 @@ export class ChatView {
   private session: SessionView | null = null;
   private items: Items | undefined;
   private models: ModelOption[] = [];
+  /** The models of the accounts that list their own (Codex), by account id. */
+  private catalogs: Record<string, ModelOption[]> = {};
   /** Accounts a worker can be moved to; the menu only shows with more than the usual one. */
   private accounts: AccountBadge[] = [];
   /** The master's topic shown (its items only) and written in; null: everything. */
@@ -185,7 +187,7 @@ export class ChatView {
     this.input.rows = 1;
     this.slash = new SlashMenu(this.input, hub, {
       session: () => this.session,
-      models: () => this.models,
+      models: () => (this.session ? this.modelsFor(this.session) : this.models),
       openModelMenu: () => this.openModelMenu(),
       openModeMenu: (bypass) => this.openModeMenu(bypass),
       note: (text) => this.attachError(text),
@@ -343,8 +345,9 @@ export class ChatView {
   }
 
   /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
-  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = []): void {
+  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = [], catalogs: Record<string, ModelOption[]> = {}): void {
     this.models = models;
+    this.catalogs = catalogs;
     this.accounts = accounts;
     const switched = (session?.id ?? null) !== this.sessionId;
     const previous = this.session;
@@ -628,16 +631,22 @@ export class ChatView {
     check.focus();
   }
 
+  /** The models a session can pick: its account's own list (Codex), else Claude's. */
+  private modelsFor(s: SessionView): ModelOption[] {
+    return this.catalogs[s.account] ?? this.models;
+  }
+
   private openModelMenu(): void {
     const s = this.session;
     if (!s) return;
     // A worker on an OpenAI account runs that account's model: only its effort is picked here.
     const bridged = this.accounts.find((a) => a.id === s.account)?.kind === 'openai';
+    const models = this.modelsFor(s);
     openMenu(this.modelBtn, (menu, close) => {
       menu.append(h('div', 'menu-label', t('chat.model')));
       if (bridged) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
-      else if (this.models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
-      for (const model of bridged ? [] : this.models) {
+      else if (models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
+      for (const model of bridged ? [] : models) {
         const row = this.menuRow(model.label, model.description, model.value === s.model);
         row.addEventListener('click', () => {
           this.hub.setModel(s.id, model.value);
@@ -645,7 +654,7 @@ export class ChatView {
         });
         menu.append(row);
       }
-      const current = this.models.find((m) => m.value === s.model);
+      const current = models.find((m) => m.value === s.model);
       const efforts: Effort[] = current?.efforts.length ? current.efforts : EFFORTS;
       menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
       const seg = h('div', 'segmented');
@@ -808,6 +817,11 @@ export class ChatView {
         if (item.action === 'claude-settings') {
           const open = h('button', 'btn small notice-action', t('notice.openClaudeSettings'));
           open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'claude' })));
+          el.append(open);
+        }
+        if (item.action === 'accounts-settings') {
+          const open = h('button', 'btn small notice-action', t('notice.openAccountsSettings'));
+          open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' })));
           el.append(open);
         }
         if (item.detail) el.append(techDetails(item.detail));

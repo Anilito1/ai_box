@@ -40,7 +40,7 @@ settingsButton.setAttribute('aria-haspopup', 'dialog');
 settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
-const setup = new SetupView(hub, () => snapshot.models);
+const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 
@@ -62,7 +62,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null, topics: [], accounts: [] };
+let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, rateLimits: null, topics: [], accounts: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 
@@ -325,10 +325,10 @@ function render(): void {
 
   workspace.classList.toggle('expanded', opened !== null);
   const master = sessions.find((s) => s.role === 'master');
-  masterView.show(master, master && store.get(master.id), models, snapshot.accounts);
+  masterView.show(master, master && store.get(master.id), models, snapshot.accounts, snapshot.catalogs);
   topicsView.update(snapshot.topics, master && store.get(master.id));
   const worker = sessions.find((s) => s.id === opened);
-  workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts);
+  workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts, snapshot.catalogs);
   renderStatusbar(snapshot.rateLimits);
   renderRepos();
 }
@@ -444,7 +444,7 @@ hub.onTeam(() => setup.teamChanged());
 // A notice that points to a section of the settings (Claude Code missing, for one).
 window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;
-  void setup.open('settings', section === 'claude' ? 'claude' : 'general');
+  void setup.open('settings', section === 'claude' ? 'claude' : section === 'accounts' ? 'accounts' : 'general');
 });
 // The git panel's own buttons to follow another repo or stop following one.
 window.addEventListener('hub:add-repo', () => void setup.open('settings', 'repos'));

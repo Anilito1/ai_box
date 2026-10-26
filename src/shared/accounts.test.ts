@@ -5,7 +5,7 @@ const { checkAccount, findAccount, firstAccount, isLocalUrl, isOpenAIHost, norma
 type Account = import('./types').Account;
 
 const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '', isolated: false });
-const openai = (over: Partial<Account> = {}): Account => ({ id: '', kind: 'openai', name: 'Work', baseUrl: OPENAI_URL, model: 'gpt-5', smallModel: '', ...over });
+const openai = (over: Partial<Account> = {}): Account => ({ id: '', kind: 'openai', name: 'Work', baseUrl: OPENAI_URL, model: 'gpt-5', smallModel: '', isolated: false, ...over });
 
 test('normalizeAccount: trims, defaults the OpenAI server, drops the OpenAI fields of other kinds', () => {
   assert.deepEqual(normalizeAccount({ kind: 'openai', name: '  My   work ', baseUrl: 'http://localhost:8080/v1/', model: ' gpt-5 ' }), {
@@ -15,7 +15,10 @@ test('normalizeAccount: trims, defaults the OpenAI server, drops the OpenAI fiel
     baseUrl: 'http://localhost:8080/v1',
     model: 'gpt-5',
     smallModel: '',
+    isolated: false,
   });
+  assert.equal(normalizeAccount({ kind: 'codex', name: 'x', isolated: true, baseUrl: 'http://x', model: 'm' }).isolated, true);
+  assert.equal(normalizeAccount({ kind: 'claude', name: 'x', isolated: true }).isolated, false);
   assert.equal(normalizeAccount({ kind: 'openai', name: 'x' }).baseUrl, OPENAI_URL);
   assert.deepEqual(normalizeAccount({ kind: 'claude', name: 'Perso', model: 'gpt-5', baseUrl: 'http://x' }), claude('', 'Perso'));
   assert.equal(normalizeAccount({ kind: 'nope', name: 'x' }).kind, 'claude');

@@ -7,6 +7,7 @@ import { errorCode } from '../../errors';
 import { CodexClient } from './client';
 import { modelsOf, rateLimitsOf } from './adapter';
 import type { RateLimits } from '../../../shared/types';
+import type { AgentModel } from '../types';
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : {});
@@ -45,6 +46,7 @@ export function versionAtLeast(version: string, min: string): boolean {
 export interface CodexCheck {
   status: AccountStatus;
   limits: RateLimits | null;
+  models: AgentModel[];
 }
 
 /**
@@ -53,28 +55,26 @@ export interface CodexCheck {
  */
 export async function checkCodex(executable: string, env: Record<string, string>): Promise<CodexCheck> {
   const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
-  if (!executable) return { status: { ...none, error: 'no-codex' }, limits: null };
+  if (!executable) return { status: { ...none, error: 'no-codex' }, limits: null, models: [] };
   const client = new CodexClient({ executable, env, version: '0.2' });
   const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 30_000).unref());
   try {
     const run = async (): Promise<CodexCheck> => {
       await client.start();
       const account = obj(obj(await client.request('account/read', {})).account);
-      if (!account.type) return { status: none, limits: null };
+      if (!account.type) return { status: none, limits: null, models: [] };
       const [models, limits] = await Promise.all([
         client.request('model/list', {}).catch(() => ({})),
         client.request('account/rateLimits/read', {}).catch(() => ({})),
       ]);
       const detail = [account.type === 'chatgpt' ? String(account.email ?? '') : 'API key', String(account.planType ?? '')].filter(Boolean).join(' · ');
-      return {
-        status: { ready: true, detail, error: '', models: modelsOf(obj(models)).map((m) => m.value) },
-        limits: rateLimitsOf(obj(obj(limits).rateLimits)),
-      };
+      const listed = modelsOf(obj(models));
+      return { status: { ready: true, detail, error: '', models: listed.map((m) => m.value) }, limits: rateLimitsOf(obj(obj(limits).rateLimits)), models: listed };
     };
     return await Promise.race([run(), timeout]);
   } catch (err) {
     const message = errorCode(err);
-    return { status: { ...none, error: message === 'timeout' ? 'timeout' : 'probe-failed' }, limits: null };
+    return { status: { ...none, error: message === 'timeout' ? 'timeout' : 'probe-failed' }, limits: null, models: [] };
   } finally {
     client.close();
   }

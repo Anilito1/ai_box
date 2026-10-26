@@ -9,6 +9,7 @@ import {
   PROVIDERS,
   type Account,
   type AccountStatus,
+  type CodexCli,
   type AgentFile,
   type ClaudeStatus,
   type Effort,
@@ -101,6 +102,9 @@ export class SetupView {
   private section: Section = 'general';
   private view: SettingsView | null = null;
   private claude: ClaudeStatus | null = null;
+  /** The Codex program on this computer, once asked. */
+  private codexCli: CodexCli | null = null;
+  private checkingCodex = false;
   private checkingClaude = false;
   /** The GitHub CLI on this computer; null until checked. */
   private gh: { installed: boolean; login: string } | null = null;
@@ -161,6 +165,8 @@ export class SetupView {
   constructor(
     private readonly hub: HubApi,
     private readonly models: () => ModelOption[],
+    /** The models an account lists for itself (Codex), else null: Claude's list applies. */
+    private readonly catalog: (account: string) => ModelOption[] | null = () => null,
   ) {
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -1114,6 +1120,8 @@ export class SetupView {
     const s = v.settings;
     this.head(el, t('setup.accounts.title'), t('setup.accounts.lead'));
     if (!this.claude && !this.checkingClaude) void this.checkClaude();
+    if (!this.codexCli && !this.checkingCodex) void this.checkCodexCli();
+    el.append(this.programsField());
 
     const grid = h('div', 'setup-grid');
     grid.append(
@@ -1130,7 +1138,7 @@ export class SetupView {
     const full = s.accounts.length >= ACCOUNTS_MAX;
     const add = this.field(t('setup.accounts.add'), full ? t('setup.accounts.full', { max: ACCOUNTS_MAX }) : t('setup.accounts.add.hint'));
     const row = h('div', 'setup-row team-templates');
-    for (const kind of ACCOUNT_KINDS) row.append(this.button(t(`setup.accounts.add.${kind}`), kind === 'claude' ? 'btn' : 'btn ghost', () => this.editAccount(normalizeAccount({ kind })), full));
+    for (const kind of ACCOUNT_KINDS) row.append(this.button(t(`setup.accounts.add.${kind}`), kind === 'claude' ? 'btn' : 'btn ghost', () => this.editAccount(normalizeAccount({ kind, isolated: kind === 'codex' })), full));
     add.append(row);
     el.append(add, h('p', 'setup-fine', t('setup.accounts.fine')));
   }
@@ -1178,7 +1186,7 @@ export class SetupView {
     if (st === undefined) void this.checkAccount(a.id);
     if (!st || st === 'checking') tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
     else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && a.kind !== 'openai' ? [h('span', 'setup-tag', st.detail)] : []));
-    else if (a.kind === 'claude' && !st.error) tags.append(h('span', 'setup-pill warn', t('setup.accounts.signedOut')));
+    else if ((a.kind === 'claude' || a.kind === 'codex') && !st.error) tags.append(h('span', 'setup-pill warn', t('setup.accounts.signedOut')));
     else tags.append(h('span', 'setup-pill warn', this.accountErrorText(st.error)));
     text.append(title, tags);
     if (this.accountWait?.id === a.id) text.append(h('div', 'setup-wait', t('setup.accounts.waiting')));
@@ -1186,7 +1194,7 @@ export class SetupView {
     const actions = h('div', 'team-row-actions');
     if (this.confirmAccountDelete === a.id) {
       actions.append(
-        h('span', 'setup-hint', t(a.kind === 'claude' ? 'setup.accounts.deleteAskClaude' : 'setup.accounts.deleteAsk', { name: a.name })),
+        h('span', 'setup-hint', t(a.kind === 'claude' ? 'setup.accounts.deleteAskClaude' : a.kind === 'codex' ? 'setup.accounts.deleteAskCodex' : 'setup.accounts.deleteAsk', { name: a.name })),
         this.button(t('team.delete'), 'btn danger small', () => void this.deleteAccount(a)),
         this.button(t('setup.cancel'), 'btn ghost small', () => {
           this.confirmAccountDelete = '';
@@ -1194,7 +1202,7 @@ export class SetupView {
         }),
       );
     } else {
-      if (a.kind === 'claude' && st && st !== 'checking' && !st.ready) actions.append(this.button(t('setup.accounts.signIn'), 'btn primary small', () => void this.accountLogin(a)));
+      if ((a.kind === 'claude' || a.kind === 'codex') && st && st !== 'checking' && !st.ready && st.error !== 'no-codex') actions.append(this.button(t('setup.accounts.signIn'), 'btn primary small', () => void this.accountLogin(a)));
       actions.append(
         this.button(t('setup.check'), 'btn ghost small', () => void this.checkAccount(a.id), st === 'checking'),
         this.button(t('team.edit'), 'btn ghost small', () => this.editAccount(structuredClone(a))),
@@ -1247,7 +1255,7 @@ export class SetupView {
       mark('baseUrl', urlField);
       el.append(urlField);
     }
-    if (d.kind !== 'claude') {
+    if (d.kind === 'anthropic-key' || d.kind === 'openai') {
       const stored = !!d.id && v.accountKeys.includes(d.id);
       const hint = !v.secureStorage ? t('setup.err.keychain', { app: APP_NAME }) : stored ? t('setup.accounts.key.keep') : t(`setup.accounts.key.hint.${d.kind}`);
       const keyField = this.field(t('setup.accounts.key'), hint);
@@ -1277,8 +1285,23 @@ export class SetupView {
       if (this.accountModels.length > 0 && d.model && !this.accountModels.includes(d.model.trim())) el.append(h('div', 'setup-hint', t('setup.accounts.modelUnlisted', { model: d.model })));
     }
 
+    if (d.kind === 'codex') {
+      if (!this.codexCli && !this.checkingCodex) void this.checkCodexCli();
+      const own = h('label', 'setup-toggle');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.checked = d.isolated;
+      box.disabled = !!d.id;
+      box.addEventListener('change', () => (d.isolated = box.checked));
+      const ownText = h('span', 'setup-choice-text');
+      ownText.append(h('span', 'setup-choice-title', t('setup.accounts.codexOwn')), h('span', 'setup-choice-hint', t(d.id ? 'setup.accounts.codexOwn.fixed' : 'setup.accounts.codexOwn.hint')));
+      own.append(box, ownText);
+      el.append(own);
+      if (this.codexCli && !this.codexCli.found) el.append(h('div', 'setup-hint', t('setup.accounts.codexMissing')));
+    }
+
     const actions = h('div', 'setup-row team-editor-actions');
-    const label = d.id ? t('team.save') : d.kind === 'claude' ? t('setup.accounts.createSignIn') : t('setup.verifySave');
+    const label = d.id ? t('team.save') : d.kind === 'claude' || d.kind === 'codex' ? t('setup.accounts.createSignIn') : t('setup.verifySave');
     actions.append(
       this.button(label, 'btn primary', () => void this.saveAccount(d)),
       this.button(t('setup.cancel'), 'btn ghost', () => {
@@ -1312,7 +1335,7 @@ export class SetupView {
     this.render();
     // A new Claude account signs in right away, in Claude Code's own window.
     const saved = r.settings.accounts.find((a) => a.id === r.id);
-    if (isNew && saved?.kind === 'claude') await this.accountLogin(saved);
+    if (isNew && (saved?.kind === 'claude' || saved?.kind === 'codex')) await this.accountLogin(saved);
   }
 
   private async deleteAccount(a: Account): Promise<void> {
@@ -1368,11 +1391,36 @@ export class SetupView {
   }
 
   /** An account check's or save's error code, in words. */
+  private async checkCodexCli(): Promise<void> {
+    this.checkingCodex = true;
+    this.codexCli = await this.hub.checkCodex();
+    this.checkingCodex = false;
+    if (this.section === 'accounts') this.render();
+  }
+
+  /** The programs the accounts run on, found on this computer: what to install when one is missing. */
+  private programsField(): HTMLElement {
+    const f = this.field(t('setup.accounts.programs'), t('setup.accounts.programs.hint'));
+    const row = h('div', 'team-tags');
+    const claude = this.claude;
+    if (this.checkingClaude || !claude) row.append(h('span', 'setup-pill', `Claude Code · ${t('setup.accounts.checking')}`));
+    else if (claude.found) row.append(h('span', 'setup-pill ok', 'Claude Code'));
+    else row.append(h('span', 'setup-pill warn', `Claude Code · ${t('setup.accounts.programMissing')}`));
+    const codex = this.codexCli;
+    if (this.checkingCodex || !codex) row.append(h('span', 'setup-pill', `Codex · ${t('setup.accounts.checking')}`));
+    else if (!codex.found) row.append(h('span', 'setup-pill warn', `Codex · ${t('setup.accounts.programMissing')}`));
+    else row.append(h('span', codex.outdated ? 'setup-pill warn' : 'setup-pill ok', `Codex ${codex.version}${codex.outdated ? ` · ${t('setup.accounts.programOld')}` : ''}`));
+    f.append(row);
+    if (codex && !codex.found) f.append(h('div', 'setup-hint', t('setup.accounts.codexMissing')), this.link(t('setup.accounts.codexInstall'), 'https://github.com/openai/codex'));
+    return f;
+  }
+
   private accountErrorText(code: string): string {
     const own: Record<string, Key> = {
       'no-key': 'setup.accounts.err.noKey',
       required: 'setup.accounts.err.noKey',
       'no-claude': 'setup.claude.notFound',
+      'no-codex': 'setup.accounts.err.noCodex',
       timeout: 'setup.claude.timeout',
       'probe-failed': 'setup.claude.probeFailed',
       'not-found': 'setup.accounts.err.notFound',
@@ -1645,8 +1693,11 @@ export class SetupView {
     const grid = h('div', 'setup-grid');
     const runField = this.field(t('team.field.model'), t('team.model.hint'));
     const model = h('select', 'setup-select');
-    const known = [...new Set([...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES, d.model].filter(Boolean))];
-    model.append(new Option(t('team.autoModelLong'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
+    // A post on an account with a list of its own (Codex) picks from that list.
+    const own = this.catalog(d.account || s.workerAccount);
+    const options = own ?? this.models();
+    const known = [...new Set([...(own ? own.map((m) => m.value) : [...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES]), d.model].filter(Boolean))];
+    model.append(new Option(t('team.autoModelLong'), ''), ...known.map((m) => new Option(options.find((x) => x.value === m)?.label ?? m, m)));
     model.value = d.model;
     model.setAttribute('aria-label', t('team.field.model'));
     const effort = h('select', 'setup-select');
@@ -1694,8 +1745,14 @@ export class SetupView {
     if (s.accounts.length > 0) {
       const usual = s.accounts.find((a) => a.id === s.workerAccount)?.name ?? t('account.default');
       const accountField = this.accountSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
+        const before = this.catalog(d.account || s.workerAccount) !== null;
         d.account = id;
         changed();
+        // The model list follows the account's program: a model of the other one means nothing there.
+        if (before !== (this.catalog(d.account || s.workerAccount) !== null)) {
+          d.model = '';
+          this.render();
+        }
       }, t('team.account.inherit', { account: usual }));
       const control = accountField.querySelector('select');
       if (control) mark('account', accountField, control);

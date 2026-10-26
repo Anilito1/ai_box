@@ -309,6 +309,11 @@ class Hub {
     return { set: { ...access.set, ...github }, unset: access.unset };
   }
 
+  /** Models and limits of the Codex accounts, asked once in the background so the menus have them. */
+  warmCatalogs(): void {
+    for (const a of this.cfg.accounts) if (a.kind === 'codex') void this.checkAccount(a.id).catch(() => undefined);
+  }
+
   /** An account checked now: signed in or not, with what. */
   async checkAccount(id: string): Promise<AccountStatus> {
     const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
@@ -324,8 +329,9 @@ class Hub {
     }
     if (a.kind === 'codex') {
       this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
-      const { status, limits } = await checkCodex(this.codex, this.mgr.environment(a.id));
+      const { status, limits, models } = await checkCodex(this.codex, this.mgr.environment(a.id));
       if (limits) this.mgr.setLimits(a.id, limits);
+      this.mgr.setCatalog(a.id, models);
       return status;
     }
     if (a.kind === 'anthropic-key') {
@@ -749,6 +755,7 @@ async function start(): Promise<void> {
   }
   const hub = new Hub();
   await hub.init();
+  hub.warmCatalogs();
   const mgr = hub.mgr;
   manager = mgr;
   bridge = hub.bridge;
