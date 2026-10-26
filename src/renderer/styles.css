@@ -4472,6 +4472,194 @@ kbd,
   font-size: 10px;
   line-height: 15px;
 }
+
+/* ---------- MCP servers and skills: the settings sheet, with a list that takes the height left ---------- */
+.ph-cap:hover .ico {
+  transform: none;
+}
+.caps-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caps-count {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.caps-nav-sep {
+  height: 1px;
+  margin: var(--sp-2) 10px;
+  background: var(--line);
+}
+.caps-content {
+  display: flex;
+  flex-direction: column;
+}
+.caps-content > * {
+  flex: none;
+}
+.caps-content > .caps-list {
+  flex: 0 1 auto;
+  min-height: 160px;
+  max-height: none;
+}
+.caps-bar {
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.caps-search {
+  flex: 1;
+  min-width: 180px;
+}
+.caps-check {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--ctl-sm);
+  margin-bottom: var(--sp-2);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.caps-check .ico {
+  margin-right: 4px;
+}
+.caps-row {
+  align-items: flex-start;
+  padding: 10px var(--sp-3);
+}
+.caps-row .setup-repo-text {
+  flex: 1;
+}
+.caps-row .setup-repo-text > span:last-child {
+  overflow: visible;
+  white-space: normal;
+}
+.caps-row-wrap {
+  border-bottom: 1px solid var(--line);
+}
+.caps-row-wrap:last-child {
+  border-bottom: 0;
+}
+.caps-row-wrap > .caps-row {
+  border-bottom: 0;
+}
+.caps-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.st-connected {
+  --st: var(--ok);
+}
+.st-needs-auth,
+.st-pending {
+  --st: var(--warn);
+}
+.st-failed {
+  --st: var(--danger);
+}
+.caps-dot.st-connected,
+.caps-dot.st-needs-auth,
+.caps-dot.st-pending,
+.caps-dot.st-failed {
+  background: var(--st);
+}
+.caps-dot.st-unknown,
+.caps-dot.st-disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+.caps-state {
+  color: var(--st, var(--text-3));
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.caps-target {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-2);
+  font: var(--fs-xs) / 1.5 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.caps-sub,
+.caps-help {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.caps-help {
+  color: var(--text-2);
+}
+.caps-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.caps-reach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.caps-reach-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.caps-reach.r-master-only .caps-reach-dot,
+.caps-reach.r-repo .caps-reach-dot {
+  background: var(--text-2);
+}
+.caps-reach.r-nowhere .caps-reach-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--text-3);
+}
+.caps-side {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 45%;
+}
+.caps-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px var(--sp-3) 10px;
+  background: var(--hover);
+  font-size: var(--fs-sm);
+}
+.caps-confirm > span {
+  flex: 1;
+  min-width: 200px;
+}
+.caps-area {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.caps-paste {
+  min-height: 180px;
+}
+.caps-skill-name {
+  max-width: 260px;
+}
 .setup-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

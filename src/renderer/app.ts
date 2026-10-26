@@ -1,5 +1,6 @@
 import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
+import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
@@ -38,14 +39,26 @@ settingsButton.id = 'open-settings';
 settingsButton.title = `${t('side.settings')} · ${shortcut(',')}`;
 settingsButton.setAttribute('aria-haspopup', 'dialog');
 settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
+const capButton = (label: string, path: string): HTMLButtonElement => {
+  const b = h('button', 'ph-settings ph-cap');
+  b.title = label;
+  b.setAttribute('aria-haspopup', 'dialog');
+  b.append(icon(path), h('span', '', label));
+  return b;
+};
+const mcpButton = capButton(t('side.mcp'), ICONS.plug);
+const skillsButton = capButton(t('side.skills'), ICONS.sparkle);
 const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
-headActions.append(updateSlot, settingsButton);
+headActions.append(updateSlot, mcpButton, skillsButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null, (account) => snapshot.accounts.find((a) => a.id === account)?.limitedUntil ?? null, () => snapshot.providers);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
+const capsView = new CapsView(hub);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
+mcpButton.addEventListener('click', () => void capsView.open('mcp'));
+skillsButton.addEventListener('click', () => void capsView.open('skills'));
 
 interface Card {
   root: HTMLDivElement;
@@ -387,6 +400,8 @@ function commands(): Command[] {
   if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
   list.push(
     { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
+    { title: t('caps.mcp'), run: () => void capsView.open('mcp') },
+    { title: t('caps.skills'), run: () => void capsView.open('skills') },
     { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
@@ -397,7 +412,7 @@ function commands(): Command[] {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented || e.isComposing || setup.isOpen) return;
+  if (e.defaultPrevented || e.isComposing || setup.isOpen || capsView.isOpen) return;
   if (isMod(e) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     showPalette(commands());
@@ -463,7 +478,7 @@ hub.onRepos((paths) => {
 });
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
-initUpdates(hub, () => setup.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
+initUpdates(hub, () => setup.isOpen || capsView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {

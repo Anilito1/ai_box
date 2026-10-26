@@ -69,6 +69,8 @@ export const ICONS = {
   moon: 'M12.5 9.6A5 5 0 0 1 6.4 3.5a5 5 0 1 0 6.1 6.1z',
   info: 'M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 7.5v3.5M8 5.2h.01',
   user: 'M8 2.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4',
+  plug: 'M6 2.5v3M10 2.5v3M4.5 5.5h7v2a3.5 3.5 0 0 1-7 0zM8 11v2.5',
+  sparkle: 'M8 2.5l1.3 4.2 4.2 1.3-4.2 1.3L8 13.5l-1.3-4.2L2.5 8l4.2-1.3z',
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */
