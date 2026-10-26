@@ -18,6 +18,7 @@ import {
 } from 'electron';
 import { ACCOUNTS_MAX, canonAccount, checkAccount, isAccountRef, isLocalUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
 import { APP_ID } from '../shared/brand';
+import { capabilitiesText } from '../shared/capabilities';
 import { DEEPSEEK_URL, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
 import {
@@ -48,6 +49,7 @@ import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
 import { accountDir, accountEnv, checkAnthropicCompatible, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } from './accounts';
 import { agentFiles } from './agents';
+import { CapabilityStore } from './capabilities';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
 import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
@@ -73,6 +75,8 @@ const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissi
 const DECISIONS = ['allow', 'always', 'deny'];
 const API_KEY = /^sk-ant-[\w-]{20,300}$/;
 const MODEL = /^[\w.:[\]-]{1,80}$/;
+/** list_capabilities asks Claude Code again for the servers' state once the last check is this old. */
+const CAPS_MAX_AGE = 10 * 60_000;
 const GITHUB_TOKEN = /^(gh[pousr]_[A-Za-z0-9_]{20,255}|github_pat_[A-Za-z0-9_]{20,255})$/;
 
 // One folder whatever the build is named (a packaged build takes its productName): settings and conversations follow.
@@ -247,6 +251,7 @@ class Hub {
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
   readonly mgr: SessionManager;
+  readonly caps: CapabilityStore;
   readonly updater: Updater;
   /** Where the sessions of OpenAI accounts send Claude Code's requests. */
   readonly bridge = new Bridge((id) => this.bridgeAccount(id));
@@ -274,6 +279,13 @@ class Hub {
       sessionEnv: (account, model) => this.sessionEnv(account, model),
       persist: () => this.save(),
       costLog: this.costLog,
+      capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
+    });
+    this.caps = new CapabilityStore({
+      cfg: this.cfg,
+      executable: () => this.executable,
+      env: () => this.mgr.environment(OWN_ACCOUNT),
+      toolEnv: () => this.mgr.toolEnv(),
     });
     this.updater = new Updater({
       dataDir: this.dataDir,
@@ -831,6 +843,19 @@ class Hub {
       return this.view();
     });
     handle('team:agents', () => agentFiles(this.cfg));
+    // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
+    handle('caps:get', () => this.caps.inventory());
+    handle('caps:check', async () => {
+      await this.caps.check();
+      return this.caps.inventory();
+    });
+    handle('caps:mcp-add', (draft) => this.caps.addMcp(draft));
+    handle('caps:mcp-remove', (name, source, project) => this.caps.removeMcp(name, source, project));
+    handle('caps:skill-move', (kind, dir, enable) => this.caps.moveSkill(kind, dir, enable));
+    handle('caps:skill-delete', (kind, dir, disabled) => this.caps.deleteSkill(kind, dir, disabled));
+    handle('caps:skill-paste', (text) => this.caps.pasteSkill(text));
+    handle('caps:skill-github', (url, skill) => this.caps.githubSkill(url, skill));
+    handle('caps:plugin', (id, on) => this.caps.setPlugin(id, on));
     handle('claude:check', async () => {
       const { executable, status } = await claudeStatus(this.cfg, mgr.environment());
       this.executable = executable;

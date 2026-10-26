@@ -253,6 +253,8 @@ export interface ManagerOptions {
   persist(): void;
   /** Where each turn's cost goes. */
   costLog: CostLog;
+  /** The MCP servers and skills installed, as list_capabilities gives them. */
+  capabilities(): Promise<string>;
 }
 
 /** `notes`: the master's changes that a choice the user made by hand kept from applying. */
@@ -2158,6 +2160,7 @@ export class SessionManager extends EventEmitter {
     const byName = z.string().describe(t('tool.byName'));
     const listWorkers = tool('list_workers', t('tool.listWorkers'), {}, () => run(() => this.listWorkers()));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
+    const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
     if (role === 'worker') {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
         run(() => this.messageMaster(s, message)),
@@ -2169,7 +2172,7 @@ export class SessionManager extends EventEmitter {
         { to: z.string().describe(t('tool.sendMessage.to')), message: z.string().describe(t('tool.sendMessage.message')) },
         ({ to, message }) => run(() => this.sendPeer(s, String(to), String(message))),
       );
-      return [listWorkers, listRepos, toMaster, ...(harness === 'claude' ? [] : [sendMessage])];
+      return [listWorkers, listRepos, listCapabilities, toMaster,...(harness === 'claude' ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -2238,6 +2241,7 @@ export class SessionManager extends EventEmitter {
         ),
         listWorkers,
         listRepos,
+        listCapabilities,
         tool('worker_report', t('tool.report'), { name: byName }, ({ name }) => run(() => this.workerReport(name))),
         tool(
           'close_worker',

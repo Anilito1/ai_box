@@ -10,6 +10,7 @@ import {
   type Query,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
+import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
 import { WORKER_COMPACT_WINDOW } from '../../../shared/team';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
@@ -17,8 +18,6 @@ import { blocksOf } from '../blocks';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
 
-/** Connectors a worker never needs: their tool schemas would weigh on each of its turns. */
-const WORKER_DENIED_MCP = ['higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs'];
 
 /** Claude Code, driven through the Agent SDK: streaming input, in-process MCP server for the hub's tools. */
 class ClaudeProcess implements AgentProcess {

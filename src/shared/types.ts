@@ -1,3 +1,4 @@
+import type { Capabilities, CapResult, McpDraft, McpSource, SkillEntry } from './capabilities';
 import type { TurnRecord } from './costs';
 import type { Lang } from './i18n';
 import type { KeepReason } from './parallel';
@@ -723,6 +724,18 @@ export interface HubApi {
   moveRole(id: string, delta: -1 | 1): Promise<SettingsView>;
   /** Subagent files of ~/.claude/agents and of the followed repos. */
   agentFiles(): Promise<AgentFile[]>;
+  /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
+  capabilities(): Promise<Capabilities>;
+  /** Asks Claude Code for each server's state (some seconds). */
+  checkCapabilities(): Promise<Capabilities>;
+  addMcp(draft: McpDraft): Promise<CapResult>;
+  removeMcp(name: string, source: McpSource, project: string): Promise<CapResult>;
+  /** Disables a skill or subagent of the user's (moved to its -disabled folder), or enables it back. */
+  moveSkill(kind: SkillEntry['kind'], dir: string, enable: boolean): Promise<CapResult>;
+  deleteSkill(kind: SkillEntry['kind'], dir: string, disabled: boolean): Promise<CapResult>;
+  pasteSkill(text: string): Promise<CapResult>;
+  githubSkill(url: string, skill: string): Promise<CapResult>;
+  setPlugin(id: string, on: boolean): Promise<CapResult>;
   /** The team changed outside the settings screen (the master's tools). */
   onTeam(cb: (team: TeamRole[]) => void): void;
   /** Ends the first-run setup and starts the master. */
