@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { DictationEvent } from '../shared/dictation';
 import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, TeamRole } from '../shared/types';
 import type { NewsToast } from '../shared/news';
 import type { CliRun } from '../shared/cliUpdate';
@@ -110,6 +111,15 @@ const api: HubApi = {
   installUpdate: (choice) => ipcRenderer.invoke('update:install', choice),
   answerUpdate: (go) => ipcRenderer.send('update:answer', go),
   openUpdateFolder: () => ipcRenderer.send('update:open-folder'),
+  dictationSupport: () => ipcRenderer.invoke('dictation:support'),
+  dictationPermission: () => ipcRenderer.invoke('dictation:permission'),
+  dictationStart: (terms) => ipcRenderer.invoke('dictation:start', terms),
+  dictationAudio: (pcm) => ipcRenderer.send('dictation:audio', pcm),
+  dictationStop: () => ipcRenderer.send('dictation:stop'),
+  dictationCancel: () => ipcRenderer.send('dictation:cancel'),
+  onDictation: (cb) => {
+    ipcRenderer.on('dictation:event', (_e, event: DictationEvent) => cb(event));
+  },
 };
 
 contextBridge.exposeInMainWorld('hub', api);

@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFile
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccount, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
+import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage } from '../shared/dictation';
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
@@ -56,6 +57,7 @@ function defaults(lang: Lang): HubConfig {
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
     updates: 'auto',
     topicGroups: { order: [], collapsed: [] },
+    dictation: { ...DICTATION_DEFAULTS },
   };
 }
 
@@ -104,6 +106,12 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
   take('updates', raw.updates, (v): v is UpdateMode => UPDATE_MODES.includes(v as UpdateMode), (v) => (cfg.updates = v));
   take('topicGroups', raw.topicGroups, isGroupPrefs, (v) => (cfg.topicGroups = { order: v.order, collapsed: v.collapsed }));
+  if (raw.dictation !== undefined) {
+    const d = obj(raw.dictation);
+    take('dictation.enabled', d.enabled, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.dictation.enabled = v));
+    take('dictation.language', d.language, isDictationLanguage, (v) => (cfg.dictation.language = v));
+    take('dictation.key', d.key, isDictationKey, (v) => (cfg.dictation.key = v));
+  }
   if (raw.github !== undefined) {
     const g = obj(raw.github);
     take('github.clientId', g.clientId, (v): v is string => isStr(v, 64, /^[\w.-]*$/), (v) => (cfg.github.clientId = v));

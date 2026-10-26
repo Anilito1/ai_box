@@ -20,6 +20,7 @@ import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
+import { cancelDictation, createDictationUi } from './dictation';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { mascotOf, mascotPicture, sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
@@ -298,10 +299,16 @@ export class ChatView {
     this.sendBtn = h('button', 'send');
     this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
+    const voice = createDictationUi({
+      input: this.input,
+      terms: () => this.dictationTerms(),
+      note: (text) => this.attachError(text),
+      changed: () => this.syncSend(),
+    });
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, voice.button, this.sendBtn);
     const box = h('div', 'composer-box');
-    box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
+    box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, voice.field, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
       if (e.target === box) e.preventDefault();
     });
@@ -350,6 +357,8 @@ export class ChatView {
     this.accounts = accounts;
     const switched = (session?.id ?? null) !== this.sessionId;
     const previous = this.session;
+    // A dictation belongs to the conversation it began in.
+    if (switched) cancelDictation(this.input);
     if (switched && previous) this.drafts.set(previous.id, { text: this.input.value, attachments: this.attachments });
     this.session = session ?? null;
     this.items = items;
@@ -482,6 +491,14 @@ export class ChatView {
     this.ctx.root.title = m && m.contextSize ? t('chat.context', { used: fmtTokens(m.contextTokens), size: fmtTokens(m.contextSize) }) : t('chat.contextShort');
     this.cost.textContent = fmtCost(m?.costUsd);
     this.syncSend();
+  }
+
+  /** Names the speech engine should favour: the session's repo, its branch and its own name. */
+  private dictationTerms(): string[] {
+    const s = this.session;
+    if (!s) return [];
+    const repo = s.cwd.split(/[\\/]/).filter(Boolean).pop() ?? '';
+    return [repo, s.tree?.branch ?? '', s.name, ...(s.tree?.branch ?? '').split(/[/_-]/)].filter((x) => x.length > 2);
   }
 
   private hasContent(): boolean {

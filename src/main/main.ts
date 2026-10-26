@@ -12,6 +12,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  session,
   shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
@@ -52,6 +53,7 @@ import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
 import { accountDir, accountEnv, checkAnthropicCompatible, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } from './accounts';
 import { agentFiles } from './agents';
 import { CapabilityStore } from './capabilities';
+import { Dictation } from './dictation';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
 import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
@@ -95,6 +97,7 @@ let manager: SessionManager | undefined;
 let updater: Updater | undefined;
 let bridge: Bridge | undefined;
 let mcpHubRef: McpHub | undefined;
+let dictation: Dictation | undefined;
 /** A restart from the settings: an update left for the close waits, the new hub starts right away. */
 let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
@@ -263,6 +266,10 @@ class Hub {
   /** The hub's tools for sessions of programs that reach them over HTTP (Codex). */
   readonly mcpHub = new McpHub();
   private readonly device = new DeviceFlow();
+  readonly dictation = new Dictation(
+    () => this.cfg.dictation,
+    (event) => send('dictation:event', event),
+  );
   private executable = '';
   private codex = '';
   private gemini = '';
@@ -1131,6 +1138,13 @@ class Hub {
     handle('update:install', (choice) => this.updater.install(UPDATE_CHOICES.includes(choice as UpdateChoice) ? (choice as UpdateChoice) : 'ask'));
     on('update:answer', (go) => typeof go === 'boolean' && this.updater.answer(go));
     on('update:open-folder', () => this.updater.openFolder());
+    handle('dictation:support', () => this.dictation.support());
+    handle('dictation:permission', async () => ((await this.dictation.permission()) ? { ok: true, error: '' } : { ok: false, error: 'denied' }));
+    handle('dictation:start', async (terms) => ((await this.dictation.start(terms)) ? { ok: true, error: '' } : { ok: false, error: 'unavailable' }));
+    // 100 ms of audio is 3.2 kB; a chunk far bigger is not ours.
+    on('dictation:audio', (pcm) => pcm instanceof ArrayBuffer && pcm.byteLength <= 1 << 18 && this.dictation.feed(Buffer.from(pcm)));
+    on('dictation:stop', () => this.dictation.stop());
+    on('dictation:cancel', () => this.dictation.cancel());
     on('app:relaunch', () => {
       // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
       if (!confirmQuit(mgr)) return;
@@ -1168,6 +1182,7 @@ async function start(): Promise<void> {
     return;
   }
   const hub = new Hub();
+  dictation = hub.dictation;
   await hub.init();
   hub.warmProviders();
   const mgr = hub.mgr;
@@ -1182,6 +1197,17 @@ async function start(): Promise<void> {
     if (win && !win.isFocused()) win.flashFrame(true);
   });
   hub.registerIpc();
+  // The microphone, for the hub's own page only and for sound only (dictation); the other permissions keep Electron's defaults.
+  const audioOnly = (types: readonly string[] | undefined) => !!types && types.length > 0 && types.every((m) => m === 'audio');
+  session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {
+    if (permission !== 'media') return done(true);
+    const d = details as { requestingUrl?: string; mediaTypes?: string[] };
+    done(!!win && wc === win.webContents && isPage(d.requestingUrl) && audioOnly(d.mediaTypes));
+  });
+  session.defaultSession.setPermissionCheckHandler((wc, permission, origin, details) => {
+    if (permission !== 'media') return true;
+    return !!win && wc === win.webContents && isPage((details as { requestingUrl?: string }).requestingUrl ?? origin);
+  });
   if (process.platform === 'darwin') {
     // The window menus above are Windows and Linux only; a Mac keeps an app menu, with Edit for Cmd+C/V in the fields.
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
@@ -1231,6 +1257,7 @@ if (!app.requestSingleInstanceLock()) {
     updater?.stop();
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
+    dictation?.cancel();
     bridge?.stop();
     mcpHubRef?.stop();
   });

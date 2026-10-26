@@ -6,3 +6,4 @@ release/
 Thumbs.db
 .env
 .env.*
+native/**/build/

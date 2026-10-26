@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { cpSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { buildNative } from './scripts/build-native.mjs';
 import { sourceStamp, STAMP_FILE } from './scripts/sourceStamp.mjs';
 
 // Taken before building: a file changed meanwhile makes the next start build again.
@@ -26,6 +27,8 @@ await Promise.all([
   // Installs an update once the hub has closed, run by the user's Node.js: Node's own modules only.
   build({ ...common, entryPoints: ['src/main/updateHelper.ts'], outfile: 'dist/update-helper.mjs', platform: 'node', format: 'esm' }),
   build({ ...renderer, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js' }),
+  // The microphone's audio thread (voice dictation) loads its own file.
+  build({ ...renderer, entryPoints: ['src/renderer/dictationWorklet.ts'], outfile: 'dist/renderer/dictation-worklet.js' }),
   // three.js and the mascot model (four fifths of the renderer) load after the first paint, from their own file.
   // The model is embedded in the bundle: three.js loads files with fetch(), which refuses file:// URLs.
   build({ ...renderer, entryPoints: ['src/renderer/clawd/entry.ts'], outfile: 'dist/renderer/clawd.js', loader: { '.glb': 'binary' } }),
@@ -47,4 +50,6 @@ cpSync('assets/logo.png', 'dist/renderer/logo.png');
 cpSync('assets/mascots', 'dist/renderer/mascots', { recursive: true, filter: (src) => !src.endsWith('.glb') });
 cpSync('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
 writeFileSync(STAMP_FILE, stamp);
+// The dictation helper (macOS): a Mac without Swift builds the rest and goes without dictation.
+buildNative();
 console.log('build ok');

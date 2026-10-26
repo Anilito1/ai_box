@@ -59,6 +59,12 @@ In any composer: `/compact`, `/clear`, `/model`, `/effort`, `/mode`, `/cost`, th
 
 <img src="docs/media/slash.png" width="540" alt="Slash command menu">
 
+### Voice dictation (macOS 26+)
+
+A microphone button in the composer, and a key to hold while you talk (Alt+Space by default; tap it to start and stop instead). The words are recognised on your Mac by Apple's speech model, so no audio leaves it and it costs nothing. They appear dimmed where your cursor is and settle there when you stop; nothing is sent until you press Enter, and Esc drops the dictation. Language and key are in Settings › General. Needs the Swift compiler (Xcode command line tools) at build time and the language's voice asset in System Settings › Keyboard › Dictation.
+
+<img src="docs/screenshots/dictation.png" width="540" alt="Dictation in the composer: the words being recognised are dimmed">
+
 ### A Clawd for every session
 
 Each session gets an animated 3D Clawd that shows what it is doing: typing, searching, delegating, celebrating, sleeping.
@@ -107,7 +113,7 @@ Found a vulnerability? Please open a private security advisory rather than a pub
 ```sh
 npm run typecheck   # TypeScript
 npm test            # unit tests
-npm run build       # bundles into dist/
+npm run build       # bundles into dist/ (on a Mac, also compiles the dictation helper, native/dictation-mac)
 npm start -- --user-data-dir=<folder>   # run with a separate profile
 ```
 

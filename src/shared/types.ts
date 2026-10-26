@@ -1,5 +1,6 @@
 import type { Capabilities, CapResult, McpDraft, McpSource } from './capabilities';
 import type { TurnRecord } from './costs';
+import type { DictationEvent, DictationSettings, DictationSupport } from './dictation';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
 import type { CliRun, UpdateAction } from './cliUpdate';
@@ -570,6 +571,7 @@ export interface HubSettings {
   updates: UpdateMode;
   /** The topics column of the master: its groups' order and the folded ones. */
   topicGroups: TopicGroupPrefs;
+  dictation: DictationSettings;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */
@@ -588,7 +590,8 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts' | 'anthropicActive'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts' | 'anthropicActive' | 'dictation'>> & {
+  dictation?: Partial<DictationSettings>;
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -785,4 +788,16 @@ export interface HubApi {
   answerUpdate(go: boolean): void;
   /** Opens the hub's own folder (local modifications to look at). */
   openUpdateFolder(): void;
+  /** Whether this machine can dictate (macOS 26 and later), and the voice asset is installed. */
+  dictationSupport(): Promise<DictationSupport>;
+  /** Asks for the microphone if needed; `error` is "denied" when the system refuses it. */
+  dictationPermission(): Promise<Result>;
+  /** Starts the engine; `terms` are names and jargon to favour. Audio follows with dictationAudio. */
+  dictationStart(terms: string[]): Promise<Result>;
+  /** 16 kHz mono 16-bit little-endian PCM. */
+  dictationAudio(pcm: ArrayBuffer): void;
+  /** The audio has ended: the engine settles the text and answers with a `final` event. */
+  dictationStop(): void;
+  dictationCancel(): void;
+  onDictation(cb: (event: DictationEvent) => void): void;
 }
