@@ -1,10 +1,12 @@
-# Claude Hub
+<p align="center"><img src="assets/icon.png" width="120" alt="AI Box logo"></p>
+
+# AI Box
 
 **One chat, a whole team.** You talk to one master [Claude Code](https://code.claude.com/docs) session; it splits the work and runs workers in parallel, each in its own repo, while you watch.
 
-![Claude Hub: the master starts two workers, one asks a question, both report back](docs/media/demo.gif)
+![AI Box: the master starts two workers, one asks a question, both report back](docs/media/demo.gif)
 
-> **Unofficial project.** Claude Hub is not made, endorsed or supported by Anthropic. Claude and Claude Code are trademarks of Anthropic PBC. Claude Hub runs the Claude Code you install yourself and uses your own Claude access.
+> **Unofficial project.** AI Box is not made, endorsed or supported by Anthropic. Claude and Claude Code are trademarks of Anthropic PBC. AI Box runs the Claude Code you install yourself and uses your own Claude access.
 
 ## What it does
 
@@ -46,7 +48,7 @@ Every session is a plain Claude Code session: your `CLAUDE.md` files, plugins, M
 
 <table>
 <tr>
-<td width="50%" valign="top"><b>Git panel.</b> Branches, worktrees, changes and the graph of the repos you follow. Commit, pull and push without leaving the hub.<br><br><img src="docs/media/git.png" width="300" alt="Git panel"></td>
+<td width="50%" valign="top"><b>Git panel.</b> Branches, worktrees, changes and the graph of the repos you follow. Commit, pull and push without leaving AI Box.<br><br><img src="docs/media/git.png" width="300" alt="Git panel"></td>
 <td width="50%" valign="top"><b>Cost.</b> Every card shows its cost and how full its context is. <b>Σ API cost</b> opens the spend by day, week or month, split by session.<br><br><img src="docs/media/cost.png" width="330" alt="API cost popover"></td>
 </tr>
 </table>
@@ -82,21 +84,21 @@ npm start
 
 The first start downloads Electron (about 100 MB); Claude Code comes with the install. A short setup then asks for your language, your Claude access, GitHub (optional), the folders that hold your repos and the repos to follow. Everything stays editable in **Settings**.
 
-**Signing in.** The hub never asks for your Claude credentials. **Sign in with Claude Code** opens a terminal with Claude Code's own sign-in (`claude auth login`), as Anthropic's [rules](https://code.claude.com/docs/en/legal-and-compliance) require. Or paste an API key; it is stored encrypted by your OS keychain.
+**Signing in.** AI Box never asks for your Claude credentials. **Sign in with Claude Code** opens a terminal with Claude Code's own sign-in (`claude auth login`), as Anthropic's [rules](https://code.claude.com/docs/en/legal-and-compliance) require. Or paste an API key; it is stored encrypted by your OS keychain.
 
-**Updates** are automatic: when a new version is on GitHub, a small badge beside **Settings** offers **Update**, and the hub builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close the hub, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
+**Updates** are automatic: when a new version is on GitHub, a small badge beside **Settings** offers **Update**, and AI Box builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close AI Box, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
 
 Running several sessions at once uses your plan or API budget faster: keep an eye on the cost and limits in the status bar.
 
 ## Before you start: safety
 
-Claude Hub gives AI agents your computer.
+AI Box gives AI agents your computer.
 
 - **Sessions act as you.** They read and change files and run commands, within the permission mode you choose. Anything they read can try to steer them (prompt injection).
 - **A worker loads its repo's Claude Code setup** (`CLAUDE.md`, `.claude/settings.json` hooks, `.mcp.json`). Only send workers into repos you trust.
 - **Leaving your folders needs your yes.** A worker that would work outside your folders and followed repos waits for you, whatever the mode.
 - **"Allow everything" removes every approval**, including MCP confirmations before a `DROP` or `DELETE`. It is off unless you turn it on; use it only where you can afford to lose things.
-- **No telemetry.** The hub itself only talks to `api.anthropic.com` (to check a key), GitHub, and the git remotes you follow.
+- **No telemetry.** AI Box itself only talks to `api.anthropic.com` (to check a key), GitHub, and the git remotes you follow.
 
 Found a vulnerability? Please open a private security advisory rather than a public issue.
 

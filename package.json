@@ -39,7 +39,7 @@
   },
   "build": {
     "appId": "io.github.anilito1.hub",
-    "productName": "Claude Hub",
+    "productName": "AI Box",
     "directories": {
       "output": "release"
     },
