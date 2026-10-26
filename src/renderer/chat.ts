@@ -11,6 +11,7 @@ import {
   type Mode,
   type HubApi,
   type ModelOption,
+  type ProviderBadge,
   type SessionView,
 } from '../shared/types';
 import { toAttachment, type Attachment } from './attachments';
@@ -126,6 +127,8 @@ export class ChatView {
   private models: ModelOption[] = [];
   /** The models of the accounts that list their own (Codex), by account id. */
   private catalogs: Record<string, ModelOption[]> = {};
+  /** The providers, connected or not: what the provider button offers. */
+  private providers: ProviderBadge[] = [];
   /** Accounts a worker can be moved to; the menu only shows with more than the usual one. */
   private accounts: AccountBadge[] = [];
   /** The master's topic shown (its items only) and written in; null: everything. */
@@ -345,8 +348,9 @@ export class ChatView {
   }
 
   /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
-  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = [], catalogs: Record<string, ModelOption[]> = {}): void {
+  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = [], catalogs: Record<string, ModelOption[]> = {}, providers: ProviderBadge[] = []): void {
     this.models = models;
+    this.providers = providers;
     this.catalogs = catalogs;
     this.accounts = accounts;
     const switched = (session?.id ?? null) !== this.sessionId;
@@ -465,9 +469,10 @@ export class ChatView {
     // leads to Settings › Accounts to add more.
     this.accountBtn.hidden = false;
     {
-      const name = this.accounts.find((a) => a.id === s.account)?.name ?? s.account;
+      const badge = this.accounts.find((a) => a.id === s.account);
+      const name = this.providers.find((p) => p.id === badge?.provider)?.label ?? badge?.name ?? s.account;
       this.accountBtn.replaceChildren(icon(ICONS.user), h('span', '', name), h('span', 'cbtn-muted', s.fallbackFrom ? t('chat.fallbackFrom', { name: this.accounts.find((a) => a.id === s.fallbackFrom)?.name ?? s.fallbackFrom }) : s.accountPending ? t('chat.accountPending') : ''), icon(ICONS.chevron, 'ico small'));
-      this.accountBtn.title = t('chat.accountTitle');
+      this.accountBtn.title = t('chat.providerTitle');
       this.accountBtn.classList.toggle('warn', s.fallbackFrom !== '');
     }
 
@@ -676,14 +681,27 @@ export class ChatView {
     const s = this.session;
     if (!s) return;
     openMenu(this.accountBtn, (menu, close) => {
-      menu.append(h('div', 'menu-label', t('chat.account')));
-      for (const a of this.accounts) {
-        const row = this.menuRow(a.name, t(`account.kind.${a.kind}`), a.id === s.account);
+      menu.append(h('div', 'menu-label', t('chat.provider')));
+      const current = this.accounts.find((a) => a.id === s.account)?.provider ?? '';
+      const openSettings = () => {
+        close();
+        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
+      };
+      for (const p of this.providers) {
+        const row = this.menuRow(p.label, p.connected ? '' : t('chat.providerOff'), p.id === current);
+        // Not connected: greyed, and a click leads to where it is connected.
+        row.classList.toggle('disabled', !p.connected);
         row.addEventListener('click', () => {
-          if (a.id !== s.account) this.hub.setAccount(s.id, a.id);
+          if (!p.connected) return openSettings();
+          if (p.id !== current) this.hub.setProvider(s.id, p.id);
           close();
         });
         menu.append(row);
+      }
+      // A session on an older, hand-made account stays on it until another provider is picked.
+      if (current === '') {
+        const own = this.accounts.find((a) => a.id === s.account);
+        if (own) menu.append(this.menuRow(own.name, t(`account.kind.${own.kind === 'default' ? 'default' : own.kind}`), true));
       }
       if (s.userAccount) {
         const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
@@ -693,12 +711,12 @@ export class ChatView {
         });
         menu.append(h('div', 'menu-sep'), back);
       }
-      const add = this.menuRow(t('chat.accountAdd'), t('chat.accountAdd.hint'), false);
-      add.addEventListener('click', () => {
-        close();
-        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
-      });
-      menu.append(h('div', 'menu-sep'), add, h('div', 'menu-note', t('chat.accountNote')));
+      if (this.providers.some((p) => !p.connected)) {
+        const add = this.menuRow(t('chat.providerConnect'), t('chat.providerConnect.hint'), false);
+        add.addEventListener('click', openSettings);
+        menu.append(h('div', 'menu-sep'), add);
+      }
+      menu.append(h('div', 'menu-note', t('chat.accountNote')));
     });
   }
 

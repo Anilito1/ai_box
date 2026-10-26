@@ -40,7 +40,7 @@ settingsButton.setAttribute('aria-haspopup', 'dialog');
 settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
-const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null, (account) => snapshot.accounts.find((a) => a.id === account)?.limitedUntil ?? null);
+const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null, (account) => snapshot.accounts.find((a) => a.id === account)?.limitedUntil ?? null, () => snapshot.providers);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 
@@ -325,10 +325,10 @@ function render(): void {
 
   workspace.classList.toggle('expanded', opened !== null);
   const master = sessions.find((s) => s.role === 'master');
-  masterView.show(master, master && store.get(master.id), models, snapshot.accounts, snapshot.catalogs);
+  masterView.show(master, master && store.get(master.id), models, snapshot.accounts, snapshot.catalogs, snapshot.providers);
   topicsView.update(snapshot.topics, master && store.get(master.id));
   const worker = sessions.find((s) => s.id === opened);
-  workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts, snapshot.catalogs);
+  workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts, snapshot.catalogs, snapshot.providers);
   renderStatusbar(snapshot.rateLimits);
   renderRepos();
 }

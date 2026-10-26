@@ -1,17 +1,16 @@
-import { ACCOUNT_LIMITS, ACCOUNTS_MAX, DEFAULT_ACCOUNT, hasServer, normalizeAccount, OPENAI_URL } from '../shared/accounts';
-import { presetsOf, PRESETS } from '../shared/presets';
+import { providerOfAccount } from '../shared/providers';
 import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
+import { DEFAULT_ACCOUNT } from '../shared/accounts';
+import { ProvidersPanel } from './providers';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
-  ACCOUNT_KINDS,
   APP_NAME,
   EFFORTS,
   PROVIDERS,
   type Account,
-  type AccountStatus,
-  type CodexCli,
+  type ProviderBadge,
   type AgentFile,
   type ClaudeStatus,
   type Effort,
@@ -72,14 +71,6 @@ function stepReached(): Section {
 }
 
 /** Folder names as a list shows them: the last part, with its parent when two would read the same. */
-const hostOf = (url: string) => {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-};
-
 function folderNames(paths: string[]): string[] {
   const short = paths.map(folderName);
   return paths.map((p, i) => (short.filter((s) => s === short[i]).length > 1 ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : short[i]));
@@ -104,9 +95,6 @@ export class SetupView {
   private section: Section = 'general';
   private view: SettingsView | null = null;
   private claude: ClaudeStatus | null = null;
-  /** The Codex program on this computer, once asked. */
-  private codexCli: CodexCli | null = null;
-  private checkingCodex = false;
   private checkingClaude = false;
   /** The GitHub CLI on this computer; null until checked. */
   private gh: { installed: boolean; login: string } | null = null;
@@ -149,22 +137,9 @@ export class SetupView {
   /** `detail`: the raw words behind an error, folded under "Details". */
   private note: { text: string; tone: 'ok' | 'error'; detail?: string } | null = null;
   private busy = false;
-  /** Account being added or changed (a copy; empty id for a new one), else null for the list. */
-  private accountDraft: Account | null = null;
-  /** The key typed for it, kept across redraws; empty = keep the stored one. */
-  private accountKey = '';
-  /** The preset the account being added started from (its key page), else empty. */
-  private accountPreset = '';
-  /** Field the last save refused, outlined. */
-  private accountField = '';
-  /** Each account's last check, by id. */
-  private readonly accountStates = new Map<string, AccountStatus | 'checking'>();
-  /** Models the last checked OpenAI server listed, offered in the model fields. */
-  private accountModels: string[] = [];
+  /** The providers' blocks of Settings › Accounts. */
+  private readonly providers: ProvidersPanel;
   private confirmAccountDelete = '';
-  /** A Claude account whose sign-in runs in a terminal window: its row is checked every few seconds until then. */
-  private accountWait: { id: string; until: number } | null = null;
-  private accountTimer = 0;
 
   constructor(
     private readonly hub: HubApi,
@@ -173,7 +148,10 @@ export class SetupView {
     private readonly catalog: (account: string) => ModelOption[] | null = () => null,
     /** When an account's limit ends (epoch seconds), while it is limited. */
     private readonly limitedUntil: (account: string) => number | null = () => null,
+    /** The providers, connected or not, with the account behind each. */
+    private readonly providerList: () => ProviderBadge[] = () => [],
   ) {
+    this.providers = new ProvidersPanel(hub, { rerender: () => this.render(), errorText: (code) => this.accountErrorText(code), visible: () => !this.root.hidden && this.section === 'accounts' });
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
     this.root.setAttribute('aria-labelledby', 'setup-title');
@@ -311,10 +289,8 @@ export class SetupView {
     this.draft = null;
     this.agents = null;
     this.confirmDelete = '';
-    this.accountDraft = null;
-    this.accountKey = '';
     this.confirmAccountDelete = '';
-    this.accountWait = null;
+    this.providers.reset();
     void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
@@ -1122,31 +1098,26 @@ export class SetupView {
   // ---------- accounts ----------
 
   private accountsSection(el: HTMLElement, v: SettingsView): void {
-    if (this.accountDraft) return this.accountEditor(el, v, this.accountDraft);
     const s = v.settings;
     this.head(el, t('setup.accounts.title'), t('setup.accounts.lead'));
-    if (!this.claude && !this.checkingClaude) void this.checkClaude();
-    if (!this.codexCli && !this.checkingCodex) void this.checkCodexCli();
-    el.append(this.programsField());
+    this.providers.mount(el);
 
+    // Where the master and the workers run unless a post or the user says otherwise: a provider each.
     const grid = h('div', 'setup-grid');
     grid.append(
-      this.accountSelect(t('setup.accounts.master'), t('setup.accounts.master.hint'), s.masterAccount, s, (id) => void this.save({ masterAccount: id })),
-      this.accountSelect(t('setup.accounts.workers'), t('setup.accounts.workers.hint'), s.workerAccount, s, (id) => void this.save({ workerAccount: id })),
+      this.providerSelect(t('setup.accounts.master'), t('setup.accounts.master.hint'), s.masterAccount, s, (id) => void this.save({ masterAccount: id })),
+      this.providerSelect(t('setup.accounts.workers'), t('setup.accounts.workers.hint'), s.workerAccount, s, (id) => void this.save({ workerAccount: id })),
     );
     el.append(grid);
 
-    const list = h('div', 'team-list');
-    list.append(this.usualAccountRow(s));
-    for (const a of s.accounts) list.append(this.accountRow(a));
-    el.append(list);
-
-    const full = s.accounts.length >= ACCOUNTS_MAX;
-    const add = this.field(t('setup.accounts.add'), full ? t('setup.accounts.full', { max: ACCOUNTS_MAX }) : t('setup.accounts.add.hint'));
-    const row = h('div', 'setup-row team-templates');
-    for (const kind of ACCOUNT_KINDS) row.append(this.button(t(`setup.accounts.add.${kind}`), kind === 'claude' ? 'btn' : 'btn ghost', () => this.editAccount(normalizeAccount({ kind, isolated: kind === 'codex' })), full));
-    add.append(row);
-    el.append(add, this.fallbackField(s), h('p', 'setup-fine', t('setup.accounts.fine')));
+    // Accounts made by hand before the providers' blocks existed: still there, only to remove.
+    const legacy = s.accounts.filter((a) => providerOfAccount(a) === null);
+    if (legacy.length > 0) {
+      const list = h('div', 'team-list');
+      for (const a of legacy) list.append(this.legacyRow(a));
+      el.append(this.field(t('setup.accounts.legacy'), t('setup.accounts.legacy.hint')), list);
+    }
+    el.append(this.fallbackField(s), h('p', 'setup-fine', t('setup.accounts.fine')));
   }
 
   /** The chain of accounts a session goes on with when its own reaches a limit. */
@@ -1237,12 +1208,28 @@ export class SetupView {
   }
 
   /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
-  private accountSelect(label: string, hint: string, value: string, s: HubSettings, pick: (id: string) => void, inherit?: string): HTMLElement {
+  /** A provider's name for the account set (the usual access: Anthropic), as the menus say it. */
+  private providerName(account: string, s: HubSettings): string {
+    return this.providerList().find((p) => p.accountId === account)?.label ?? s.accounts.find((a) => a.id === account)?.name ?? t('account.default');
+  }
+
+  private providerSelect(label: string, hint: string, value: string, s: HubSettings, pick: (account: string) => void, inherit?: string): HTMLElement {
     const f = this.field(label, hint);
     const select = h('select', 'setup-select');
     select.setAttribute('aria-label', label);
     if (inherit !== undefined) select.append(new Option(inherit, ''));
-    select.append(new Option(t('account.default'), DEFAULT_ACCOUNT), ...s.accounts.map((a) => new Option(`${a.name} · ${t(`account.kind.${a.kind}`)}`, a.id)));
+    const known = new Set<string>();
+    for (const p of this.providerList()) {
+      // A provider that is not connected cannot be picked (unless it is what is set now).
+      const off = !p.connected;
+      const id = p.accountId || `off:${p.id}`;
+      known.add(id);
+      const opt = new Option(off ? `${p.label} · ${t('provider.disconnected')}` : p.label, id);
+      opt.disabled = off && id !== value;
+      select.append(opt);
+    }
+    // An account that stands for no provider (an older, hand-made one) keeps its place while it is the one set.
+    if (value && !known.has(value)) select.append(new Option(s.accounts.find((a) => a.id === value)?.name ?? value, value));
     select.value = value;
     select.disabled = this.busy;
     select.addEventListener('change', () => pick(select.value));
@@ -1250,42 +1237,13 @@ export class SetupView {
     return f;
   }
 
-  /** The Claude access of Settings › Claude: always there, changed in its own section. */
-  private usualAccountRow(s: HubSettings): HTMLElement {
-    const row = h('div', 'team-row');
-    const text = h('div', 'team-row-text');
-    const title = h('div', 'team-row-title');
-    title.append(h('b', '', t('account.default')), h('span', 'team-row-session', t(`setup.provider.${s.provider}` as Key)));
-    const tags = h('div', 'team-tags');
-    const a = this.claude?.account;
-    if (this.checkingClaude || !this.claude) tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
-    else if (a?.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...[a.email, a.plan].filter(Boolean).map((x) => h('span', 'setup-tag', x)));
-    else tags.append(h('span', 'setup-pill warn', t('setup.claude.noAccess')));
-    text.append(title, tags);
-    const actions = h('div', 'team-row-actions');
-    actions.append(this.button(t('setup.accounts.usualEdit'), 'btn ghost small', () => this.go('claude')));
-    row.append(text, actions);
-    return row;
-  }
-
-  private accountRow(a: Account): HTMLElement {
+  /** An account made by hand before the providers' blocks: named, and removable. */
+  private legacyRow(a: Account): HTMLElement {
     const row = h('div', 'team-row');
     const text = h('div', 'team-row-text');
     const title = h('div', 'team-row-title');
     title.append(h('b', '', a.name), h('span', 'team-row-session', t(`account.kind.${a.kind}`)));
-    const tags = h('div', 'team-tags');
-    if (hasServer(a.kind)) tags.append(h('span', 'setup-tag', hostOf(a.baseUrl)), ...(a.model ? [h('span', 'setup-tag', a.smallModel ? `${a.model} · ${a.smallModel}` : a.model)] : []));
-    const st = this.accountStates.get(a.id);
-    const limited = this.limitedUntil(a.id);
-    if (limited) tags.append(h('span', 'setup-pill warn', t('setup.accounts.limitedUntil', { time: new Date(limited * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })));
-    if (st === undefined) void this.checkAccount(a.id);
-    if (!st || st === 'checking') tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
-    else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && !hasServer(a.kind) ? [h('span', 'setup-tag', st.detail)] : []));
-    else if ((a.kind === 'claude' || a.kind === 'codex') && !st.error) tags.append(h('span', 'setup-pill warn', t('setup.accounts.signedOut')));
-    else tags.append(h('span', 'setup-pill warn', this.accountErrorText(st.error)));
-    text.append(title, tags);
-    if (this.accountWait?.id === a.id) text.append(h('div', 'setup-wait', t('setup.accounts.waiting')));
-
+    text.append(title);
     const actions = h('div', 'team-row-actions');
     if (this.confirmAccountDelete === a.id) {
       actions.append(
@@ -1297,10 +1255,7 @@ export class SetupView {
         }),
       );
     } else {
-      if ((a.kind === 'claude' || a.kind === 'codex') && st && st !== 'checking' && !st.ready && st.error !== 'no-codex') actions.append(this.button(t('setup.accounts.signIn'), 'btn primary small', () => void this.accountLogin(a)));
       actions.append(
-        this.button(t('setup.check'), 'btn ghost small', () => void this.checkAccount(a.id), st === 'checking'),
-        this.button(t('team.edit'), 'btn ghost small', () => this.editAccount(structuredClone(a))),
         this.button(t('team.delete'), 'btn ghost small', () => {
           this.confirmAccountDelete = a.id;
           this.render();
@@ -1311,234 +1266,12 @@ export class SetupView {
     return row;
   }
 
-  private editAccount(a: Account): void {
-    this.accountDraft = a;
-    this.accountKey = '';
-    this.accountPreset = '';
-    this.accountField = '';
-    this.note = null;
-    this.render();
-  }
-
-  /** One account's fields. A Claude account has a name only: its sign-in happens in Claude Code. */
-  private accountEditor(el: HTMLElement, v: SettingsView, d: Account): void {
-    const kind = t(`account.kind.${d.kind}`);
-    this.head(el, d.id ? t('setup.accounts.editTitle', { name: d.name }) : t('setup.accounts.newTitle', { kind }), t(`setup.accounts.editor.${d.kind}`));
-    const mark = (field: string, f: HTMLElement) => {
-      if (this.accountField === field) f.classList.add('invalid');
-    };
-    // In a row, an input takes the width of its field.
-    const row = (...els: HTMLElement[]) => {
-      const r = h('div', 'setup-row');
-      r.append(...els);
-      return r;
-    };
-    const nameField = this.field(t('setup.accounts.name'), t('setup.accounts.name.hint'));
-    const name = this.input(d.name, t(`setup.accounts.name.placeholder.${d.kind}`));
-    name.maxLength = ACCOUNT_LIMITS.name;
-    name.dataset.autofocus = '';
-    name.addEventListener('input', () => (d.name = name.value));
-    nameField.append(row(name));
-    mark('name', nameField);
-    el.append(nameField);
-
-    if (hasServer(d.kind) && !d.id) {
-      // A provider that needs only an address: picking it fills the address (and models) in.
-      const presetField = this.field(t('setup.accounts.preset'), t('setup.accounts.preset.hint'));
-      const pick = h('select', 'setup-select');
-      pick.setAttribute('aria-label', t('setup.accounts.preset'));
-      pick.append(new Option(t('setup.accounts.preset.none'), ''), ...presetsOf(d.kind).map((p) => new Option(p.label, p.id)));
-      pick.value = this.accountPreset;
-      pick.addEventListener('change', () => {
-        const p = PRESETS.find((x) => x.id === pick.value);
-        this.accountPreset = p?.id ?? '';
-        if (p) {
-          d.baseUrl = p.baseUrl;
-          d.model = p.model;
-          d.smallModel = p.smallModel;
-          if (!d.name.trim()) d.name = p.label;
-        }
-        this.render();
-      });
-      presetField.append(pick);
-      el.append(presetField);
-    }
-    if (hasServer(d.kind)) {
-      const urlField = this.field(t('setup.accounts.baseUrl'), t(d.kind === 'openai' ? 'setup.accounts.baseUrl.hint' : 'setup.accounts.baseUrl.hint.compat'));
-      const placeholder = d.kind === 'openai' ? OPENAI_URL : 'https://api.deepseek.com/anthropic';
-      const url = this.input(d.baseUrl || (d.kind === 'openai' ? OPENAI_URL : ''), placeholder);
-      url.classList.add('wide');
-      url.addEventListener('input', () => (d.baseUrl = url.value));
-      urlField.append(row(url));
-      mark('baseUrl', urlField);
-      el.append(urlField);
-    }
-    if (d.kind === 'anthropic-key' || hasServer(d.kind)) {
-      const stored = !!d.id && v.accountKeys.includes(d.id);
-      const hint = !v.secureStorage ? t('setup.err.keychain', { app: APP_NAME }) : stored ? t('setup.accounts.key.keep') : t(`setup.accounts.key.hint.${d.kind}`);
-      const keyField = this.field(t('setup.accounts.key'), hint);
-      const key = this.input(this.accountKey, stored ? '••••••••' : d.kind === 'anthropic-key' ? 'sk-ant-…' : 'sk-…', 'password');
-      key.addEventListener('input', () => (this.accountKey = key.value));
-      keyField.append(row(key), this.keyLink(d));
-      mark('key', keyField);
-      el.append(keyField);
-    }
-    if (hasServer(d.kind)) {
-      const grid = h('div', 'setup-grid');
-      const listId = 'account-models';
-      const models = h('datalist');
-      models.id = listId;
-      models.append(...this.accountModels.map((m) => new Option(m, m)));
-      const field = (key: 'model' | 'smallModel', placeholder: string) => {
-        const f = this.field(t(`setup.accounts.${key}`), t(d.kind === 'openai' ? `setup.accounts.${key}.hint` : (`setup.accounts.${key}.hint.compat` as Key)));
-        const input = this.input(d[key], placeholder);
-        input.setAttribute('list', listId);
-        input.addEventListener('input', () => (d[key] = input.value));
-        f.append(row(input));
-        mark(key, f);
-        return f;
-      };
-      grid.append(field('model', d.kind === 'openai' ? 'gpt-5' : ''), field('smallModel', d.kind === 'openai' ? 'gpt-5-mini' : ''));
-      el.append(grid, models);
-      if (this.accountModels.length > 0 && d.model && !this.accountModels.includes(d.model.trim())) el.append(h('div', 'setup-hint', t('setup.accounts.modelUnlisted', { model: d.model })));
-    }
-
-    if (d.kind === 'codex') {
-      if (!this.codexCli && !this.checkingCodex) void this.checkCodexCli();
-      const own = h('label', 'setup-toggle');
-      const box = h('input');
-      box.type = 'checkbox';
-      box.checked = d.isolated;
-      box.disabled = !!d.id;
-      box.addEventListener('change', () => (d.isolated = box.checked));
-      const ownText = h('span', 'setup-choice-text');
-      ownText.append(h('span', 'setup-choice-title', t('setup.accounts.codexOwn')), h('span', 'setup-choice-hint', t(d.id ? 'setup.accounts.codexOwn.fixed' : 'setup.accounts.codexOwn.hint')));
-      own.append(box, ownText);
-      el.append(own);
-      if (this.codexCli && !this.codexCli.found) el.append(h('div', 'setup-hint', t('setup.accounts.codexMissing')));
-    }
-
-    const actions = h('div', 'setup-row team-editor-actions');
-    const label = d.id ? t('team.save') : d.kind === 'claude' || d.kind === 'codex' ? t('setup.accounts.createSignIn') : t('setup.verifySave');
-    actions.append(
-      this.button(label, 'btn primary', () => void this.saveAccount(d)),
-      this.button(t('setup.cancel'), 'btn ghost', () => {
-        this.accountDraft = null;
-        this.accountKey = '';
-        this.accountField = '';
-        this.note = null;
-        this.render();
-      }),
-    );
-    el.append(actions);
-  }
-
-  private async saveAccount(d: Account): Promise<void> {
-    const r = await this.run(() => this.hub.saveAccount(d, this.accountKey.trim() ? this.accountKey.trim() : null));
-    this.view = r;
-    if (r.status) this.accountModels = r.status.models;
-    if (!r.ok) {
-      this.accountField = r.field;
-      const text = r.field && r.field !== 'key' && r.field !== 'baseUrl' ? t('team.err', { field: t(`setup.accounts.field.${r.field}` as Key), problem: t(`team.problem.${r.error}` as Key, { max: ACCOUNTS_MAX }) }) : this.accountErrorText(r.error);
-      this.flash(text, 'error', this.rawOf(r.error));
-      return this.render();
-    }
-    const isNew = !d.id;
-    this.accountDraft = null;
-    this.accountKey = '';
-    this.accountField = '';
-    if (r.status) this.accountStates.set(r.id, r.status);
-    else this.accountStates.delete(r.id);
-    this.flash(t(isNew ? 'setup.accounts.created' : 'setup.accounts.saved', { name: d.name.trim() }), 'ok');
-    this.render();
-    // A new Claude account signs in right away, in Claude Code's own window.
-    const saved = r.settings.accounts.find((a) => a.id === r.id);
-    if (isNew && (saved?.kind === 'claude' || saved?.kind === 'codex')) await this.accountLogin(saved);
-  }
-
   private async deleteAccount(a: Account): Promise<void> {
     this.confirmAccountDelete = '';
     const r = await this.run(() => this.hub.deleteAccount(a.id));
     this.view = r;
-    this.accountStates.delete(a.id);
     this.flash(r.ok ? t('setup.accounts.deleted', { name: a.name }) : t('setup.accounts.deleteWorking', { name: a.name }), r.ok ? 'ok' : 'error');
     this.render();
-  }
-
-  private async checkAccount(id: string): Promise<void> {
-    this.accountStates.set(id, 'checking');
-    this.render();
-    const st = await this.hub.checkAccount(id);
-    this.accountStates.set(id, st);
-    if (st.models.length > 0) this.accountModels = st.models;
-    if (!this.root.hidden && this.section === 'accounts') this.render();
-  }
-
-  /** Claude Code's own sign-in for this account, in a terminal window; the row turns ready by itself once done. */
-  private async accountLogin(a: Account): Promise<void> {
-    const opened = await this.run(() => this.hub.accountLogin(a.id));
-    this.note = opened ? null : { text: t('setup.accounts.noTerminal'), tone: 'error' };
-    this.accountWait = opened ? { id: a.id, until: Date.now() + WAIT_MS } : null;
-    this.render();
-    if (opened) this.watchAccount();
-  }
-
-  private watchAccount(): void {
-    window.clearTimeout(this.accountTimer);
-    this.accountTimer = window.setTimeout(() => void this.watchAccountOnce(), 4000);
-  }
-
-  private async watchAccountOnce(): Promise<void> {
-    const wait = this.accountWait;
-    if (!wait || Date.now() > wait.until || this.root.hidden || this.section !== 'accounts') {
-      this.accountWait = null;
-      if (!this.root.hidden && this.section === 'accounts') this.render();
-      return;
-    }
-    const st = await this.hub.checkAccount(wait.id);
-    if (this.accountWait?.id !== wait.id) return;
-    this.accountStates.set(wait.id, st);
-    if (st.ready) {
-      this.accountWait = null;
-      this.flash(t('setup.accounts.signedIn', { name: this.view?.settings.accounts.find((a) => a.id === wait.id)?.name ?? '' }), 'ok');
-      this.render();
-      return;
-    }
-    this.render();
-    this.watchAccount();
-  }
-
-  /** An account check's or save's error code, in words. */
-  private async checkCodexCli(): Promise<void> {
-    this.checkingCodex = true;
-    this.codexCli = await this.hub.checkCodex();
-    this.checkingCodex = false;
-    if (this.section === 'accounts') this.render();
-  }
-
-  /** The programs the accounts run on, found on this computer: what to install when one is missing. */
-  private programsField(): HTMLElement {
-    const f = this.field(t('setup.accounts.programs'), t('setup.accounts.programs.hint'));
-    const row = h('div', 'team-tags');
-    const claude = this.claude;
-    if (this.checkingClaude || !claude) row.append(h('span', 'setup-pill', `Claude Code · ${t('setup.accounts.checking')}`));
-    else if (claude.found) row.append(h('span', 'setup-pill ok', 'Claude Code'));
-    else row.append(h('span', 'setup-pill warn', `Claude Code · ${t('setup.accounts.programMissing')}`));
-    const codex = this.codexCli;
-    if (this.checkingCodex || !codex) row.append(h('span', 'setup-pill', `Codex · ${t('setup.accounts.checking')}`));
-    else if (!codex.found) row.append(h('span', 'setup-pill warn', `Codex · ${t('setup.accounts.programMissing')}`));
-    else row.append(h('span', codex.outdated ? 'setup-pill warn' : 'setup-pill ok', `Codex ${codex.version}${codex.outdated ? ` · ${t('setup.accounts.programOld')}` : ''}`));
-    f.append(row);
-    if (codex && !codex.found) f.append(h('div', 'setup-hint', t('setup.accounts.codexMissing')), this.link(t('setup.accounts.codexInstall'), 'https://github.com/openai/codex'));
-    return f;
-  }
-
-  /** Where to create the key of the account being edited: its preset's page, else its kind's. */
-  private keyLink(d: Account): HTMLElement {
-    const preset = PRESETS.find((p) => p.id === this.accountPreset);
-    const url = preset?.keyUrl || (d.kind === 'anthropic-key' ? 'https://console.anthropic.com/settings/keys' : d.kind === 'openai' ? 'https://platform.openai.com/api-keys' : '');
-    const label = preset?.keyUrl ? t('setup.accounts.key.whereOf', { name: preset.label }) : t(`setup.accounts.key.where.${d.kind === 'anthropic-key' ? 'anthropic-key' : 'openai'}`);
-    return url ? this.link(label, url) : h('span');
   }
 
   private accountErrorText(code: string): string {
@@ -1553,6 +1286,12 @@ export class SetupView {
       'http-404': 'setup.accounts.err.notFoundUrl',
       unauthorized: 'setup.accounts.err.refused',
       forbidden: 'setup.accounts.err.refused',
+      format: 'setup.accounts.err.format',
+      'no-model': 'setup.accounts.err.noModel',
+      'no-terminal': 'setup.accounts.noTerminal',
+      'rate-limited': 'setup.accounts.err.rateLimited',
+      network: 'setup.accounts.err.network',
+      working: 'setup.accounts.err.working',
     };
     return own[code] ? t(own[code]) : this.errorText(code, 'key');
   }
@@ -1867,10 +1606,10 @@ export class SetupView {
     grid.append(modeField);
     el.append(grid);
 
-    // Always offered: with only the usual access, the link below leads to where accounts are added.
+    // The provider of its worker (then its model, above); one that is not connected waits in Settings › Accounts.
     {
-      const usual = s.accounts.find((a) => a.id === s.workerAccount)?.name ?? t('account.default');
-      const accountField = this.accountSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
+      const usual = this.providerName(s.workerAccount, s);
+      const accountField = this.providerSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
         const before = this.catalog(d.account || s.workerAccount) !== null;
         d.account = id;
         changed();
@@ -1882,7 +1621,7 @@ export class SetupView {
       }, t('team.account.inherit', { account: usual }));
       const control = accountField.querySelector('select');
       if (control) mark('account', accountField, control);
-      if (s.accounts.length === 0) accountField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
+      if (this.providerList().some((p) => !p.connected)) accountField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
       el.append(accountField);
     }
 

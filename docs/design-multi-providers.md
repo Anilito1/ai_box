@@ -38,6 +38,14 @@ Ce qui est **vérifié** (commande lancée, sonde exécutée, code lu) est sépa
 
 ---
 
+## 0 ter. Providers : l'interface (voir `src/shared/providers.ts`)
+
+L'utilisateur ne voit plus de « comptes » mais trois **fournisseurs** : Anthropic, OpenAI, DeepSeek. Réglages › Comptes = un bloc par fournisseur (état, une action principale) ; composeur et éditeur de poste = « Fournisseur » puis « Modèle » (les fournisseurs non connectés sont grisés, avec un lien vers Réglages › Comptes) ; le maître lance un worker avec `provider` (+ `model`) dans `spawn_worker` et `message_worker`, sans nom de compte (le paramètre `account` reste accepté).
+
+Sous un fournisseur, le hub tient un compte qu'il crée lui-même : Anthropic = l'accès Claude habituel (`default`, connexion de Claude Code) ; OpenAI = « OpenAI (ChatGPT) » (Codex, dossier à lui) ou « OpenAI (API) » (clé, pont) ; DeepSeek = compte compatible Anthropic (clé dans `safeStorage`, modèles Pro/Flash demandés par les noms que l'endpoint fait correspondre). Ajouter un fournisseur : une entrée dans `PROVIDER_DEFS`, sa façon de se connecter (`main.ts`: `connectProvider`/`loginProvider`/`disconnectProvider`) et son bloc (`renderer/providers.ts`).
+
+---
+
 ## 1. État des lieux
 
 ### 1.1 Ce que contient déjà `feature/multi-comptes`
