@@ -254,6 +254,14 @@ export class ChatView {
     this.modeBtn.addEventListener('click', () => this.openModeMenu());
     this.modelBtn = h('button', 'cbtn');
     this.modelBtn.addEventListener('click', () => this.openModelMenu());
+    // The same "/" menu as typing it, for those who look for the commands rather than know them.
+    const slashBtn = h('button', 'cbtn cbtn-icon cbtn-slash', '/');
+    slashBtn.title = t('slash.button');
+    slashBtn.setAttribute('aria-label', t('slash.title'));
+    slashBtn.setAttribute('aria-haspopup', 'listbox');
+    // The field keeps the focus: the menu reads its keys.
+    slashBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    slashBtn.addEventListener('click', () => this.slash.toggle());
 
     const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ring.setAttribute('viewBox', '0 0 18 18');
@@ -279,7 +287,7 @@ export class ChatView {
     this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
     const box = h('div', 'composer-box');
     box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {

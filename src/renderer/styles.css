@@ -2439,6 +2439,12 @@ kbd,
 .cbtn-icon {
   padding: 0 7px;
 }
+.cbtn-slash {
+  min-width: var(--ctl-md);
+  justify-content: center;
+  color: var(--text-3);
+  font: 500 var(--fs-md) / 1 var(--font-mono);
+}
 .cbtn.danger,
 .menu-row.danger .menu-title {
   color: var(--danger);

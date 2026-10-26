@@ -24,6 +24,8 @@ interface Entry {
   cli: CliCommand | null;
 }
 
+/** A command name being typed, nothing after it. */
+const COMMAND = /^\/[^\s]*$/;
 const MODE_ALIASES: Partial<Record<Mode, string>> = { bypassPermissions: 'bypass', acceptEdits: 'accept' };
 let menus = 0;
 
@@ -45,6 +47,8 @@ export class SlashMenu {
   private confirming = false;
   /** The selection was moved by hand (arrows, pointer) since the list was last filtered. */
   private chosen = false;
+  /** Opened from the composer's "/" button: the draft set aside ('' if none); a pick is written, never run. */
+  private held: string | null = null;
 
   constructor(
     private readonly input: HTMLTextAreaElement,
@@ -72,6 +76,7 @@ export class SlashMenu {
 
   /** Another session in the composer: its own commands, nothing left open. */
   reset(): void {
+    this.held = null;
     this.close();
     this.cancelClear();
     this.dismissed = '';
@@ -82,11 +87,28 @@ export class SlashMenu {
     // The text changed under the /clear question: it no longer stands.
     if (this.confirming) this.cancelClear();
     const value = this.input.value;
-    const typing = /^\/[^\s]*$/.test(value) && value !== this.dismissed;
+    const typing = COMMAND.test(value) && value !== this.dismissed;
     if (!typing) return this.close();
     // Asked once each time the menu opens (a skill may have appeared since), not at every keystroke.
     if (!this.open) void this.load();
     this.draw(value.slice(1));
+  }
+
+  /**
+   * The composer's "/" button: the menu opens as if "/" had been typed, and the command picked is written in the field
+   * (the draft follows it, as its argument), for the user to send. A second click closes it.
+   */
+  toggle(): void {
+    if (this.open) {
+      this.dismissed = this.input.value;
+      this.close();
+      return;
+    }
+    this.held = this.input.value;
+    if (!COMMAND.test(this.held)) this.input.value = '/';
+    this.dismissed = '';
+    this.input.focus();
+    this.update();
   }
 
   /** Keys while the menu or the /clear question is open; true when the key was used. */
@@ -105,6 +127,8 @@ export class SlashMenu {
       this.select(this.index + (e.key === 'ArrowDown' ? 1 : -1));
       this.chosen = true;
     } else if (e.key === 'Tab' && !e.shiftKey && entry) {
+      this.complete(entry);
+    } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && entry && this.held !== null) {
       this.complete(entry);
     } else if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && entry) {
       // Found only by its description, and not picked: the name typed is sent for what it is (a command whose list
@@ -349,16 +373,30 @@ export class SlashMenu {
 
   /** "/name " in the field, ready for its argument; the menu closes. */
   private complete(entry: Entry): void {
-    this.input.value = entry.args ? `/${entry.name} ` : `/${entry.name}`;
+    // Picked from the "/" button: a draft waiting in the field follows the command.
+    const draft = this.held !== null && !COMMAND.test(this.held) ? this.held.trim() : '';
+    this.held = null;
+    this.input.value = draft ? `/${entry.name} ${draft}` : entry.args ? `/${entry.name} ` : `/${entry.name}`;
     this.dismissed = this.input.value;
     this.close();
     this.input.dispatchEvent(new Event('input'));
   }
 
   close(): void {
-    if (this.root.hidden) return;
-    this.root.hidden = true;
-    this.input.setAttribute('aria-expanded', 'false');
-    this.input.removeAttribute('aria-activedescendant');
+    if (!this.root.hidden) {
+      this.root.hidden = true;
+      this.input.setAttribute('aria-expanded', 'false');
+      this.input.removeAttribute('aria-activedescendant');
+    }
+    // Closed without a pick: the "/" button leaves the field as it found it, its draft after a command typed since.
+    if (this.held === null) return;
+    const before = this.held;
+    this.held = null;
+    const value = this.input.value;
+    const restored = COMMAND.test(value) ? before : COMMAND.test(before) || !before.trim() ? value : `${value.trimEnd()} ${before.trim()}`;
+    if (restored === value) return;
+    this.input.value = restored;
+    this.dismissed = restored;
+    this.input.dispatchEvent(new Event('input'));
   }
 }
