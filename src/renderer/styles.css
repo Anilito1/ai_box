@@ -1595,6 +1595,83 @@ kbd,
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
+/* A repo's group: a header that folds it, then its topics. */
+.topic-group {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  border-radius: var(--r-sm);
+}
+.topic-group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    color var(--dur-2);
+}
+.topic-group-head:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+.topic-group-head:focus-visible {
+  outline-offset: -2px;
+}
+.topic-chevron {
+  flex: none;
+  transition: transform var(--dur-2);
+}
+.topic-group-head[aria-expanded='false'] .topic-chevron {
+  transform: rotate(-90deg);
+}
+.topic-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topic-slot.dragging,
+.topic-group-head.dragging {
+  opacity: 0.45;
+}
+/* Where a drop lands: a line before or after the group, or a frame round the group a topic joins. */
+.topic-group.drop-before::before,
+.topic-group.drop-after::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.topic-group.drop-before::before {
+  top: -3px;
+}
+.topic-group.drop-after::after {
+  bottom: -3px;
+}
+.topic-group.drop-into {
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .topics-sep {
   flex: none;
   height: 1px;

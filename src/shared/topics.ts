@@ -1,4 +1,5 @@
 import { slugify } from './team';
+import { GROUP_LIMITS } from './topicGroups';
 
 /**
  * Topics of the master's conversation: one per job the user follows (a feature, an audit, a migration…). The master
@@ -26,6 +27,10 @@ export interface Topic {
   workers: string[];
   /** Last activity, ms. A replayed transcript has no times: its topics count in its order, below any live one. */
   at: number;
+  /** Main folder of the repo of its workers, once known and kept when they close ("" or none: not known). */
+  repo?: string;
+  /** Group the user dragged it to (a repo's main folder, "" for General); it stays there whatever its workers do. */
+  moved?: string;
 }
 
 /** What the master gave the `topic` tool, cleaned. */
@@ -206,6 +211,24 @@ export class TopicTracker {
   /** Named for the first time by the reply in progress. */
   createdNow(id: string): boolean {
     return this.ctx.turn.created.has(id);
+  }
+
+  /** The repo of a topic, remembered; true when it changed. */
+  setRepo(id: string, repo: string): boolean {
+    const topic = this.topics.get(id);
+    if (!topic || (topic.repo ?? '') === repo) return false;
+    if (repo) topic.repo = repo;
+    else delete topic.repo;
+    return true;
+  }
+
+  /** The user put a topic in a group (a repo's folder, "" for General); undefined puts it back where its repo is. */
+  setMoved(id: string, group: string | undefined): boolean {
+    const topic = this.topics.get(id);
+    if (!topic || topic.moved === group) return false;
+    if (group === undefined) delete topic.moved;
+    else topic.moved = group;
+    return true;
   }
 
   /** Most recent activity first. */
@@ -501,6 +524,8 @@ export class TopicTracker {
         question: oneLineText(t.question, TOPIC_LIMITS.question),
         workers: workers.slice(0, TOPIC_LIMITS.workers),
         at: t.at,
+        ...(typeof t.repo === 'string' && t.repo.length <= GROUP_LIMITS.key && t.repo ? { repo: t.repo } : {}),
+        ...(typeof t.moved === 'string' && t.moved.length <= GROUP_LIMITS.key ? { moved: t.moved } : {}),
       });
     }
     if (Array.isArray(s.links)) {

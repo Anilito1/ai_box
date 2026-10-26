@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
+import { resolveTopicRepo } from '../shared/topicGroups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
@@ -1156,6 +1157,33 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
+  /** Where a worker works: the main folder of its repo (a worktree counts as its origin repo), or null. Cached a few seconds. */
+  private repoCache = new Map<string, { at: number; main: string | null }>();
+  private repoOfWorker(name: string): string | null {
+    const cwd = [...this.sessions.values()].find((x) => x.name === name)?.cwd;
+    if (!cwd) return null;
+    const hit = this.repoCache.get(cwd);
+    if (hit && Date.now() - hit.at < 10_000) return hit.main;
+    const main = repoOf(cwd)?.main ?? null;
+    this.repoCache.set(cwd, { at: Date.now(), main });
+    return main;
+  }
+
+  /** Remembers the repo of each topic from its workers (the last one's), so it stays once they are closed. */
+  private fileTopicsByRepo(): void {
+    let changed = false;
+    for (const topic of this.topics.list()) {
+      if (this.topics.setRepo(topic.id, resolveTopicRepo(topic.workers, (w) => this.repoOfWorker(w), topic.repo))) changed = true;
+    }
+    if (changed) this.changed();
+  }
+
+  /** The user dragged a topic to a group (a repo's main folder, "" for General); undefined: back to its own repo. */
+  moveTopic(id: string, group: string | undefined): void {
+    const topic = this.topics.get(id);
+    if (topic && this.topics.setMoved(id, group === (topic.repo ?? '') ? undefined : group)) this.changed();
+  }
+
   /** An item of the master without the topics the user deleted; null when it was only theirs (a waiting approval stays). */
   private kept(item: ChatItem): ChatItem | null {
     if (!this.topics.wasRemoved(item.id)) return item;
@@ -1259,6 +1287,7 @@ export class SessionManager extends EventEmitter {
     const limits = this.rateLimits.get(this.canon(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT)) ?? null;
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
+    this.fileTopicsByRepo();
     return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
   }
 

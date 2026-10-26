@@ -6,6 +6,7 @@ import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccou
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
+import { isGroupPrefs } from '../shared/topicGroups';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
 import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
 import { UPDATE_MODES, type UpdateMode } from '../shared/update';
@@ -54,6 +55,7 @@ function defaults(lang: Lang): HubConfig {
     masterInstructions: '',
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
     updates: 'auto',
+    topicGroups: { order: [], collapsed: [] },
   };
 }
 
@@ -101,6 +103,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
   take('updates', raw.updates, (v): v is UpdateMode => UPDATE_MODES.includes(v as UpdateMode), (v) => (cfg.updates = v));
+  take('topicGroups', raw.topicGroups, isGroupPrefs, (v) => (cfg.topicGroups = { order: v.order, collapsed: v.collapsed }));
   if (raw.github !== undefined) {
     const g = obj(raw.github);
     take('github.clientId', g.clientId, (v): v is string => isStr(v, 64, /^[\w.-]*$/), (v) => (cfg.github.clientId = v));
