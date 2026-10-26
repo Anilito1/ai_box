@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 // What the build is made from, as a short hash of every source's size and modification time: written into dist by
 // build.mjs, compared at start by a hub run from source. Stats only, no reading: cheap enough for every start.
 
-const FILES = ['build.mjs', 'package.json', 'package-lock.json', 'assets/logo.png', 'THIRD_PARTY_NOTICES.md', 'scripts/sourceStamp.mjs'];
+const FILES = ['build.mjs', 'package.json', 'package-lock.json', 'assets/logo.png', 'assets/clawd.glb', 'THIRD_PARTY_NOTICES.md', 'scripts/sourceStamp.mjs'];
 export const STAMP_FILE = 'dist/source-stamp.txt';
 
 /** @param {string} dir */
@@ -14,7 +14,7 @@ const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (
 /** @param {string} root @returns {string} */
 export function sourceStamp(root) {
   const hash = createHash('sha256');
-  for (const path of [...walk(join(root, 'src')).sort(), ...FILES.map((f) => join(root, f))]) {
+  for (const path of [...walk(join(root, 'src')).sort(), ...walk(join(root, 'assets', 'mascots')).sort(), ...FILES.map((f) => join(root, f))]) {
     let stat = 'missing';
     try {
       const s = statSync(path);

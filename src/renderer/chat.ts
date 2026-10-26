@@ -19,6 +19,7 @@ import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
+import { sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -421,7 +422,7 @@ export class ChatView {
     const s = this.session;
     const last = lastOf(this.items);
     this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background, s?.compacting);
-    if (s) this.mascot?.update(s, last);
+    if (s) this.mascot?.update(s, last, sessionMascot(s, this.accounts));
   }
 
   // ---------- chrome (header + composer state) ----------

@@ -26,7 +26,15 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import glb from '../../../assets/clawd.glb';
+import type { MascotId } from '../mascot';
 import { CALM, CLIPS, FIDGETS, REST, type Clip, type Hat, type Mind, type Pose } from './state';
+
+declare global {
+  interface Window {
+    /** The models besides Clawd, each set by its own file (build.mjs) once loaded. */
+    hubMascots?: Partial<Record<MascotId, Uint8Array>>;
+  }
+}
 
 // One WebGL context for every mascot (Chromium caps a page near 16): each view is rendered in turn into the shared
 // offscreen canvas, then handed to its own canvas as an ImageBitmap, a GPU copy (drawImage into a small 2D canvas
@@ -60,14 +68,24 @@ const HAT_BONES: Record<Hat, string> = {
 const STILL_AT: Partial<Record<Clip, number>> = { sleep_loop: 1.4, ko_loop: 0.3 };
 /** The sweat drop on a still Clawd, halfway down its temple. */
 const SWEAT_STILL_AT = 0.6;
+/** The material a worker's own shade goes on; none for a mascot whose colours are its provider's (a gradient). */
+const RECOLOR: Record<MascotId, string | null> = { clawd: 'mat_body', codex: 'mat_body', gemini: null, deepseek: null };
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/** One mascot's model, shared by all its views. */
+export interface Model {
+  readonly rig: Object3D;
+  readonly camera: PerspectiveCamera;
+  readonly clips: Map<string, AnimationClip>;
+  /** Clips that set the face the blink closes to another value (an expression): a blink over them would show both. */
+  readonly expressions: Set<string>;
+  readonly recolor: string | null;
+}
 
 class Stage {
   readonly scene = new Scene();
   readonly views = new Set<StageView>();
-  readonly clips = new Map<string, AnimationClip>();
-  readonly rig: Object3D;
-  readonly camera: PerspectiveCamera;
+  private readonly models = new Map<MascotId, Promise<Model | null>>();
   reduced = reducedMotion.matches;
   /** The hub window is in the background: no fidgets nor blinks, work at the slow pace. */
   quiet = !document.hasFocus();
@@ -77,7 +95,6 @@ class Stage {
 
   constructor(
     readonly renderer: WebGLRenderer,
-    gltf: GLTF,
     environment: Texture,
   ) {
     this.scene.environment = environment;
@@ -85,16 +102,6 @@ class Stage {
     const key = new DirectionalLight(0xffffff, 1.6);
     key.position.set(-2, 4, 5);
     this.scene.add(key);
-
-    const rig = gltf.scene.getObjectByName('Clawd_Rig');
-    const camera = gltf.cameras[0];
-    if (!rig || !(camera instanceof PerspectiveCamera)) throw new Error('clawd.glb: Clawd_Rig or cam_card missing');
-    this.rig = rig;
-    this.camera = camera;
-    camera.removeFromParent(); // A root camera has its world matrix refreshed at each render.
-    for (const clip of gltf.animations) this.clips.set(clip.name, clip);
-    const missing = Object.keys(CLIPS).filter((name) => !this.clips.has(name));
-    if (missing.length > 0) console.warn(`clawd.glb: clips missing: ${missing.join(', ')}`);
 
     renderer.domElement.addEventListener('webglcontextlost', () => {
       this.lost = true;
@@ -116,11 +123,33 @@ class Stage {
   }
 
   /** `large`: the mascot atop an open conversation, animated at the full rate. */
-  attach(canvas: HTMLCanvasElement, mind: Mind, color: string, large: boolean, onLost: () => void): StageView {
-    const view = new StageView(this, canvas, mind, color, large ? LARGE_FPS : CARD_FPS, onLost);
+  attach(canvas: HTMLCanvasElement, mind: Mind, model: Model, color: string, large: boolean, onLost: () => void): StageView {
+    const view = new StageView(this, canvas, mind, model, color, large ? LARGE_FPS : CARD_FPS, onLost);
     this.views.add(view);
     this.wake();
     return view;
+  }
+
+  /** A mascot's model, loaded the first time a session wears it; null when it cannot be (the avatar keeps its picture). */
+  model(id: MascotId): Promise<Model | null> {
+    let model = this.models.get(id);
+    if (!model) this.models.set(id, (model = this.load(id)));
+    return model;
+  }
+
+  private async load(id: MascotId): Promise<Model | null> {
+    try {
+      const gltf = await new GLTFLoader().parseAsync((await modelBytes(id)).slice().buffer, '');
+      const model = modelOf(id, gltf);
+      await breathe();
+      // Its shaders compile in the GPU process while the page keeps running (KHR_parallel_shader_compile), instead of
+      // freezing it on the first frame.
+      await this.renderer.compileAsync(model.rig, model.camera, this.scene);
+      return model;
+    } catch (err) {
+      console.warn(`Mascot ${id} unavailable:`, err);
+      return null;
+    }
   }
 
   /** Something changed (snapshot, event, resize, focus): look at every view now. */
@@ -197,6 +226,7 @@ export class StageView {
     private readonly stage: Stage,
     private readonly canvas: HTMLCanvasElement,
     private readonly mind: Mind,
+    private readonly model: Model,
     color: string,
     private readonly fps: number,
     readonly onLost: () => void,
@@ -204,7 +234,7 @@ export class StageView {
     const ctx = canvas.getContext('bitmaprenderer');
     if (!ctx) throw new Error('bitmaprenderer canvas unavailable');
     this.ctx = ctx;
-    this.root = clone(stage.rig);
+    this.root = clone(model.rig);
     this.root.visible = false;
     stage.scene.add(this.root);
     this.root.traverse((o) => {
@@ -214,7 +244,7 @@ export class StageView {
       // Every part shares one skin: one skeleton updated once per render instead of one per primitive.
       if (o instanceof SkinnedMesh) o.skeleton = this.skeleton ??= o.skeleton;
       const material = o.material as MeshStandardMaterial;
-      if (material.name !== 'mat_body') return;
+      if (material.name !== model.recolor) return;
       this.tint ??= material.clone();
       this.tint.color.set(color);
       o.material = this.tint;
@@ -289,9 +319,11 @@ export class StageView {
     const blinks = this.mind.blinks(now, quiet);
     if (blinks !== this.blinked) {
       this.blinked = blinks;
-      // Not clamped: once over it lets go of the eyes, or it would flatten the next expression.
-      this.play(this.action('eyes_blink'), 1, false);
-      this.settle(t, CLIPS.eyes_blink.duration / this.mind.speed);
+      if (!this.model.expressions.has(pose.clip)) {
+        // Not clamped: once over it lets go of the eyes, or it would flatten the next expression.
+        this.play(this.action('eyes_blink'), 1, false);
+        this.settle(t, CLIPS.eyes_blink.duration / this.mind.speed);
+      }
     }
     if (resting && t >= this.settleUntil) {
       // Coming to rest: one last frame with the move run to its end, even if the timer fired late or the view was
@@ -321,8 +353,8 @@ export class StageView {
   private action(clip: Clip): AnimationAction {
     let action = this.actions.get(clip);
     if (!action) {
-      const source = this.stage.clips.get(clip) ?? this.stage.clips.get('idle_breathe');
-      if (!source) throw new Error(`clawd.glb: no clip ${clip}`);
+      const source = this.model.clips.get(clip) ?? this.model.clips.get('idle_breathe');
+      if (!source) throw new Error(`mascot model: no clip ${clip}`);
       action = this.mixer.clipAction(source);
       this.actions.set(clip, action);
     }
@@ -418,7 +450,8 @@ export class StageView {
   }
 
   private draw(): void {
-    const { renderer, scene, camera } = this.stage;
+    const { renderer, scene } = this.stage;
+    const { camera } = this.model;
     const { width, height } = this.canvas;
     this.stage.fit(width, height);
     renderer.setViewport(0, 0, width, height);
@@ -491,22 +524,59 @@ async function precompile(renderer: WebGLRenderer, pmrem: PMREMGenerator, room: 
   background.material.dispose();
 }
 
-/** The shared stage, or null when WebGL or the model is unavailable (the avatars then keep their SVG). */
+/** Clawd comes with the stage; every other model in its own file, fetched the first time a session wears it. */
+function modelBytes(id: MascotId): Promise<Uint8Array> {
+  if (id === 'clawd') return Promise.resolve(glb);
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = `mascot-${id}.js`;
+    el.addEventListener('load', () => {
+      const bytes = window.hubMascots?.[id];
+      if (bytes) resolve(bytes);
+      else reject(new Error(`mascot-${id}.js set no model`));
+    });
+    el.addEventListener('error', () => reject(new Error(`mascot-${id}.js unavailable`)));
+    document.head.append(el);
+  });
+}
+
+function modelOf(id: MascotId, gltf: GLTF): Model {
+  const rig = gltf.scene.children.find((o) => o.name.endsWith('_Rig'));
+  const camera = gltf.cameras[0];
+  if (!rig || !(camera instanceof PerspectiveCamera)) throw new Error(`${id}.glb: rig or cam_card missing`);
+  camera.removeFromParent(); // A root camera has its world matrix refreshed at each render.
+  const clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
+  const missing = Object.keys(CLIPS).filter((name) => !clips.has(name));
+  if (missing.length > 0) console.warn(`${id}.glb: clips missing: ${missing.join(', ')}`);
+  return { rig, camera, clips, expressions: expressions(clips), recolor: RECOLOR[id] };
+}
+
+function expressions(clips: Map<string, AnimationClip>): Set<string> {
+  const blink = clips.get('eyes_blink')?.tracks ?? [];
+  const found = new Set<string>();
+  for (const [name, clip] of clips) {
+    for (const closing of blink) {
+      const size = closing.getValueSize();
+      const track = clip.tracks.find((t) => t.name === closing.name);
+      // The face open, as the blink starts from it.
+      if (track?.values.some((v, i) => Math.abs(v - closing.values[i % size]) > 1e-3)) found.add(name);
+    }
+  }
+  return found;
+}
+
+/** The shared stage, or null when WebGL or Clawd's model is unavailable (the avatars then keep their SVG). */
 export function clawdStage(): Promise<Stage | null> {
   return (loading ??= (async () => {
     let renderer: WebGLRenderer | null = null;
     try {
-      const gltf = await new GLTFLoader().parseAsync(glb.slice().buffer, '');
-      await breathe();
       renderer = new WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'low-power' });
       renderer.setPixelRatio(1); // Views size themselves in device pixels.
       renderer.setScissorTest(true);
       renderer.setClearColor(0x000000, 0);
-      const stage = new Stage(renderer, gltf, await roomLight(renderer));
+      const stage = new Stage(renderer, await roomLight(renderer));
       await breathe();
-      // The mascot's shaders compile in the GPU process while the page keeps running (KHR_parallel_shader_compile),
-      // instead of freezing it on the first frame.
-      await stage.renderer.compileAsync(stage.rig, stage.camera, stage.scene);
+      if (!(await stage.model('clawd'))) throw new Error('clawd.glb unusable');
       return stage;
     } catch (err) {
       console.warn('Clawd 3D unavailable, SVG mascots instead:', err);
