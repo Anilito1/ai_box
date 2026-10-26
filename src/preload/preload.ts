@@ -34,6 +34,7 @@ const api: HubApi = {
   setMode: (id, mode) => ipcRenderer.send('session:mode', id, mode),
   setAccount: (id, account) => ipcRenderer.send('session:account', id, account),
   setProvider: (id, provider) => ipcRenderer.send('session:provider', id, provider),
+  setProviderModel: (id, provider, model) => ipcRenderer.send('session:providerModel', id, provider, model),
   decide: (id, requestId, decision) => ipcRenderer.send('session:decide', id, requestId, decision),
   stop: (id) => ipcRenderer.send('session:stop', id),
   resume: (id) => ipcRenderer.send('session:resume', id),

@@ -1208,11 +1208,6 @@ export class SetupView {
   }
 
   /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
-  /** A provider's name for the account set (the usual access: Anthropic), as the menus say it. */
-  private providerName(account: string, s: HubSettings): string {
-    return this.providerList().find((p) => p.accountId === account)?.label ?? s.accounts.find((a) => a.id === account)?.name ?? t('account.default');
-  }
-
   private providerSelect(label: string, hint: string, value: string, s: HubSettings, pick: (account: string) => void, inherit?: string): HTMLElement {
     const f = this.field(label, hint);
     const select = h('select', 'setup-select');
@@ -1557,20 +1552,38 @@ export class SetupView {
 
     const grid = h('div', 'setup-grid');
     const runField = this.field(t('team.field.model'), t('team.model.hint'));
+    // One choice for the provider and the model: the models are listed by provider, and one that is not connected waits
+    // in Settings › Accounts. Auto leaves the provider to the workers' and the model to the master.
     const model = h('select', 'setup-select');
-    // A post on an account with a list of its own (Codex) picks from that list.
-    const own = this.catalog(d.account || s.workerAccount);
-    const options = own ?? this.models();
-    const known = [...new Set([...(own ? own.map((m) => m.value) : [...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES]), d.model].filter(Boolean))];
-    model.append(new Option(t('team.autoModelLong'), ''), ...known.map((m) => new Option(options.find((x) => x.value === m)?.label ?? m, m)));
-    model.value = d.model;
+    model.append(new Option(t('team.autoModelLong'), ''));
+    const effective = d.account || s.workerAccount;
+    const wanted = d.account ? `${d.account}|${d.model}` : d.model ? `${s.workerAccount}|${d.model}` : '';
+    const offered = new Set<string>();
+    for (const p of this.providerList()) {
+      if (!p.connected && p.accountId !== effective) continue;
+      const group = h('optgroup');
+      group.label = p.label;
+      const account = p.accountId || effective;
+      const own = p.id === 'anthropic' ? [...new Set([...p.models.map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES])] : p.models.map((m) => m.value);
+      const label = (value: string) => p.models.find((m) => m.value === value)?.label ?? value;
+      const rows: [string, string][] = [[`${account}|`, t('team.autoModelOf', { provider: p.label })], ...own.map((m): [string, string] => [`${account}|${m}`, label(m)])];
+      for (const [value, text] of rows) {
+        group.append(new Option(text, value));
+        offered.add(value);
+      }
+      model.append(group);
+    }
+    // What the post holds and nothing above offers (a model of an older list, a hand-made account): kept as it is.
+    if (wanted && !offered.has(wanted)) model.append(new Option(d.model || t('team.autoModelLong'), wanted));
+    model.value = wanted;
     model.setAttribute('aria-label', t('team.field.model'));
     const effort = h('select', 'setup-select');
     effort.append(new Option(t('team.autoEffortLong'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
     effort.value = d.effort;
     effort.setAttribute('aria-label', t('team.field.effort'));
     model.addEventListener('change', () => {
-      d.model = model.value;
+      const [account, name] = model.value === '' ? ['', ''] : (model.value.split('|') as [string, string]);
+      Object.assign(d, { account, model: name });
       changed();
     });
     effort.addEventListener('change', () => {
@@ -1581,7 +1594,9 @@ export class SetupView {
     runRow.append(model, effort);
     runField.append(runRow);
     mark('model', runField, model);
+    mark('account', runField, model);
     grid.append(runField);
+    if (this.providerList().some((p) => !p.connected)) runField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
 
     const modeField = this.field(t('team.field.mode'), this.modeHint(d.mode, s.permissionMode));
     const mode = h('select', 'setup-select');
@@ -1605,25 +1620,6 @@ export class SetupView {
     if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
     grid.append(modeField);
     el.append(grid);
-
-    // The provider of its worker (then its model, above); one that is not connected waits in Settings › Accounts.
-    {
-      const usual = this.providerName(s.workerAccount, s);
-      const accountField = this.providerSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
-        const before = this.catalog(d.account || s.workerAccount) !== null;
-        d.account = id;
-        changed();
-        // The model list follows the account's program: a model of the other one means nothing there.
-        if (before !== (this.catalog(d.account || s.workerAccount) !== null)) {
-          d.model = '';
-          this.render();
-        }
-      }, t('team.account.inherit', { account: usual }));
-      const control = accountField.querySelector('select');
-      if (control) mark('account', accountField, control);
-      if (this.providerList().some((p) => !p.connected)) accountField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
-      el.append(accountField);
-    }
 
     const on = h('label', 'setup-toggle');
     const box = h('input');

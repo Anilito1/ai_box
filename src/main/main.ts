@@ -747,6 +747,7 @@ class Hub {
       return isProviderId(provider) && m ? this.disconnectProvider(provider, m) : { ok: false, error: 'unsupported', field: '', views: [] };
     });
     on('session:provider', (id, provider) => isStr(id) && isProviderId(provider) && mgr.setProvider(id, provider));
+    on('session:providerModel', (id, provider, model) => isStr(id) && isProviderId(provider) && isStr(model) && MODEL.test(model) && mgr.setProviderModel(id, provider, model));
     handle('github:gh-status', async () => {
       const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
       return { installed: gh !== '', login };

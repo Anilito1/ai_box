@@ -94,7 +94,6 @@ export class ChatView {
   private readonly input: HTMLTextAreaElement;
   private readonly modeBtn: HTMLButtonElement;
   private readonly modelBtn: HTMLButtonElement;
-  private readonly accountBtn: HTMLButtonElement;
   private readonly ctx: { root: HTMLSpanElement; arc: SVGCircleElement; text: HTMLSpanElement };
   private readonly cost: HTMLSpanElement;
   private readonly sendBtn: HTMLButtonElement;
@@ -271,9 +270,6 @@ export class ChatView {
     // The field keeps the focus: the menu reads its keys.
     slashBtn.addEventListener('mousedown', (e) => e.preventDefault());
     slashBtn.addEventListener('click', () => this.slash.toggle());
-    this.accountBtn = h('button', 'cbtn');
-    this.accountBtn.hidden = true;
-    this.accountBtn.addEventListener('click', () => this.openAccountMenu());
 
     const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ring.setAttribute('viewBox', '0 0 18 18');
@@ -299,7 +295,7 @@ export class ChatView {
     this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, this.accountBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
     const box = h('div', 'composer-box');
     box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
@@ -463,18 +459,19 @@ export class ChatView {
     this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? modeLabel(s.mode) : t('chat.modeDefault')));
     this.modeBtn.classList.toggle('danger', s.mode === 'bypassPermissions');
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
-    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? effortLabel(s.effort) : ''), icon(ICONS.chevron, 'ico small'));
+    // One button for the provider and the model: "DeepSeek · V4 Pro", the effort beside it.
+    const badge = this.accounts.find((a) => a.id === s.account);
+    const provider = this.providers.find((p) => p.id === badge?.provider)?.label ?? badge?.name ?? '';
+    const shown = provider && s.modelLabel.startsWith(provider) ? s.modelLabel.slice(provider.length).trim() || s.modelLabel : s.modelLabel;
+    const note = s.fallbackFrom ? t('chat.fallbackFrom', { name: this.accounts.find((a) => a.id === s.fallbackFrom)?.name ?? s.fallbackFrom }) : s.accountPending ? t('chat.accountPending') : '';
+    this.modelBtn.replaceChildren(
+      ...(provider ? [h('span', 'cbtn-provider', provider)] : []),
+      h('span', '', shown),
+      h('span', 'cbtn-muted', [s.effort ? effortLabel(s.effort) : '', note].filter(Boolean).join(' · ')),
+      icon(ICONS.chevron, 'ico small'),
+    );
     this.modelBtn.title = t('chat.modelTitle');
-    // The account (the provider) of every session, master included, even when there is only the usual one: the menu
-    // leads to Settings › Accounts to add more.
-    this.accountBtn.hidden = false;
-    {
-      const badge = this.accounts.find((a) => a.id === s.account);
-      const name = this.providers.find((p) => p.id === badge?.provider)?.label ?? badge?.name ?? s.account;
-      this.accountBtn.replaceChildren(icon(ICONS.user), h('span', '', name), h('span', 'cbtn-muted', s.fallbackFrom ? t('chat.fallbackFrom', { name: this.accounts.find((a) => a.id === s.fallbackFrom)?.name ?? s.fallbackFrom }) : s.accountPending ? t('chat.accountPending') : ''), icon(ICONS.chevron, 'ico small'));
-      this.accountBtn.title = t('chat.providerTitle');
-      this.accountBtn.classList.toggle('warn', s.fallbackFrom !== '');
-    }
+    this.modelBtn.classList.toggle('warn', s.fallbackFrom !== '');
 
     const m = s.metrics;
     const pct = m?.contextPct ?? null;
@@ -645,78 +642,78 @@ export class ChatView {
   private openModelMenu(): void {
     const s = this.session;
     if (!s) return;
-    // A worker on an OpenAI account runs that account's model: only its effort is picked here.
-    const bridged = !!this.accounts.find((a) => a.id === s.account)?.pinned;
-    const models = this.modelsFor(s);
+    const badge = this.accounts.find((a) => a.id === s.account);
+    // A session on an older, hand-made account that pins its model: only its effort is picked here.
+    const pinned = !!badge?.pinned;
+    const current = badge?.provider ?? '';
+    let tab: string = current || this.providers.find((p) => p.connected)?.id || '';
+    const openSettings = (close: () => void) => {
+      close();
+      window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
+    };
     openMenu(this.modelBtn, (menu, close) => {
-      menu.append(h('div', 'menu-label', t('chat.model')));
-      if (bridged) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
-      else if (models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
-      for (const model of bridged ? [] : models) {
-        const row = this.menuRow(model.label, model.description, model.value === s.model);
-        row.addEventListener('click', () => {
-          this.hub.setModel(s.id, model.value);
-          close();
-        });
-        menu.append(row);
-      }
-      const current = models.find((m) => m.value === s.model);
-      const efforts: Effort[] = current?.efforts.length ? current.efforts : EFFORTS;
-      menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
-      const seg = h('div', 'segmented');
-      for (const effort of efforts) {
-        const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
-        b.addEventListener('click', () => {
-          this.hub.setEffort(s.id, effort);
-          close();
-        });
-        seg.append(b);
-      }
-      menu.append(seg);
-    });
-  }
-
-  /** The accounts a worker can move to: it restarts there with its conversation, after its turn if it is at work. */
-  private openAccountMenu(): void {
-    const s = this.session;
-    if (!s) return;
-    openMenu(this.accountBtn, (menu, close) => {
-      menu.append(h('div', 'menu-label', t('chat.provider')));
-      const current = this.accounts.find((a) => a.id === s.account)?.provider ?? '';
-      const openSettings = () => {
-        close();
-        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
+      const draw = () => {
+        menu.replaceChildren();
+        // The provider first: the models below are its models. One that is not connected is greyed, and leads to Settings.
+        const tabs = h('div', 'segmented provider-tabs');
+        for (const p of this.providers) {
+          const b = h('button', p.id === tab ? 'seg active' : 'seg', p.label);
+          b.classList.toggle('off', !p.connected);
+          b.title = p.connected ? '' : t('chat.providerOff');
+          b.addEventListener('click', () => {
+            if (!p.connected) return openSettings(close);
+            tab = p.id;
+            draw();
+          });
+          tabs.append(b);
+        }
+        menu.append(tabs);
+        const models = tab === current ? this.modelsFor(s) : (this.providers.find((p) => p.id === tab)?.models ?? []);
+        menu.append(h('div', 'menu-label', t('chat.model')));
+        if (pinned && tab === current) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
+        else if (models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
+        for (const model of pinned && tab === current ? [] : models) {
+          const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model);
+          row.addEventListener('click', () => {
+            // Provider and model in one go: the session moves to the provider if it is not there already.
+            if (tab === current) this.hub.setModel(s.id, model.value);
+            else this.hub.setProviderModel(s.id, tab, model.value);
+            close();
+          });
+          menu.append(row);
+        }
+        // The effort belongs to the model the session runs: shown with its provider's tab.
+        if (tab === current) {
+          const now = models.find((m) => m.value === s.model);
+          const efforts: Effort[] = now?.efforts.length ? now.efforts : EFFORTS;
+          menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
+          const seg = h('div', 'segmented');
+          for (const effort of efforts) {
+            const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
+            b.addEventListener('click', () => {
+              this.hub.setEffort(s.id, effort);
+              close();
+            });
+            seg.append(b);
+          }
+          menu.append(seg);
+        }
+        if (s.userAccount) {
+          const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
+          back.addEventListener('click', () => {
+            this.hub.setAccount(s.id, '');
+            close();
+          });
+          menu.append(h('div', 'menu-sep'), back);
+        }
+        if (this.providers.some((p) => !p.connected)) {
+          const add = this.menuRow(t('chat.providerConnect'), t('chat.providerConnect.hint'), false);
+          add.addEventListener('click', () => openSettings(close));
+          menu.append(h('div', 'menu-sep'), add);
+        }
+        menu.append(h('div', 'menu-note', t('chat.accountNote')));
       };
-      for (const p of this.providers) {
-        const row = this.menuRow(p.label, p.connected ? '' : t('chat.providerOff'), p.id === current);
-        // Not connected: greyed, and a click leads to where it is connected.
-        row.classList.toggle('disabled', !p.connected);
-        row.addEventListener('click', () => {
-          if (!p.connected) return openSettings();
-          if (p.id !== current) this.hub.setProvider(s.id, p.id);
-          close();
-        });
-        menu.append(row);
-      }
-      // A session on an older, hand-made account stays on it until another provider is picked.
-      if (current === '') {
-        const own = this.accounts.find((a) => a.id === s.account);
-        if (own) menu.append(this.menuRow(own.name, t(`account.kind.${own.kind === 'default' ? 'default' : own.kind}`), true));
-      }
-      if (s.userAccount) {
-        const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
-        back.addEventListener('click', () => {
-          this.hub.setAccount(s.id, '');
-          close();
-        });
-        menu.append(h('div', 'menu-sep'), back);
-      }
-      if (this.providers.some((p) => !p.connected)) {
-        const add = this.menuRow(t('chat.providerConnect'), t('chat.providerConnect.hint'), false);
-        add.addEventListener('click', openSettings);
-        menu.append(h('div', 'menu-sep'), add);
-      }
-      menu.append(h('div', 'menu-note', t('chat.accountNote')));
+      draw();
     });
   }
 

@@ -5076,3 +5076,17 @@ input[type='radio']:focus-visible {
 .menu-row.disabled {
   opacity: 0.5;
 }
+.cbtn-provider {
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--hover-strong);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.provider-tabs {
+  margin-top: 6px;
+}
+.provider-tabs .seg.off {
+  opacity: 0.5;
+}

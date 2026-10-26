@@ -638,6 +638,8 @@ export interface HubApi {
   setAccount(id: string, account: string): void;
   /** Puts a session on a provider (anthropic, openai, deepseek): it moves to the account behind it, if connected. */
   setProvider(id: string, provider: string): void;
+  /** One choice: a provider and a model of it, applied together. */
+  setProviderModel(id: string, provider: string, model: string): void;
   decide(id: string, requestId: string, decision: PermissionDecision): void;
   stop(id: string): void;
   resume(id: string): void;

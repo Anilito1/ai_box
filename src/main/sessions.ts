@@ -620,7 +620,8 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userModel = true;
     s.fixedModel = model;
     s.model = model;
-    s.modelLabel = this.labelFor(model, model);
+    const own = s.runAccount && this.ownCatalog(s.runAccount) ? this.catalogOf(s.runAccount).find((m) => m.value === model) : undefined;
+    s.modelLabel = own?.displayName ?? this.labelFor(model, model);
     if (!s.fixedEffort) {
       // An inherited effort is per model (modelSettings): resolve it again for the new one.
       s.effort = null;
@@ -706,6 +707,18 @@ export class SessionManager extends EventEmitter {
       const models = account ? (account === DEFAULT_ACCOUNT ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
       return { id: def.id, label: def.label, connected: account !== '', accountId: account, models };
     });
+  }
+
+  /** One choice of the composer: a provider and a model of it, applied together. */
+  setProviderModel(id: string, provider: string, model: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const r = resolveProvider(this.providerStates, provider);
+    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
+    if (r.account === (s.runAccount || this.accountOf(s))) return this.setModel(id, model);
+    // Another provider: the model goes first (the move keeps it if the new account has it), then the session moves.
+    Object.assign(s, { fixedModel: model, model, userModel: true });
+    this.setAccount(id, r.account);
   }
 
   /** The user picked a provider for a session (composer): it moves to the account behind it. */
