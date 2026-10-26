@@ -84,7 +84,9 @@ function loadRenderer(lang: Lang): void {
 }
 
 /** The window's own colours, the page's --bg and --text-3 in the system's appearance (light or dark). */
-const chrome = () => (nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 36 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 36 });
+const chrome = () => (nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 40 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 40 });
+/** The window controls sit over a pane's header: they take its colour (--chat). */
+const controls = () => ({ ...chrome(), color: nativeTheme.shouldUseDarkColors ? '#0f1013' : '#ffffff' });
 
 function createWindow(mgr: SessionManager, lang: Lang): void {
   win = new BrowserWindow({
@@ -96,9 +98,9 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     backgroundColor: chrome().color,
     titleBarStyle: 'hidden',
-    titleBarOverlay: chrome(),
-    // macOS: its window buttons, centred in the 36 px title bar.
-    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 11 } } : {}),
+    titleBarOverlay: controls(),
+    // macOS: its window buttons, centred in the 40 px row of the panes' headers.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 } } : {}),
     webPreferences: {
       preload: join(here, 'preload.cjs'),
       contextIsolation: true,
@@ -110,7 +112,7 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
   nativeTheme.on('updated', () => {
     if (!win || win.isDestroyed()) return;
     win.setBackgroundColor(chrome().color);
-    if (process.platform !== 'darwin') win.setTitleBarOverlay(chrome());
+    if (process.platform !== 'darwin') win.setTitleBarOverlay(controls());
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());

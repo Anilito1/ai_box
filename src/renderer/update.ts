@@ -3,7 +3,7 @@ import { UPDATE_MODES, type UpdateChoice, type UpdateMode, type UpdateState } fr
 import { ago, h, icon, ICONS, techDetails } from './dom';
 import { t, tn } from './i18n';
 
-// The hub's own updates: a banner across the top of the window, and the block of Settings › About.
+// The hub's own updates: a badge in the master's header that opens a card, and the block of Settings › About.
 
 /** A result after the restart that installed it, or the outcome of a check the user asked for, fades after this long. */
 const DONE_MS = 12_000;
@@ -12,10 +12,13 @@ const CHECKED_MS = 6_000;
 let hub: HubApi;
 let uiBusy: () => boolean = () => false;
 let state: UpdateState | null = null;
-/** What "later" put away until the next start or the next version: its topic and target. */
+/** What "close" put away until the next start or the next version: its topic and target. */
 let dismissed = '';
-/** A check the user asked for: its outcome shows in the banner even when there is nothing new. */
+/** A check the user asked for: its outcome shows on the badge even when there is nothing new. */
 let asked = false;
+/** The card under the badge is open. */
+let open = false;
+let slot: HTMLElement;
 let lastSeen = false;
 let ticker = 0;
 let decideTimer = 0;
@@ -23,7 +26,7 @@ let fadeTimer = 0;
 let answered: number | null = null;
 const sections = new Set<HTMLElement>();
 
-/** What the banner is about, from the most pressing. */
+/** What the badge is about, from the most pressing. */
 type Topic = 'progress' | 'countdown' | 'confirm' | 'failed' | 'problem' | 'done' | 'waiting' | 'available' | 'realign' | 'blocked' | 'quiet';
 
 function topic(s: UpdateState): Topic {
@@ -77,7 +80,7 @@ function message(s: UpdateState): string {
   }
 }
 
-/** The tone of the banner: the app's blue for an update, amber when the copy is left alone, red for a failure. */
+/** The tone of the badge: the app's blue for an update, amber when the copy is left alone, red for a failure. */
 function tone(s: UpdateState): 'accent' | 'warn' | 'error' | 'neutral' {
   const k = topic(s);
   if (k === 'failed' || k === 'problem') return 'error';
@@ -138,46 +141,77 @@ function details(s: UpdateState): HTMLElement[] {
   return raw ? [techDetails(raw)] : [];
 }
 
-// ---------- the banner ----------
+// ---------- the badge, and the card it opens ----------
 
-const banner = h('div', 'update-banner');
-const clip = h('div', 'update-banner-clip');
-const row = h('div', 'update-banner-row');
-const text = h('div', 'update-banner-text');
-const buttons = h('div', 'update-banner-actions');
-const close = h('button', 'update-banner-close');
-const more = h('div', 'update-banner-more');
-const bar = h('div', 'update-banner-bar');
+const chip = h('button', 'update-chip');
+const chipText = h('span');
+const card = h('div', 'update-card');
+const text = h('div', 'update-card-text');
+const buttons = h('div', 'update-card-actions');
+const close = h('button', 'update-card-close');
+const more = h('div', 'update-card-more');
+const bar = h('div', 'update-card-bar');
 text.setAttribute('role', 'status');
 text.setAttribute('aria-live', 'polite');
+chip.type = 'button';
+chip.setAttribute('aria-haspopup', 'dialog');
+chip.append(icon(ICONS.up, 'ico small'), chipText);
+chip.addEventListener('click', () => {
+  open = !open;
+  render();
+});
+card.setAttribute('role', 'dialog');
+card.setAttribute('aria-label', t('update.title'));
 close.type = 'button';
 close.append(icon(ICONS.remove));
 close.addEventListener('click', () => onClose());
 bar.append(h('span'));
-row.append(text, buttons, close);
-clip.append(row, more, bar);
-banner.append(clip);
+card.append(text, more, buttons, close, bar);
 
-const bannerKey = (s: UpdateState) => `${topic(s)}:${s.target}`;
+const dismissKey = (s: UpdateState) => `${topic(s)}:${s.target}`;
 
-/** Shown for anything to say, except what "later" put away and a quiet state nobody asked about. */
+/** Shown for anything to say, except what "close" put away and a quiet state nobody asked about. */
 function shown(s: UpdateState): boolean {
   const k = topic(s);
   if (k === 'quiet') return asked;
-  if (k === 'available' || k === 'realign' || k === 'blocked') return dismissed !== bannerKey(s);
+  if (k === 'realign' || k === 'blocked') return dismissed !== dismissKey(s);
   return true;
 }
 
-/** The cross: "later" for an offer, "cancel" for a question or a wait, "close" for news. */
+/** The few words on the badge: the card holds the sentence and the buttons. */
+function chipLabel(s: UpdateState): string {
+  switch (topic(s)) {
+    case 'progress':
+      return t(s.progress === 'ready' ? 'update.chip.ready' : 'update.chip.working');
+    case 'countdown':
+      return t('update.chip.countdown', { secs: seconds(s) });
+    case 'failed':
+    case 'problem':
+      return t('update.chip.failed');
+    case 'done':
+      return t('update.chip.done');
+    case 'waiting':
+      return t('update.chip.waiting');
+    case 'blocked':
+      return t('update.chip.blocked');
+    case 'quiet':
+      return t('update.title');
+    default:
+      return t('update.chip.available');
+  }
+}
+
+/** The cross: "cancel" for a question or a wait, "close" for the rest. */
 function closeLabel(s: UpdateState): string {
   const k = topic(s);
-  if (k === 'available' || k === 'realign' || k === 'blocked' || k === 'countdown') return t('update.later');
+  if (k === 'countdown') return t('update.later');
   if (k === 'confirm' || k === 'waiting') return t('update.cancel');
   return t('update.close');
 }
 
 function onClose(): void {
   const s = state;
+  open = false;
   if (!s) return;
   const k = topic(s);
   // A countdown the user asked for ("when they are done") is dropped; an unattended one is put off.
@@ -185,31 +219,36 @@ function onClose(): void {
   else if (k === 'countdown' || k === 'confirm' || k === 'waiting' || k === 'problem') choose('cancel');
   else if (k === 'failed' || k === 'done') lastSeen = true;
   else if (k === 'quiet') asked = false;
-  else dismissed = bannerKey(s);
+  else if (k === 'realign' || k === 'blocked') dismissed = dismissKey(s);
   render();
 }
 
-function renderBanner(): void {
+function renderChip(): void {
   const s = state;
-  const open = !!s && shown(s);
-  // Focus inside a closing banner goes back to the conversation.
-  if (!open && banner.contains(document.activeElement)) (document.querySelector('#pane-master textarea') as HTMLElement | null)?.focus();
-  banner.classList.toggle('open', open);
-  banner.inert = !open;
-  if (!s || !open) return;
-  banner.dataset.tone = tone(s);
+  const visible = !!s && shown(s);
+  if (!visible) open = false;
+  // Focus inside a closing card goes back to the conversation.
+  if (!open && card.contains(document.activeElement)) (document.querySelector('#pane-master textarea') as HTMLElement | null)?.focus();
+  slot.hidden = !visible;
+  chip.setAttribute('aria-expanded', String(open));
+  card.hidden = !open;
+  if (!s || !visible) return;
+  slot.dataset.tone = tone(s);
+  const label = chipLabel(s);
+  if (chipText.textContent !== label) chipText.textContent = label;
+  if (!open) return;
   const words = message(s);
   if (text.textContent !== words) text.textContent = words;
   // The buttons and the fold only when what they do changed: the countdown redraws its text every second.
   const key = `${topic(s)}:${s.progress}:${s.confirm}:${s.kind}:${s.last?.at ?? ''}:${s.problem}:${s.offline}`;
   if (buttons.dataset.key !== key) {
     buttons.dataset.key = key;
-    buttons.replaceChildren(...actions(s, 'update-banner-btn primary', 'update-banner-btn'));
+    buttons.replaceChildren(...actions(s, 'update-card-btn primary', 'update-card-btn'));
     more.replaceChildren(...details(s));
   }
-  const label = closeLabel(s);
-  close.title = label;
-  close.setAttribute('aria-label', label);
+  const closing = closeLabel(s);
+  close.title = closing;
+  close.setAttribute('aria-label', closing);
   close.hidden = topic(s) === 'progress';
   bar.hidden = topic(s) !== 'progress' || s.progress === 'ready';
 }
@@ -248,7 +287,7 @@ function schedule(s: UpdateState): void {
 }
 
 function render(): void {
-  renderBanner();
+  renderChip();
   for (const el of sections) {
     if (el.isConnected) fill(el);
     else sections.delete(el);
@@ -340,19 +379,33 @@ export function updateSection(): HTMLElement {
 
 // ---------- start ----------
 
-/** `busy`: an unsent message or open settings, which an unattended restart would lose. */
-export function initUpdates(api: HubApi, busy: () => boolean): void {
+/** `busy`: an unsent message or open settings, which an unattended restart would lose. `place`: where the badge goes. */
+export function initUpdates(api: HubApi, busy: () => boolean, place: HTMLElement): void {
   hub = api;
   uiBusy = busy;
-  banner.inert = true;
-  document.querySelector('.titlebar')?.after(banner);
+  slot = place;
+  slot.hidden = true;
+  slot.append(chip, card);
+  document.addEventListener('pointerdown', (e) => {
+    if (!open || slot.contains(e.target as Node)) return;
+    open = false;
+    render();
+  });
+  slot.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !open) return;
+    e.stopPropagation();
+    open = false;
+    render();
+    chip.focus();
+  });
   hub.onUpdate(apply);
   void hub.updateState().then(apply);
 }
 
-/** The palette's "Check for updates": asks now and shows the outcome in the banner. */
+/** The palette's "Check for updates": asks now and shows the outcome on the badge's card. */
 export function checkForUpdates(): void {
   asked = true;
+  open = true;
   dismissed = '';
   if (state) render();
   void hub.checkUpdate().then(apply);

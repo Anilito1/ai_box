@@ -32,13 +32,16 @@ const reposRoot = $('repos');
 translateDom();
 document.body.classList.add(`platform-${PLATFORM}`);
 
-// Settings open from the end of the master's header, where its folder chip was (the folder is in its name's tooltip).
+// Settings open from the end of the master's header, where its folder chip was (the folder is in its name's tooltip); an update on offer sits to their left.
 const settingsButton = h('button', 'ph-settings');
 settingsButton.id = 'open-settings';
 settingsButton.title = `${t('side.settings')} · ${shortcut(',')}`;
 settingsButton.setAttribute('aria-haspopup', 'dialog');
 settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
-const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
+const updateSlot = h('div', 'ph-update');
+const headActions = h('div', 'ph-actions');
+headActions.append(updateSlot, settingsButton);
+const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
@@ -460,7 +463,7 @@ hub.onRepos((paths) => {
 });
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
-initUpdates(hub, () => setup.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''));
+initUpdates(hub, () => setup.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {

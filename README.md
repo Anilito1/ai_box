@@ -84,7 +84,7 @@ The first start downloads Electron (about 100 MB); Claude Code comes with the in
 
 **Signing in.** The hub never asks for your Claude credentials. **Sign in with Claude Code** opens a terminal with Claude Code's own sign-in (`claude auth login`), as Anthropic's [rules](https://code.claude.com/docs/en/legal-and-compliance) require. Or paste an API key; it is stored encrypted by your OS keychain.
 
-**Updates** are automatic: when a new version is on GitHub, a blue banner offers **Update**, and the hub builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close the hub, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
+**Updates** are automatic: when a new version is on GitHub, a small badge beside **Settings** offers **Update**, and the hub builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close the hub, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
 
 Running several sessions at once uses your plan or API budget faster: keep an eye on the cost and limits in the status bar.
 

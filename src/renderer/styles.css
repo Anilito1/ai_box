@@ -92,6 +92,11 @@
   --ctl-md: 28px;
   --ctl-lg: 32px;
   --side-w: 280px;
+  /* The header of a pane, and the native window controls that share its row (none on a Mac: its buttons are at the left). */
+  --head-h: 40px;
+  --topics-w: 184px;
+  --controls-w: 150px;
+  --controls-h: var(--head-h);
 
   /* elevation */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -248,42 +253,25 @@ kbd,
   display: grid;
   height: 100vh;
   grid-template-columns: var(--side-w) 1fr;
-  grid-template-rows: 36px auto 1fr 26px;
+  grid-template-rows: 1fr 26px;
   grid-template-areas:
-    'title title'
-    'banner banner'
     'side main'
     'status status';
 }
 
-/* ---------- title bar: the sidebar's colour runs up under the brand, the window's over the panes ----------
-   (native window controls drawn by Electron's overlay on the right, in --bg) */
-.titlebar {
-  position: relative;
-  grid-area: title;
-  display: flex;
-  align-items: center;
-  padding: 0 150px 0 var(--sp-4);
-  background: linear-gradient(to right, var(--panel) calc(var(--side-w) - 1px), var(--line) calc(var(--side-w) - 1px) var(--side-w), var(--bg) var(--side-w));
-  -webkit-app-region: drag;
-  user-select: none;
-  contain: layout paint;
-}
-.titlebar::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: var(--side-w);
-  height: 1px;
-  background: var(--line);
-}
+/* ---------- top of the window: no band of its own. The brand tops the sidebar, the panes' headers run up to the edge and
+   carry the window controls (native ones drawn by Electron's overlay on the right, over the rightmost header). ---------- */
 .brand {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 9px;
+  height: 39px;
+  padding: 0 var(--sp-4);
   font: 600 var(--fs-md) / 1 var(--font-display);
   letter-spacing: -0.005em;
+  -webkit-app-region: drag;
+  user-select: none;
 }
 .brand-logo {
   width: 18px;
@@ -306,11 +294,8 @@ kbd,
   padding: var(--sp-3) var(--sp-2) var(--sp-1);
 }
 /* The master's card starts level with the bottom line of the master's header (40px): the topics' column hangs there. */
-.side-section:first-child {
-  padding-top: 17px;
-}
-.side-section:first-child > .side-label {
-  line-height: 16px;
+.brand + .side-section {
+  padding-top: 0;
 }
 /* The git panel below never squeezes the workers under this height (repo.ts reads it). */
 .side-workers {
@@ -1448,7 +1433,6 @@ kbd,
    down the left of the master's conversation, under its header's line. */
 .sidebar,
 .pane-master {
-  --topics-w: 184px;
   --topics-tint: color-mix(in srgb, var(--accent-soft) 70%, transparent);
 }
 .topics-open .card.master {
@@ -1477,7 +1461,7 @@ kbd,
 }
 .topics {
   position: absolute;
-  top: 40px;
+  top: var(--head-h);
   bottom: 0;
   left: 0;
   z-index: 1;
@@ -1638,50 +1622,6 @@ kbd,
   margin: 4px var(--sp-2);
   background: var(--line);
 }
-/* Folded (narrow conversation): the topic shown, in the header, opens the list. */
-.topics-pick {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 260px;
-  height: var(--ctl-sm);
-  padding: 0 6px 0 var(--sp-2);
-  border: 1px solid var(--btn-border);
-  border-radius: var(--r-sm);
-  background: linear-gradient(100deg, var(--accent-soft), transparent), var(--btn);
-  box-shadow: var(--shadow-sm);
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  transition:
-    background-color var(--dur-2),
-    color var(--dur-2);
-}
-.topics-pick[hidden] {
-  display: none;
-}
-.topics-pick:hover {
-  background-color: var(--btn-hover);
-  color: var(--text);
-}
-.topics-pick-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.topics-pick .topic-badge {
-  min-width: 16px;
-  height: 16px;
-  line-height: 16px;
-}
-.topics-menu-row {
-  align-items: center;
-}
-.topics-menu-row .menu-text {
-  flex: 1;
-}
 .menu.below {
   transform-origin: 16px 0;
 }
@@ -1795,9 +1735,13 @@ kbd,
     display: none;
   }
 }
-/* The master always fills what the open worker leaves; the worker never takes more than half. */
+/* The master always fills what the open worker leaves. Its topics' column keeps its width whatever happens: the
+   conversation beside it keeps 200px at least, and the worker gives way before that (never under 290px). */
 .pane-master {
   flex: 1 1 0;
+}
+.pane-master.has-topics {
+  min-width: calc(var(--topics-w) + 200px);
 }
 .splitter {
   display: none;
@@ -1820,6 +1764,8 @@ kbd,
 .pane-worker {
   display: none;
   flex: 0 0 var(--dock-width, 42%);
+  min-width: 290px;
+  max-width: calc(100% - var(--topics-w) - 360px);
 }
 .workspace.expanded .pane-worker {
   display: flex;
@@ -1891,7 +1837,7 @@ kbd,
 
 .pane-head {
   display: flex;
-  flex: 0 0 40px;
+  flex: 0 0 var(--head-h);
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -1899,7 +1845,16 @@ kbd,
   border-bottom: 1px solid var(--line);
   background: var(--chat);
   white-space: nowrap;
+  -webkit-app-region: drag;
   user-select: none;
+}
+/* What answers the pointer (or shows a tooltip) is not part of the area that drags the window. */
+.pane-head :is(button, .ph-name, .ph-mission, .ph-cwd, .ph-update) {
+  -webkit-app-region: no-drag;
+}
+/* The header at the right edge leaves room for the native window controls. */
+.workspace:not(.expanded) > .pane-master > .pane-head {
+  padding-right: calc(var(--controls-w) + var(--sp-2));
 }
 .ph-name {
   font: 600 var(--fs-md) / var(--lh-tight) var(--font-display);
@@ -1924,18 +1879,20 @@ kbd,
 .ph-close {
   margin-right: -8px;
 }
-/* Open worker: its Clawd as a portrait, the name, status and mission beside it. */
+/* Open worker: its Clawd as a portrait, the name, status and mission beside it. The title sits level with the window
+   controls (it stops short of them, and of the close button), the mission starts under their row. */
 .pane-head.portrait {
+  position: relative;
   flex: none;
   gap: var(--sp-2);
-  padding: 2px var(--sp-4) 2px var(--sp-1);
+  padding: 15px var(--sp-4) var(--sp-3) var(--sp-1);
   white-space: normal;
 }
 .ph-text {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--sp-1);
+  gap: 6px;
   min-width: 0;
 }
 .ph-title {
@@ -1969,9 +1926,23 @@ kbd,
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
+.pane-head.portrait .ph-title {
+  padding-right: calc(var(--controls-w) + var(--ctl-md) + var(--sp-3));
+}
 .pane-head.portrait .ph-close {
-  align-self: flex-start;
-  margin-top: var(--sp-1);
+  position: absolute;
+  top: calc((var(--head-h) - var(--ctl-md)) / 2);
+  right: calc(var(--controls-w) + var(--sp-2));
+  margin: 0;
+}
+/* Too narrow to share the first row with the controls: the title moves under it (a Mac has none: nothing to move). */
+@container (max-width: 480px) {
+  .pane-head.portrait {
+    padding-top: calc(var(--controls-h) + var(--sp-2));
+  }
+  .pane-head.portrait .ph-title {
+    padding-right: 0;
+  }
 }
 
 /* ---------- message stream ---------- */
@@ -2413,7 +2384,9 @@ kbd,
 .composer {
   padding: 0 28px var(--sp-4);
 }
+/* The composer's own width decides what its bar drops: the topics' column takes room the pane's width does not show. */
 .composer-box {
+  container-type: inline-size;
   max-width: 800px;
   margin: 0 auto;
   padding: 10px 10px var(--sp-2) 14px;
@@ -3460,8 +3433,8 @@ kbd,
   height: 32px;
 }
 .avatar-stage {
-  width: 96px;
-  height: 96px;
+  width: 64px;
+  height: 64px;
 }
 /* Props thrown off or dropped in from above fade at the edges instead of being cut. The stage arrives a moment after
    the first paint (clawd/load.ts): the mascots fade in. */
@@ -3957,16 +3930,20 @@ kbd,
 .ph-settings:hover .ico {
   transform: rotate(30deg);
 }
-/* macOS draws its window buttons at the top left of a hidden title bar, and none at the right. */
-.platform-darwin .titlebar {
-  padding: 0 var(--sp-4) 0 84px;
+/* macOS draws its window buttons at the top left (over the brand), and none at the right. */
+.platform-darwin {
+  --controls-w: 0px;
+  --controls-h: 0px;
+}
+.platform-darwin .brand {
+  padding-left: 84px;
 }
 
 /* ---------- first-run setup and settings: a sheet over a dimmed window (no blur: it would redraw every frame a
    mascot moves underneath) ---------- */
 .setup {
   position: fixed;
-  inset: 36px 0 0;
+  inset: var(--head-h) 0 0;
   z-index: 15;
   display: grid;
   place-items: center;
@@ -4758,123 +4735,188 @@ input[type='radio']:focus-visible {
   }
 }
 
-/* ---------- update: a banner across the top of the window, and its block in Settings › About ---------- */
-/* It opens by growing its grid row (0fr to 1fr): the panes below slide down instead of jumping. */
-.update-banner {
-  display: grid;
-  grid-area: banner;
-  grid-template-rows: 0fr;
-  min-width: 0;
-  visibility: hidden;
-  transition:
-    grid-template-rows var(--dur-3) var(--ease-out),
-    visibility 0s linear var(--dur-3);
-}
-.update-banner.open {
-  grid-template-rows: 1fr;
-  visibility: visible;
-  transition:
-    grid-template-rows var(--dur-3) var(--ease-out),
-    visibility 0s;
-}
-.update-banner-clip {
+/* ---------- update: a discreet badge in the master's header that opens a card, and its block in Settings › About ---------- */
+.ph-actions {
   position: relative;
-  min-height: 0;
-  overflow: hidden;
-}
-.update-banner-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  min-height: 40px;
-  padding: 5px var(--sp-2) 5px var(--sp-4);
-}
-.update-banner-text {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--fs-md);
-  font-weight: 500;
-  line-height: var(--lh-tight);
-}
-.update-banner-actions {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: var(--sp-2);
 }
-.update-banner-btn {
+.ph-update {
+  display: flex;
+}
+.ph-update[hidden] {
+  display: none;
+}
+.update-chip {
   display: inline-flex;
   align-items: center;
-  height: var(--ctl-md);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-sm);
-  background: transparent;
-  color: inherit;
-  font-size: var(--fs-md);
-  font-weight: 600;
+  gap: 5px;
+  height: var(--ctl-sm);
+  padding: 0 10px 0 7px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
   transition:
     background-color var(--dur-2),
     transform var(--dur-1) var(--ease-out);
 }
-.update-banner-btn:active {
+.update-chip:hover,
+.update-chip[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.update-chip:active {
   transform: scale(0.97);
 }
-.update-banner-btn.primary {
+.update-chip:focus-visible,
+.update-card-btn:focus-visible,
+.update-card-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* The app's blue for an update, amber when the copy is left alone, red for a failure. */
+.ph-update[data-tone='accent'] {
+  color: var(--accent-text);
+}
+.ph-update[data-tone='warn'] {
+  color: var(--warn);
+}
+.ph-update[data-tone='error'] {
+  color: var(--danger-text);
+}
+.ph-update[data-tone='neutral'] {
+  color: var(--text-2);
+}
+.update-card {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 340px;
+  max-width: calc(100cqw - 2 * var(--sp-4));
+  padding: var(--sp-3) var(--sp-4) var(--sp-3);
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  white-space: normal;
+  cursor: default;
+  user-select: text;
+  transform-origin: 100% 0;
+  transition:
+    opacity var(--dur-2) var(--ease-out),
+    transform var(--dur-3) var(--ease-spring);
+}
+@starting-style {
+  .update-card {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+.update-card[hidden] {
+  display: none;
+}
+.update-card-text {
+  padding-right: var(--sp-5);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+.update-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.update-card-actions:empty {
+  display: none;
+}
+.update-card-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-md);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--r-sm);
+  background: var(--btn);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    transform var(--dur-1) var(--ease-out);
+}
+.update-card-btn:hover {
+  background: var(--btn-hover);
+}
+.update-card-btn:active {
+  transform: scale(0.97);
+}
+.update-card-btn.primary {
   border-color: transparent;
   background: var(--accent-fill);
   color: var(--text-on-accent);
 }
-.update-banner-btn.primary:hover {
+.update-card-btn.primary:hover {
   background: var(--accent-fill-hover);
 }
-.update-banner-close {
+.update-card-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   display: grid;
-  flex: none;
   place-items: center;
-  width: var(--ctl-md);
-  height: var(--ctl-md);
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
   border: 0;
   border-radius: var(--r-sm);
   background: transparent;
-  color: inherit;
-  opacity: 0.8;
+  color: var(--text-3);
   cursor: pointer;
 }
-.update-banner-close[hidden] {
+.update-card-close[hidden] {
   display: none;
 }
-.update-banner-close:hover {
-  opacity: 1;
+.update-card-close:hover {
+  background: var(--hover);
+  color: var(--text);
 }
-.update-banner-btn:focus-visible,
-.update-banner-close:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 2px;
+.update-card-more:empty {
+  display: none;
 }
-.update-banner-more:not(:empty) {
-  padding: 0 var(--sp-4) var(--sp-2);
-}
-.update-banner-more .tech-details {
+.update-card-more .tech-details {
   margin-top: 0;
 }
-/* An install at work: a band of light runs along the banner's lower edge. */
-.update-banner-bar {
+/* An install at work: a band of light runs along the card's lower edge. */
+.update-card-bar {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
   height: 2px;
   overflow: hidden;
-  background: color-mix(in srgb, currentColor 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
-.update-banner-bar > span {
+.update-card-bar[hidden] {
+  display: none;
+}
+.update-card-bar > span {
   position: absolute;
   inset: 0 auto 0 0;
   width: 30%;
-  background: currentColor;
+  background: var(--accent);
   animation: update-run 1.4s var(--ease-in-out) infinite;
 }
 @keyframes update-run {
@@ -4886,53 +4928,11 @@ input[type='radio']:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .update-banner,
-  .update-banner.open {
-    transition: none;
-  }
-  .update-banner-bar > span {
+  .update-card-bar > span {
     width: 100%;
     animation: none;
     opacity: 0.6;
   }
-}
-
-/* The app's blue for an update (the logo's, the accent's), amber when the copy is left alone, red for a failure. */
-.update-banner[data-tone='accent'] {
-  background: var(--accent-fill);
-  color: var(--text-on-accent);
-}
-.update-banner[data-tone='accent'] .update-banner-btn {
-  border-color: color-mix(in srgb, var(--text-on-accent) 45%, transparent);
-}
-.update-banner[data-tone='accent'] .update-banner-btn:hover {
-  background: color-mix(in srgb, var(--text-on-accent) 14%, transparent);
-}
-.update-banner[data-tone='accent'] .update-banner-btn.primary {
-  border-color: transparent;
-  background: var(--text-on-accent);
-  color: var(--accent-fill);
-}
-.update-banner[data-tone='accent'] .update-banner-btn.primary:hover {
-  background: color-mix(in srgb, var(--text-on-accent) 88%, var(--accent-fill));
-}
-.update-banner[data-tone='accent'] .tech-details summary {
-  color: inherit;
-}
-.update-banner[data-tone='warn'] {
-  border-bottom: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
-  background: color-mix(in srgb, var(--warn) 12%, var(--bg));
-  color: var(--text);
-}
-.update-banner[data-tone='error'] {
-  border-bottom: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
-  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
-  color: var(--text);
-}
-.update-banner[data-tone='neutral'] {
-  border-bottom: 1px solid var(--line);
-  background: var(--raise);
-  color: var(--text);
 }
 
 .update-about {

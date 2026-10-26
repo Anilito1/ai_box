@@ -316,11 +316,6 @@ export class ChatView {
     this.input.focus();
   }
 
-  /** Adds a control to the header, after the status. */
-  insertHead(el: HTMLElement): void {
-    this.head.status.after(el);
-  }
-
   /** Shows only the items of one of the master's topics (null: all of them); what is sent then is written in it. */
   setTopic(topic: { id: string; title: string } | null): void {
     const changed = topic?.id !== this.topic?.id;
