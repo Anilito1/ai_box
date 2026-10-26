@@ -17,6 +17,7 @@ A desktop hub for [Claude Code](https://code.claude.com/docs): you talk to one *
 - **API cost by period.** Click **Σ API cost** in the status bar: today, yesterday, 7 or 30 days, this month or chosen dates, with the cost and tokens per session, model and day, and a CSV export. Each turn's cost is logged as Claude Code estimates it (with a subscription, an equivalent at API prices); the history starts when you install this version.
 - **Git panel.** The repos you follow show their branches, worktrees, incoming and outgoing commits; pull, push and commit without leaving the hub. It checks their remotes in the background (`git fetch` every 60 seconds).
 - **Closed sessions resume.** Idle ad-hoc workers close after 15 minutes, permanent ones fall asleep after 5; writing to one resumes it with its whole conversation. Work cut by a restart is picked up again.
+- **Updates itself.** A clone of the official repository installs new versions when nothing is running, and never over your own changes (see [Updating](#updating)).
 - **English and French**, for the interface and for the instructions the sessions receive.
 - **Keyboard and appearance.** Ctrl+K (⌘K on a Mac) opens the commands, Ctrl+1 to 9 switch between the master and the workers, Ctrl+, opens the settings, Ctrl+Shift+G folds the git panel. Light and dark follow the system.
 
@@ -52,6 +53,49 @@ npm run dist:dir    # unpacked app only, quicker
 On a Mac, `npm run dist` makes a `.dmg` and a `.zip` for Apple silicon and for Intel (a Mac build is made on a Mac). Your builds are not code-signed: Windows SmartScreen warns, and macOS Gatekeeper refuses a downloaded copy until you open it with right-click › Open (an app you built yourself opens directly). A built app does **not** contain Claude Code: install it yourself ([setup guide](https://code.claude.com/docs/en/setup)); the hub finds it on your `PATH` (on macOS and Linux, the `PATH` of your login shell, even when the app starts from the Finder or a launcher) or in `~/.local/bin`.
 
 On macOS, closing the window keeps the hub and its sessions running (the Dock icon brings it back); **Cmd+Q** quits, and asks first if sessions are at work.
+
+## Updating
+
+A copy cloned from the official repository updates itself. A moment after it starts, then every 4 hours, the hub runs `git fetch` on `origin` (with your own git credentials, or the GitHub sign-in you gave the hub) and compares your `main` with `origin/main`. When there is a new version, a blue banner across the top of the window says so, with **Update**. **Settings › About** shows the same, with **Check for updates** (also in the commands, Ctrl+K / ⌘K).
+
+**Update** does everything: it gets the new version, moves your copy onto it, builds it and restarts the hub, whose sessions pick up where they were; the banner shows each step. If a session is at work, the banner asks first: **Update when they are done** (it installs by itself as soon as everything is quiet) or **Now** (the sessions are interrupted and pick up after the restart). **Later** (the cross) hides the banner until the next start or the next version.
+
+An update never touches work in progress:
+
+- it installs only on `main`, with no local modification (untracked files included), and only by a fast-forward (`git merge --ff-only`), with the repository's hooks switched off;
+- by itself, never while a session works (a turn, an approval, a background task, a subagent);
+- `npm ci` runs only when `package-lock.json` changed: the hub then closes for about a minute, a small helper run by your Node.js installs and builds, and opens the hub again (Electron and Claude Code cannot be replaced while the hub runs on Windows); otherwise everything happens inside the hub, which only restarts at the end;
+- if anything fails, the previous commit, dependencies and build are put back: the banner says what happened, with the details folded, and the previous version keeps running.
+
+**Settings › About › Install updates by themselves**: *When nothing is running* (the default: once no session works and you have left the hub alone for a few minutes, a 30-second countdown you can put off, then the restart), *At the next start* (installed when you close the hub), or *Never* (only when you click **Update**). The default keeps every copy current, which is the point of the updates, and a restart costs nothing: the sessions pick up.
+
+The hub leaves your copy as it is, and says why, when it has local modifications or commits that are not on GitHub (nothing is shown while `main` only has commits you have not pushed yet), when it is on another branch, when `origin` is not the official repository (`repository` in `package.json`: a fork or a changed remote updates by hand), or when it is a built app (`npm run dist`: build a new one from the latest source). Offline, or without access to the repository, it stays silent and tries again later.
+
+If the official history is ever rewritten and your copy holds nothing of its own, the banner offers **Realign with the official version**: after your confirmation, a branch `backup/pre-update-<date>` keeps your current commits, then the copy is reset onto `origin/main`.
+
+### First update after the history rewrite
+
+The official history was rewritten on 26 October 2026. A copy cloned before that day also predates the automatic updates: update it **once** by hand. This replaces your copy with the official version: **local modifications and local commits are lost**, so copy anything you want to keep first. Close the hub, then in the `claude-hub` folder, on the `main` branch:
+
+macOS (Terminal):
+
+```sh
+git fetch origin
+git reset --hard origin/main
+npm install
+npm start
+```
+
+Windows (PowerShell):
+
+```powershell
+git fetch origin
+git reset --hard origin/main
+npm install
+npm start
+```
+
+From then on, updates are automatic.
 
 ## First run
 
@@ -120,6 +164,7 @@ The hub asks for the `repo`, `read:org` and `workflow` scopes (push to your repo
 - `secrets.json`: the API key and GitHub token, encrypted with the OS keychain through Electron [safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage) (DPAPI, Keychain, libsecret/KWallet). On Linux without a keychain, the hub refuses to store secrets: set `ANTHROPIC_API_KEY` in your environment instead.
 - `state.json` and `attachments/`: the session list and the images you paste (deleted after 30 days). Conversations themselves are Claude Code's own transcripts, in `~/.claude/projects`.
 - `usage/`: one line per turn (time, session, model, cost and tokens), a file per month, read only when the cost panel opens.
+- `update/`: the last update's job, result and log (`helper.log`, no secret), and the build kept aside while one installs.
 
 ## Security
 
@@ -131,7 +176,8 @@ Claude Hub gives AI agents your computer. Read this before using it on anything 
 - **Permission modes.** The default is **Claude Code's own default** (auto mode where your account has it, otherwise it asks). **Ask** shows every approval in the conversation. Approvals and MCP confirmations of a worker appear in its conversation; the master cannot grant them for you.
 - **⚠ "Allow everything" (bypass) removes every approval**: sessions run any command, commit, push, deploy or SQL, and MCP servers' confirmations (before a `DROP` or `DELETE`, for instance) are accepted automatically. Use it only on a machine, accounts and repos you can afford to lose, and keep backups. It is never on unless you turn it on, after an explicit confirmation.
 - **The window is locked down**: sandboxed renderer with context isolation, strict Content-Security-Policy, sanitized Markdown, no navigation or pop-ups, and every message from the window to the hub is checked to come from its own page. Secrets never reach the window.
-- **What leaves your computer**: the sessions talk to Anthropic like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds. No telemetry.
+- **What leaves your computer**: the sessions talk to Anthropic like Claude Code does; the hub itself only calls `api.anthropic.com` (to check an API key), `github.com` and `api.github.com`, and runs `git fetch` on the repos you follow every 60 seconds, and on its own repository at start and every 4 hours (see [Updating](#updating)). No telemetry.
+- **Updates come only from the official repository**: the one `package.json` names (`repository`), compared with the URL git really fetches. A changed remote or a fork is never updated by itself. The install runs nothing from the repository but its own `npm ci` and `npm run build`; git runs with the repository's hooks switched off.
 
 Found a vulnerability? Please open a private security advisory on the repository rather than a public issue.
 
@@ -151,6 +197,7 @@ The macOS code paths (login-shell `PATH`, Terminal for the sign-ins, app menu, w
 10. **Git panel**: fetch, pull, push and commit on a test repo; a rejected push is explained in words.
 11. **Privacy prompts**: when the hub first scans Desktop or Documents, macOS may ask for access; refusing only hides those repos.
 12. **Packaged**: `npm run dist` writes a `.dmg` and a `.zip` for `arm64` and `x64` in `release/`; the app opens.
+13. **Updates**: after the [first update by hand](#first-update-after-the-history-rewrite), **Settings › About** says *up to date*. When the next commit reaches GitHub, **Check for updates** (⌘K) shows the blue banner; **Update** shows its steps, then the hub opens again on the new version with its conversations, and the banner says it was updated. When an update changes `package-lock.json`, the hub closes for about a minute and opens again by itself; `~/Library/Application Support/claude-hub/update/helper.log` ends with `done: installed`.
 
 ## Development
 
