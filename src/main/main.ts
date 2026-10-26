@@ -1,6 +1,7 @@
 import './shellPath';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -21,6 +22,7 @@ import { APP_ID } from '../shared/brand';
 import { capabilitiesText } from '../shared/capabilities';
 import { DEEPSEEK_URL, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
+import { brewPackage, type CliUpdate } from '../shared/news';
 import {
   APP_NAME,
   ATTACH_LIMITS,
@@ -68,7 +70,8 @@ import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { openTerminal } from './terminal';
 import { installTool, setToolsDir, type Tool } from './providers/tools';
-import { ProviderNewsWatch } from './news';
+import { ProviderNewsWatch, resolved } from './news';
+import { CliUpdater, realRunner, simulatedRunner } from './cliUpdate';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
 
@@ -264,6 +267,7 @@ class Hub {
   private codex = '';
   private gemini = '';
   private readonly news: ProviderNewsWatch;
+  private readonly cliUpdates: CliUpdater;
   /** The Google sign-ins in progress (a browser is open), by account: the way to cancel each. */
   private readonly googleLogins = new Map<string, () => void>();
   private gh = '';
@@ -278,6 +282,28 @@ class Hub {
       toolsDir: join(this.dataDir, 'tools'),
       publish: (news) => this.mgr.setProviderNews(news),
       notify: (toast) => send('hub:news', toast),
+    });
+    // A dry run for development: the steps are printed, nothing is installed.
+    const simulate = process.env.AIBOX_CLI_UPDATE_SIMULATE ?? '';
+    this.cliUpdates = new CliUpdater({
+      runner: simulate ? simulatedRunner(simulate) : realRunner(() => this.mgr.toolEnv()),
+      env: () => this.mgr.toolEnv(),
+      home: homedir(),
+      tmp: tmpdir(),
+      platform: process.platform,
+      toolsDir: join(this.dataDir, 'tools'),
+      update: (provider) => this.news.update(provider),
+      refresh: async () => {
+        if (!simulate) await this.providerViews();
+      },
+      program: (provider) => {
+        const p = this.news.program(provider);
+        if (simulate) return { path: p?.path ?? '', version: this.news.update(provider)?.latest ?? '', real: join(homedir(), '.local/share/claude/versions/x') };
+        return p ? { ...p, real: resolved(p.path) } : null;
+      },
+      running: (provider) => this.mgr.runningOn(provider === 'openai' ? 'codex' : provider === 'gemini' ? 'gemini' : 'claude'),
+      confirmSwitch: (provider, update) => this.confirmCliSwitch(provider, update),
+      send: (run) => send('hub:cli-update', run),
     });
     this.mgr = new SessionManager({
       cfg: this.cfg,
@@ -471,6 +497,25 @@ class Hub {
       })
       .catch(() => undefined);
     return views;
+  }
+
+  /** Changing how a provider's program is installed is said in full before anything runs. */
+  private async confirmCliSwitch(provider: ProviderId, update: CliUpdate): Promise<boolean> {
+    const native = update.switchTo === 'native';
+    const brew = update.method === 'brew' ? brewPackage(update.path) : null;
+    const detail = native
+      ? [t('cliUpdate.native.what'), brew ? t('cliUpdate.native.brew', { command: `brew uninstall ${brew.kind === 'cask' ? '--cask ' : ''}${brew.name}` }) : update.method === 'npm' ? t('cliUpdate.native.npm') : '', t('cliUpdate.native.keep'), t('cliUpdate.sessions')]
+      : [t('cliUpdate.app.what', { tool: update.tool }), t('cliUpdate.app.keep'), t('cliUpdate.sessions')];
+    const options = {
+      type: 'question' as const,
+      buttons: [t(native ? 'cliUpdate.native.go' : 'cliUpdate.app.go'), t('close.cancel')],
+      defaultId: 0,
+      cancelId: 1,
+      message: t(native ? 'cliUpdate.native.title' : 'cliUpdate.app.title', { tool: update.tool, latest: update.latest, provider: providerDef(provider).label }),
+      detail: detail.filter(Boolean).join('\n\n'),
+    };
+    const { response } = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    return response === 0;
   }
 
   /** Connects a provider with an API key: the key is checked with its service, then kept in the keychain. */
@@ -944,6 +989,9 @@ class Hub {
     // The providers' blocks in Settings › Accounts.
     const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'google' || v === 'apikey' ? v : null);
     handle('providers:state', () => this.providerViews());
+    handle('cli-update:start', (provider, action) => (isProviderId(provider) && (action === 'upgrade' || action === 'switch') ? this.cliUpdates.start(provider, action) : null));
+    handle('cli-update:state', () => this.cliUpdates.view());
+    on('cli-update:dismiss', (provider) => isProviderId(provider) && this.cliUpdates.dismiss(provider));
     on('providers:ack-news', (provider) => {
       if (isProviderId(provider)) this.news.acknowledge(provider);
     });

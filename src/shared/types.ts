@@ -2,6 +2,7 @@ import type { Capabilities, CapResult, McpDraft, McpSource } from './capabilitie
 import type { TurnRecord } from './costs';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
+import type { CliRun, UpdateAction } from './cliUpdate';
 import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
@@ -765,6 +766,13 @@ export interface HubApi {
   onNews(cb: (toast: NewsToast) => void): void;
   /** The user looked at a provider's news (opened its menu): the dots and the "New" tags go. */
   ackNews(provider: ProviderId): void;
+  /** Updates a provider's program in one click (or moves it to another install): null when nothing started. */
+  updateCli(provider: ProviderId, action: UpdateAction): Promise<CliRun | null>;
+  /** The updates of programs shown now (running or finished). */
+  cliUpdates(): Promise<CliRun[]>;
+  /** The user closed a finished update's notice. */
+  dismissCliUpdate(provider: ProviderId): void;
+  onCliUpdate(cb: (run: CliRun) => void): void;
   updateState(): Promise<UpdateState>;
   /** Asks the official repository now. */
   checkUpdate(): Promise<UpdateState>;

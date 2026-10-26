@@ -6,6 +6,9 @@ import type { ProviderId } from './providers';
 /** How a program got on this computer, which tells how it is updated. */
 export type InstallMethod = 'brew' | 'npm' | 'native' | 'app' | 'unknown';
 
+/** The install offered when a program's own method cannot reach the latest: Anthropic's official installer, the app's copy. */
+export type SwitchTarget = 'native' | 'app';
+
 /** A newer version of a provider's program than the one installed. */
 export interface CliUpdate {
   /** The program's name (claude, codex, gemini). */
@@ -15,6 +18,14 @@ export interface CliUpdate {
   method: InstallMethod;
   /** What to type in a terminal to update it, as its install method does. */
   command: string;
+  /** The program as found, links followed: what the one-click update works on. */
+  path: string;
+  /** The newest version its install method offers, '' when not known (Homebrew's can be behind npm's). */
+  reach: string;
+  /** Its own method brings it forward (Homebrew may have nothing newer yet). */
+  upgrade: boolean;
+  /** Offered when its own method cannot reach the latest. */
+  switchTo: SwitchTarget | '';
 }
 
 /** What is new at a provider: the models not seen before (by name as the menu shows them), the program's update. */
@@ -58,17 +69,31 @@ export function installMethod(path: string, appDir = ''): InstallMethod {
   if (!p) return 'unknown';
   const dir = appDir.replace(/\\/g, '/').replace(/\/+$/, '');
   if (dir && p.startsWith(`${dir}/`)) return 'app';
-  if (/\/(Caskroom|Cellar|linuxbrew|homebrew)\//i.test(p)) return 'brew';
+  if (/\/(Caskroom|Cellar)\//.test(p)) return 'brew';
   if (/\/\.local\/share\/claude\/|\/\.claude\/local\/|\/AppData\/Local\/(Programs\/)?claude/i.test(p)) return 'native';
   if (/\/node_modules\/|\/\.nvm\/|\/\.volta\/|\/\.npm|\/\.fnm\/|\/npm\/|\/\.bun\//i.test(p)) return 'npm';
   if (/\/\.local\/bin\/claude$/.test(p)) return 'native';
   return 'unknown';
 }
 
-/** The command that updates a provider's program, as its install method does it. */
-export function updateCommand(provider: ProviderId, method: InstallMethod, appDir = ''): string {
+/** A Homebrew install read from its path: a cask (Caskroom) or a formula (Cellar), its name, and the brew that owns it. */
+export interface BrewPackage {
+  kind: 'cask' | 'formula';
+  name: string;
+  brew: string;
+}
+
+export function brewPackage(path: string): BrewPackage | null {
+  const m = /^(.*)\/(Caskroom|Cellar)\/([^/]+)\//.exec(path.replace(/\\/g, '/'));
+  return m ? { kind: m[2] === 'Caskroom' ? 'cask' : 'formula', name: m[3], brew: `${m[1]}/bin/brew` } : null;
+}
+
+/** The command that updates a provider's program, as its install method does it; `path` (resolved) names the brew package. */
+export function updateCommand(provider: ProviderId, method: InstallMethod, appDir = '', path = ''): string {
   const pkg = CLI_PACKAGES[provider];
   if (!pkg) return '';
+  const brew = brewPackage(path);
+  if (method === 'brew' && brew) return brew.kind === 'cask' ? `brew upgrade --cask ${brew.name}` : `brew upgrade ${brew.name}`;
   if (method === 'brew') return provider === 'anthropic' ? `brew upgrade --cask ${pkg.brew}` : `brew upgrade ${pkg.brew}`;
   if (method === 'native' && provider === 'anthropic') return 'claude update';
   if (method === 'app') return `npm install --prefix "${appDir}" ${pkg.npm}@latest`;

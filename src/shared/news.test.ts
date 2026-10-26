@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { acknowledge, advance, diffModels, emptyMemory, installMethod, isNewer, modelKey, parseVersion, updateCommand, type CliUpdate, type NewsInput } from './news';
 
 const m = (value: string, label = value) => ({ value, label });
-const update = (latest: string): CliUpdate => ({ tool: 'claude', current: '2.1.287', latest, method: 'brew', command: 'brew upgrade --cask claude-code' });
+const update = (latest: string): CliUpdate => ({ tool: 'claude', current: '2.1.287', latest, method: 'brew', command: 'brew upgrade --cask claude-code', path: '/opt/homebrew/Caskroom/claude-code/2.1.287/claude', reach: '', upgrade: true, switchTo: '' });
 const input = (over: Partial<NewsInput>): NewsInput => ({ connected: { anthropic: true, openai: true }, offered: {}, cli: {}, ...over });
 
 test('versions are compared by their numbers, not as text', () => {
