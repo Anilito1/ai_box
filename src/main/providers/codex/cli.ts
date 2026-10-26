@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AccountStatus } from '../../../shared/types';
+import { versionAtLeast } from '../../../shared/version';
 import { errorCode } from '../../errors';
 import { CodexClient } from './client';
 import { modelsOf, rateLimitsOf } from './adapter';
@@ -43,12 +44,7 @@ export function codexVersion(executable: string, env: Record<string, string>): P
 
 /** Oldest Codex whose app-server the hub has been written against. */
 export const CODEX_MIN_VERSION = '0.163.0';
-export function versionAtLeast(version: string, min: string): boolean {
-  const a = version.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
-  const b = min.split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
-  return true;
-}
+export { versionAtLeast };
 
 export interface CodexCheck {
   status: AccountStatus;

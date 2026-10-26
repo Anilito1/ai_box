@@ -43,6 +43,14 @@ function installedExecutable(): Promise<string> {
   });
 }
 
+/** The version Claude Code reports ("2.1.287"), empty when it cannot be asked. */
+export function claudeVersion(executable: string, env: Record<string, string>): Promise<string> {
+  return new Promise((resolve) => {
+    if (!executable) return resolve('');
+    execFile(executable, ['--version'], { env, timeout: 10_000, windowsHide: true }, (err, stdout) => resolve(err ? '' : (/\d+\.\d+\.\d+/.exec(stdout)?.[0] ?? '')));
+  });
+}
+
 /** Executable the sessions run: the configured one, else the SDK's own binary, else the app's own copy, else the user's install. */
 export async function claudeExecutable(cfg: HubConfig, installed?: string): Promise<string> {
   if (cfg.claudePath && existsSync(cfg.claudePath)) return cfg.claudePath;

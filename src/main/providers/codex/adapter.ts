@@ -370,6 +370,11 @@ class CodexProcess implements AgentProcess {
     this.effort = effort;
   }
 
+  /** Ultracode is Claude Code's. */
+  async setUltracode(): Promise<void> {
+    throw new Error('Ultracode is a Claude Code mode');
+  }
+
   async setMode(mode: Mode): Promise<void> {
     this.mode = mode;
   }

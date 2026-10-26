@@ -246,6 +246,11 @@ class GeminiProcess implements AgentProcess {
   /** Gemini takes no effort setting. */
   async setEffort(_effort: Effort): Promise<void> {}
 
+  /** Ultracode is Claude Code's. */
+  async setUltracode(): Promise<void> {
+    throw new Error('Ultracode is a Claude Code mode');
+  }
+
   async setMode(mode: Mode): Promise<void> {
     this.mode = mode;
     if (this.sessionId) await this.client.request('session/set_mode', { sessionId: this.sessionId, modeId: acpMode(mode, this.spec.readOnly) });

@@ -1154,7 +1154,7 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     const full = team.length >= TEAM_MAX;
     const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
-    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', account: '', enabled: true }), full));
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true }), full));
     for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
     row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
     add.append(row);
@@ -1481,6 +1481,25 @@ export class SetupView {
     if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
     grid.append(modeField);
     el.append(grid);
+
+    // Ultracode: only for a post that runs on Anthropic; hidden on a Pro plan, shown but off when the plan is not known.
+    const runsOn = this.providerList().find((p) => p.accountId === effective);
+    if (runsOn?.id === 'anthropic' && runsOn.ultracodeAccess !== 'hidden') {
+      const known = runsOn.ultracodeAccess === 'allowed';
+      const ultra = h('label', 'setup-toggle');
+      const ultraBox = h('input');
+      ultraBox.type = 'checkbox';
+      ultraBox.checked = known && d.ultracode;
+      ultraBox.disabled = !known;
+      ultraBox.addEventListener('change', () => {
+        d.ultracode = ultraBox.checked;
+        changed();
+      });
+      const ultraText = h('span', 'setup-choice-text');
+      ultraText.append(h('span', 'setup-choice-title', t('team.ultracode')), h('span', 'setup-choice-hint', t(known ? 'team.ultracode.hint' : runsOn.ultracodeAccess === 'outdated' ? 'chat.ultracode.old' : 'team.ultracode.unknown')));
+      ultra.append(ultraBox, ultraText);
+      el.append(ultra);
+    }
 
     const on = h('label', 'setup-toggle');
     const box = h('input');

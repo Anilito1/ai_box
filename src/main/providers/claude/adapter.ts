@@ -8,6 +8,7 @@ import {
   type Options,
   type PermissionResult,
   type Query,
+  type Settings,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
@@ -21,8 +22,23 @@ import { toCommands, translate } from './events';
 const FULL_WINDOW = 1_000_000;
 
 
+/** The tools a session may not use: the master edits nothing; a worker has no Workflow, except in Ultracode. */
+export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode'>): string[] {
+  if (spec.role === 'master') return ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'];
+  const workflow = spec.ultracode ? [] : ['Workflow'];
+  return spec.readOnly ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', ...workflow, 'ScheduleWakeup'] : ['AskUserQuestion', ...workflow, 'ScheduleWakeup'];
+}
+
+/** The flag-level settings of a launch, over the user's own: a worker's window and connectors, the session's Ultracode. */
+export function launchSettings(spec: Pick<LaunchSpec, 'role' | 'ultracode'>): Settings {
+  return {
+    ...(spec.role === 'master' ? {} : { autoCompactWindow: FULL_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) }),
+    ...(spec.ultracode ? { ultracode: true } : {}),
+  };
+}
+
 /** Claude Code, driven through the Agent SDK: streaming input, in-process MCP server for the hub's tools. */
-class ClaudeProcess implements AgentProcess {
+export class ClaudeProcess implements AgentProcess {
   readonly events: AsyncIterable<AgentEvent>;
   private conversationId: string;
 
@@ -61,7 +77,9 @@ class ClaudeProcess implements AgentProcess {
   interrupt = async (): Promise<void> => void (await this.q.interrupt());
   close = () => this.q.close();
   setModel = (model: string) => this.q.setModel(model);
-  setEffort = (effort: Effort) => this.q.applyFlagSettings({ effortLevel: effort });
+  // An effortLevel sent alone to a session in Ultracode turns it off: both keys go together.
+  setEffort = (effort: Effort, ultracode = false) => this.q.applyFlagSettings({ effortLevel: effort, ...(ultracode ? { ultracode: true } : {}) });
+  setUltracode = (on: boolean) => this.q.applyFlagSettings({ ultracode: on });
   setMode = (mode: Mode) => this.q.setPermissionMode(mode);
 
   async context() {
@@ -117,15 +135,12 @@ export const claudeAdapter: ProviderAdapter = {
       // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
       extraArgs: { name: spec.name, 'replay-user-messages': null },
       includePartialMessages: true,
-      // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups.
-      disallowedTools: master
-        ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage']
-        : spec.readOnly
-          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'Workflow', 'ScheduleWakeup']
-          : ['AskUserQuestion', 'Workflow', 'ScheduleWakeup'],
+      // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups,
+      // unless it was asked to run in Ultracode: that mode is the Workflow tool, used for every task of weight.
+      disallowedTools: disallowedTools(spec),
       // Flag-level settings, over the user's own: a worker keeps the model's whole window (the user's own
       // autoCompactWindow would cut it) and loads none of the unneeded connectors.
-      ...(master ? {} : { settings: { autoCompactWindow: FULL_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) } }),
+      ...(master && !spec.ultracode ? {} : { settings: launchSettings(spec) }),
       mcpServers: {
         hub: createSdkMcpServer({
           name: 'hub',

@@ -46,6 +46,7 @@ export function normalizeRole(raw: unknown): TeamRole {
     folders: Array.isArray(o.folders) ? o.folders.map(str).map((f) => f.trim()).filter(Boolean) : [],
     model: str(o.model).trim(),
     effort: EFFORTS.includes(o.effort as Effort) ? (o.effort as Effort) : '',
+    ultracode: o.ultracode === true,
     mode: ROLE_MODES.includes(o.mode as Mode) ? (o.mode as Mode) : '',
     account: str(o.account).trim(),
     enabled: o.enabled !== false,
@@ -181,7 +182,7 @@ const TEMPLATES: Record<Lang, Record<TemplateId, Template>> = {
 /** A new post from a template, model and effort left to the master. */
 export function fromTemplate(id: TemplateId, lang: Lang, folder: string): TeamRole {
   const t = TEMPLATES[lang][id];
-  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', mode: '', account: '', enabled: true };
+  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true };
 }
 
 // ---------- model and effort of a mission ----------
@@ -189,7 +190,7 @@ export function fromTemplate(id: TemplateId, lang: Lang, folder: string): TeamRo
 const rank = (e: Effort) => EFFORTS.indexOf(e);
 export const capEffort = (e: Effort, max: Effort): Effort => (rank(e) > rank(max) ? max : e);
 
-export type ChoiceNote = 'modelLocked' | 'effortLocked' | 'modelFixed' | 'effortFixed' | 'effortCapped';
+export type ChoiceNote = 'modelLocked' | 'effortLocked' | 'modelFixed' | 'effortFixed' | 'effortCapped' | 'ultracodeLocked';
 export interface Choice {
   /** null: unchanged (nothing asked, or a choice of the user's kept). */
   model: string | null;
@@ -330,6 +331,7 @@ export function agentToRole(file: { fields: Record<string, string>; body: string
       folders: folder ? [folder] : [],
       model: model && model !== 'inherit' && MODEL.test(model) ? model : '',
       effort: EFFORTS.includes(f.effort as Effort) ? (f.effort as Effort) : '',
+      ultracode: false,
       mode: keptMode,
       account: '',
       enabled: true,
