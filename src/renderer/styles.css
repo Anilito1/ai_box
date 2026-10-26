@@ -4159,6 +4159,12 @@ kbd,
 .setup-select {
   min-width: 190px;
 }
+.setup-defaults .setup-select {
+  width: 190px;
+}
+.setup-defaults .setup-select:nth-child(2) {
+  width: 230px;
+}
 .setup-input.wide {
   max-width: 560px;
 }
@@ -4310,7 +4316,6 @@ kbd,
 .setup-choice.checked .setup-choice-hint {
   color: var(--text-2);
 }
-.setup-guide,
 .setup-device {
   display: flex;
   flex-direction: column;
@@ -4320,21 +4325,6 @@ kbd,
   padding: var(--sp-4);
   border: 1px dashed var(--line-strong);
   border-radius: var(--r-md);
-}
-.setup-cmd {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: var(--sp-1) var(--sp-1) var(--sp-1) 10px;
-  border-radius: var(--r-sm);
-  background: var(--code-bg);
-}
-.setup-cmd code {
-  overflow-x: auto;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  white-space: nowrap;
 }
 .setup-code {
   display: flex;
@@ -5518,109 +5508,159 @@ input[type='radio']:focus-visible {
   margin: 0;
 }
 
-/* ---------- providers: one block each in Settings › Accounts ---------- */
-.provider-cards {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
+/* ---------- providers: one row each in Settings › Accounts ---------- */
+.acct-list {
+  max-width: 720px;
   margin: 0 0 var(--sp-5);
-}
-.provider-card {
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
   background: var(--chat);
 }
-.provider-head {
+.acct + .acct {
+  border-top: 1px solid var(--line);
+}
+.acct-row {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-3) var(--sp-2) var(--sp-4);
 }
-.provider-logo {
+.acct-mark {
   display: grid;
   flex: none;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--r-md);
-  color: #fff;
-  font-weight: 700;
-  font-size: var(--fs-lg);
+  background: var(--hover-strong);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
-.provider-title {
+.acct-text {
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
-.provider-title b {
-  font-size: var(--fs-xl);
+.acct-name {
+  color: var(--text);
+  font-weight: 600;
 }
-.provider-sub {
+.acct-sub {
   overflow: hidden;
-  color: var(--text-2);
+  color: var(--text-3);
   font-size: var(--fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.setup-pill.muted {
-  background: var(--hover-strong);
+.acct-sub.err {
+  color: var(--danger-text);
+}
+.acct-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.acct-state.on {
   color: var(--text-2);
 }
-.provider-body {
+.acct-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-3);
+}
+.acct-state.on .acct-dot {
+  background: var(--ok);
+}
+.acct-state.err .acct-dot {
+  background: var(--danger);
+}
+.acct-spin {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--text-2);
+  border-radius: var(--r-full);
+  animation: spin 0.9s linear infinite;
+}
+.acct-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.acct-more .ico {
+  transition: transform 0.15s ease;
+}
+.acct.open .acct-more .ico {
+  transform: rotate(180deg);
+}
+.acct-details {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: var(--sp-2);
-  padding: 0 var(--sp-4) var(--sp-4) calc(var(--sp-4) + 32px + var(--sp-3));
+  padding: 0 var(--sp-4) var(--sp-4) calc(var(--sp-4) + 28px + var(--sp-3));
 }
-.provider-methods {
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-md);
-  background: var(--hover-strong);
-}
-.provider-methods .seg {
+.acct-methods .seg {
   flex: none;
   padding: 0 var(--sp-3);
 }
-.provider-hint {
+.acct-hint {
   margin: 0;
   color: var(--text-2);
   font-size: var(--fs-sm);
-  line-height: var(--lh-base);
 }
-.provider-hint.warn {
-  color: var(--warn);
-}
-.provider-code {
-  padding: 3px var(--sp-2);
-  border-radius: var(--r-sm);
-  background: var(--hover-strong);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-}
-.provider-error {
-  color: var(--danger-text);
-  font-size: var(--fs-sm);
-}
-.provider-keyrow,
-.provider-actions {
+.acct-keyrow {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--sp-2);
   width: 100%;
 }
-.provider-keyrow .setup-input {
+.acct-keyrow .setup-input {
   flex: 1;
   min-width: 180px;
-  max-width: 380px;
+  max-width: 340px;
+  min-height: var(--ctl-md);
+  padding: 3px var(--sp-2);
 }
-.provider-wait {
+.acct-sublist {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+}
+.acct-subrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+.acct-subrow .acct-name {
+  font-weight: 500;
+}
+.acct-add {
+  margin: var(--sp-1) 0 0 -10px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .acct-spin {
+    animation-duration: 2.4s;
+  }
+}
+.setup-pill.muted {
+  background: var(--hover-strong);
   color: var(--text-2);
-  font-size: var(--fs-sm);
 }
 .menu-row.disabled {
   opacity: 0.5;
@@ -5638,44 +5678,4 @@ input[type='radio']:focus-visible {
 }
 .provider-tabs .seg.off {
   opacity: 0.5;
-}
-.provider-accounts {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-}
-.provider-account {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  border-bottom: 1px solid var(--line);
-}
-.provider-account:last-child {
-  border-bottom: 0;
-}
-.provider-account.active {
-  background: var(--accent-soft);
-}
-.provider-account-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.provider-account-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-}
-.provider-account-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: var(--sp-2);
 }

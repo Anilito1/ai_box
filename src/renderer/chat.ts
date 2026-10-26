@@ -866,11 +866,6 @@ export class ChatView {
         return item.state === 'pending' ? this.permissionCard(item) : this.permissionDone(item);
       case 'notice': {
         const el = h('div', `notice ${item.tone}`, item.text);
-        if (item.action === 'claude-settings') {
-          const open = h('button', 'btn small notice-action', t('notice.openClaudeSettings'));
-          open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'claude' })));
-          el.append(open);
-        }
         if (item.action === 'accounts-settings') {
           const open = h('button', 'btn small notice-action', t('notice.openAccountsSettings'));
           open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' })));

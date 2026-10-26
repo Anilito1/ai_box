@@ -459,10 +459,10 @@ reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
 // The master changed the team: an open Team section shows it.
 hub.onTeam(() => setup.teamChanged());
-// A notice that points to a section of the settings (Claude Code missing, for one).
+// A notice that points to a section of the settings (a provider's program missing, for one).
 window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;
-  void setup.open('settings', section === 'claude' ? 'claude' : section === 'accounts' ? 'accounts' : 'general');
+  void setup.open('settings', section === 'accounts' ? 'accounts' : 'general');
 });
 // The git panel's own buttons to follow another repo or stop following one.
 window.addEventListener('hub:add-repo', () => void setup.open('settings', 'repos'));

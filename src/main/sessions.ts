@@ -1345,7 +1345,7 @@ export class SessionManager extends EventEmitter {
     const noOther = noProgram && harness !== 'claude';
     s.error = noClaude ? t('error.noClaude') : noOther ? t(harness === 'gemini' ? 'error.noGemini' : 'error.noCodex') : humanError(failure);
     this.event(s, 'crashed');
-    if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
+    if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'accounts-settings' });
     else if (noOther) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(harness === 'gemini' ? 'notice.noGemini' : 'notice.noCodex'), tone: 'error', action: 'accounts-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);

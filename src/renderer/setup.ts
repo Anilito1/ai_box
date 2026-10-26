@@ -9,11 +9,9 @@ import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_
 import {
   APP_NAME,
   EFFORTS,
-  PROVIDERS,
   type Account,
   type ProviderBadge,
   type AgentFile,
-  type ClaudeStatus,
   type Effort,
   type FoundRepo,
   type GithubDevice,
@@ -22,7 +20,6 @@ import {
   type HubSettings,
   type Mode,
   type ModelOption,
-  type Provider,
   type SettingsPatch,
   type SettingsView,
   type TeamRole,
@@ -31,15 +28,15 @@ import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { updateSection } from './update';
 
-type Section = 'general' | 'claude' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
+type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
 type Row = { name: string; path: string; slug: string; detail: string; private: boolean; pushedAt: number };
 
-const STEPS: Section[] = ['general', 'claude', 'github', 'workspace', 'repos', 'sessions'];
-// The team and the other accounts are never part of the first run: they start empty, nothing imposed.
-const SECTIONS: Section[] = ['general', 'claude', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
+// The first run connects the providers only: the team and the fallback start empty, nothing imposed.
+const STEPS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions'];
+const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
@@ -77,10 +74,6 @@ function folderNames(paths: string[]): string[] {
   return paths.map((p, i) => (short.filter((s) => s === short[i]).length > 1 ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : short[i]));
 }
 
-const INSTALL = {
-  win32: 'irm https://claude.ai/install.ps1 | iex',
-  other: 'curl -fsSL https://claude.ai/install.sh | bash',
-};
 /** A sign-in started in a terminal window is watched this long. */
 const WAIT_MS = 15 * 60_000;
 /** A classic token with the scopes the hub needs, ticked in advance. */
@@ -95,13 +88,10 @@ export class SetupView {
   private mode: Kind = 'settings';
   private section: Section = 'general';
   private view: SettingsView | null = null;
-  private claude: ClaudeStatus | null = null;
-  private checkingClaude = false;
   /** The GitHub CLI on this computer; null until checked. */
   private gh: { installed: boolean; login: string } | null = null;
   private ghChecking = false;
   /** Until when the step watches a sign-in started in a terminal window (0: not watching). */
-  private claudeWait = 0;
   private ghWait = 0;
   private watchTimer = 0;
   /** No terminal window could be opened: the step shows the command to type instead. */
@@ -115,13 +105,11 @@ export class SetupView {
   private githubHealth: string | null = null;
   /** "Allow everything" picked, waiting for the explicit confirmation shown under it. */
   private confirmBypass = false;
-  /** API key typed but not saved yet: kept across re-renders so a failed check can be retried. */
-  private keyDraft = '';
   /** Settings typed but not saved yet (see flush). */
   private pending: SettingsPatch = {};
   /** Focused before the dialog opened: it gets the focus back. */
   private returnFocus: HTMLElement | null = null;
-  /** Start pressed while Claude has no access yet: the next press starts anyway. */
+  /** Start pressed while the master's provider has no access yet: the next press starts anyway. */
   private startAnyway = false;
   private device: GithubDevice | null = null;
   /** Post being edited (a copy; empty id for a new one), else null for the team list. */
@@ -299,7 +287,6 @@ export class SetupView {
     this.device = null;
     this.confirmBypass = false;
     this.startAnyway = false;
-    this.claudeWait = 0;
     this.ghWait = 0;
     this.noTerminal = false;
     this.section = section;
@@ -309,22 +296,14 @@ export class SetupView {
   }
 
   /**
-   * The master needs Claude: without Claude Code the start is refused and the Claude step shown; without access
-   * yet, a first press explains, a second one starts anyway.
+   * The master needs a connected provider: with none yet, a first press shows the Accounts step and explains, a second
+   * one starts anyway.
    */
   private async finish(): Promise<void> {
     if (!(await this.flush(false))) return;
-    if (!this.claude) await this.checkClaude();
-    const c = this.claude;
-    if (!c?.found) {
-      this.section = 'claude';
-      this.note = { text: t('setup.finish.noClaude'), tone: 'error' };
-      return this.render();
-    }
-    const s = this.view?.settings;
-    const noKey = s?.provider === 'api-key' && !this.view?.apiKeySet;
-    if (!this.startAnyway && (noKey || c.account?.ready !== true)) {
+    if (!this.startAnyway && !(await this.hub.providers()).some((p) => p.connected)) {
       this.startAnyway = true;
+      this.section = 'accounts';
       this.note = { text: t('setup.finish.noAccess'), tone: 'error' };
       return this.render();
     }
@@ -337,8 +316,6 @@ export class SetupView {
     switch (this.section) {
       case 'general':
         return this.general(el, v);
-      case 'claude':
-        return this.claudeSection(el, v);
       case 'accounts':
         return this.accountsSection(el, v);
       case 'github':
@@ -405,12 +382,6 @@ export class SetupView {
     const a = h('button', 'setup-link', label);
     a.addEventListener('click', () => this.hub.openExternal(url));
     return a;
-  }
-
-  private command(text: string): HTMLDivElement {
-    const row = h('div', 'setup-cmd');
-    row.append(h('code', '', text), copyButton(() => text));
-    return row;
   }
 
   private flash(text: string, tone: 'ok' | 'error', detail = ''): void {
@@ -494,169 +465,33 @@ export class SetupView {
     }
   }
 
-  private claudeSection(el: HTMLElement, v: SettingsView): void {
-    const s = v.settings;
-    this.head(el, t('setup.claude.title'), t('setup.claude.lead'));
-    if (!this.claude && !this.checkingClaude) void this.checkClaude();
-
-    const status = h('div', 'setup-status');
-    const c = this.claude;
-    // Says whether Claude Code is connected, and with what: never where it is installed nor how it answered.
-    if (this.checkingClaude || !c) {
-      status.append(h('span', 'setup-spin'), h('span', '', t('setup.claude.checking')));
-    } else if (!c.found) {
-      status.classList.add('error');
-      status.append(icon(ICONS.shield), h('b', '', t('setup.claude.notFound')));
-    } else if (s.provider === 'api-key' && !v.apiKeySet) {
-      // Without a key Claude Code would fall back to its own sign-in: the choice is not complete yet.
-      status.classList.add('warn');
-      status.append(icon(ICONS.shield), h('b', '', t('setup.claude.needKey')));
-    } else {
-      const a = c.account;
-      const ready = a?.ready === true;
-      status.classList.add(ready ? 'ok' : 'warn');
-      const who = a
-        ? [a.email, a.plan, a.provider !== 'firstParty' ? t('setup.claude.cloud') : '', a.source && !a.email ? t('setup.claude.viaKey') : ''].filter(Boolean).join(' · ')
-        : c.error === 'timeout'
-          ? t('setup.claude.timeout')
-          : c.error
-            ? t('setup.claude.probeFailed')
-            : '';
-      status.append(icon(ready ? ICONS.check : ICONS.shield), h('b', '', ready ? t('setup.claude.ready') : t('setup.claude.noAccess')));
-      if (who) status.append(h('span', 'setup-status-detail', who));
-    }
-    status.append(this.button(t('setup.check'), 'btn ghost small', () => void this.checkClaude(), this.checkingClaude));
-    el.append(status);
-
-    // The way to Claude comes first: Anthropic's installer, then Claude Code's own sign-in, each in a terminal window.
-    if (c && (!c.found || (s.provider === 'claude-code' && !c.account?.ready))) {
-      const guide = h('div', 'setup-guide');
-      const action = c.found ? 'login' : 'install';
-      guide.append(
-        h('div', 'setup-label', c.found ? t('setup.claude.signIn') : t('setup.claude.install')),
-        h('div', 'setup-hint', c.found ? t('setup.claude.signIn.hint') : t('setup.claude.install.hint')),
-      );
-      const row = h('div', 'setup-row');
-      row.append(this.button(c.found ? t('setup.claude.signInBtn') : t('setup.claude.installBtn'), 'btn primary', () => void this.claudeTerminal(action)));
-      guide.append(row);
-      if (this.claudeWait) guide.append(h('div', 'setup-wait', t(action === 'install' ? 'setup.claude.waitingInstall' : 'setup.claude.waiting')));
-      if (this.noTerminal || !c.found) {
-        guide.append(h('div', 'setup-hint', this.noTerminal ? t('setup.claude.noTerminal') : t('setup.claude.orRun')));
-        guide.append(this.command(!c.found ? (v.platform === 'win32' ? INSTALL.win32 : INSTALL.other) : 'claude auth login'));
-      }
-      guide.append(this.link(t('setup.claude.docs'), 'https://code.claude.com/docs/en/setup'));
-      el.append(guide);
-    }
-
-    const options = h('div', 'setup-choices');
-    for (const p of PROVIDERS) {
-      options.append(this.choice('provider', s.provider === p, t(`setup.provider.${p}` as Key), t(`setup.provider.${p}.hint` as Key), () => void this.pickProvider(p)));
-    }
-    el.append(options);
-
-    if (s.provider === 'api-key') {
-      const f = this.field(t('setup.apiKey'), v.secureStorage ? t('setup.apiKey.hint') : t('setup.err.keychain'));
-      const row = h('div', 'setup-row');
-      if (v.apiKeySet) {
-        row.append(h('span', 'setup-pill ok', t('setup.apiKey.saved')), this.button(t('setup.remove'), 'btn ghost', () => void this.setApiKey(null)));
-      } else {
-        const input = this.input(this.keyDraft, 'sk-ant-…', 'password');
-        input.dataset.autofocus = '';
-        input.addEventListener('input', () => (this.keyDraft = input.value));
-        const save = () => void this.setApiKey(input.value);
-        input.addEventListener('keydown', (e) => e.key === 'Enter' && save());
-        row.append(input, this.button(t('setup.verifySave'), 'btn primary', save, !v.secureStorage));
-      }
-      f.append(row, this.link(t('setup.apiKey.console'), 'https://console.anthropic.com/settings/keys'));
-      el.append(f);
-    }
-  }
-
-  /** Opens the terminal window, then watches for the outcome: Claude Code found, then signed in. */
-  private async claudeTerminal(action: 'login' | 'install'): Promise<void> {
-    const opened = await this.run(() => this.hub.claudeTerminal(action));
-    this.noTerminal = !opened;
-    this.note = null;
-    this.claudeWait = opened ? Date.now() + WAIT_MS : 0;
-    this.render();
-    if (opened) this.watch('claude');
-  }
-
   /**
-   * While the user signs in (or installs) in a terminal window, the step checks again every few seconds and redraws
-   * only when the answer changes; it stops on success, on leaving the step, or after a quarter of an hour.
+   * While the user signs in to GitHub in a terminal window, the step checks again every few seconds and redraws only
+   * when the answer changes; it stops on success, on leaving the step, or after a quarter of an hour.
    */
-  private watch(what: 'claude' | 'gh'): void {
+  private watch(): void {
     window.clearTimeout(this.watchTimer);
-    this.watchTimer = window.setTimeout(() => void this.watchOnce(what), 4000);
+    this.watchTimer = window.setTimeout(() => void this.watchOnce(), 4000);
   }
 
-  private async watchOnce(what: 'claude' | 'gh'): Promise<void> {
-    const deadline = what === 'claude' ? this.claudeWait : this.ghWait;
-    const stop = () => {
-      if (what === 'claude') this.claudeWait = 0;
-      else this.ghWait = 0;
-    };
-    if (!deadline || Date.now() > deadline || this.root.hidden || this.section !== (what === 'claude' ? 'claude' : 'github')) {
-      if (deadline) {
-        stop();
+  private async watchOnce(): Promise<void> {
+    if (!this.ghWait || Date.now() > this.ghWait || this.root.hidden || this.section !== 'github') {
+      if (this.ghWait) {
+        this.ghWait = 0;
         if (!this.root.hidden) this.render();
       }
       return;
     }
-    if (what === 'claude') {
-      const before = JSON.stringify(this.claude);
-      const wasFound = this.claude?.found === true;
-      const c = this.checkingClaude ? this.claude : await this.hub.checkClaude();
-      if (!this.claudeWait || this.section !== 'claude') return;
-      this.claude = c;
-      if (c?.found && c.account?.ready) {
-        stop();
-        this.flash(t('setup.claude.signedIn'), 'ok');
-      } else if (c?.found && !wasFound) {
-        // Installed: the sign-in is the next click.
-        stop();
-        this.flash(t('setup.claude.installed'), 'ok');
-      }
-      if (JSON.stringify(c) !== before || !this.claudeWait) this.render();
-    } else {
-      const gh = await this.hub.ghStatus();
-      if (!this.ghWait || this.section !== 'github') return;
-      const changed = JSON.stringify(gh) !== JSON.stringify(this.gh);
-      this.gh = gh;
-      if (gh.login) {
-        stop();
-        return this.githubResult(this.hub.githubUseGh());
-      }
-      if (changed) this.render();
+    const gh = await this.hub.ghStatus();
+    if (!this.ghWait || this.section !== 'github') return;
+    const changed = JSON.stringify(gh) !== JSON.stringify(this.gh);
+    this.gh = gh;
+    if (gh.login) {
+      this.ghWait = 0;
+      return this.githubResult(this.hub.githubUseGh());
     }
-    this.watch(what);
-  }
-
-  private async checkClaude(): Promise<void> {
-    this.checkingClaude = true;
-    this.render();
-    try {
-      this.claude = await this.hub.checkClaude();
-    } finally {
-      this.checkingClaude = false;
-      this.render();
-    }
-  }
-
-  private async pickProvider(p: Provider): Promise<void> {
-    this.claudeWait = 0;
-    await this.save({ provider: p });
-    await this.checkClaude();
-  }
-
-  private async setApiKey(key: string | null): Promise<void> {
-    const r = await this.run(() => this.hub.setApiKey(key === null ? null : key.trim()));
-    this.view = r;
-    if (r.ok) this.keyDraft = '';
-    this.flash(r.ok ? t(key === null ? 'setup.apiKey.removed' : 'setup.apiKey.ok') : this.errorText(r.error, 'key'), r.ok ? 'ok' : 'error', r.ok ? '' : this.rawOf(r.error));
-    if (r.ok) await this.checkClaude();
-    else this.render();
+    if (changed) this.render();
+    this.watch();
   }
 
   private github(el: HTMLElement, v: SettingsView): void {
@@ -793,7 +628,7 @@ export class SetupView {
     this.note = null;
     this.ghWait = opened ? Date.now() + WAIT_MS : 0;
     this.render();
-    if (opened) this.watch('gh');
+    if (opened) this.watch();
   }
 
   /** The OAuth App's Client ID, saved when the field is left. */
@@ -1008,10 +843,11 @@ export class SetupView {
     modes.append(choices);
     el.append(modes);
 
-    const grid = h('div', 'setup-grid');
-    grid.append(this.modelField(t('setup.sessions.master'), s.master, (v) => void this.save({ master: v })));
-    grid.append(this.modelField(t('setup.sessions.worker'), s.worker, (v) => void this.save({ worker: v })));
-    el.append(grid, this.autoChoice(s));
+    el.append(
+      this.defaultField(t('setup.sessions.master'), t('setup.accounts.master.hint'), s.masterAccount, s.master, (account, v) => void this.save({ masterAccount: account, master: v })),
+      this.defaultField(t('setup.sessions.worker'), t('setup.accounts.workers.hint'), s.workerAccount, s.worker, (account, v) => void this.save({ workerAccount: account, worker: v })),
+      this.autoChoice(s),
+    );
 
     const f = this.field(t('setup.sessions.instructions'), t('setup.sessions.instructions.hint'));
     const area = h('textarea', 'setup-textarea');
@@ -1080,20 +916,59 @@ export class SetupView {
     return grid;
   }
 
-  private modelField(label: string, value: { model: string; effort: Effort | '' }, set: (v: { model: string; effort: Effort | '' }) => void): HTMLElement {
-    const f = this.field(label);
+  /**
+   * Where the master or the workers run by default: a connected provider (the others wait in Settings › Accounts),
+   * then one of its models and an effort. Another provider starts from its own default model.
+   */
+  private defaultField(
+    label: string,
+    hint: string,
+    account: string,
+    value: { model: string; effort: Effort | '' },
+    set: (account: string, v: { model: string; effort: Effort | '' }) => void,
+  ): HTMLElement {
+    const f = this.field(label, hint);
+    const providers = this.providerList();
+    const current = providers.find((p) => p.accountId === account);
+    const provider = h('select', 'setup-select');
+    provider.setAttribute('aria-label', t('setup.sessions.provider'));
+    for (const p of providers) {
+      const id = p.accountId || `off:${p.id}`;
+      const opt = new Option(p.connected ? p.label : t('setup.sessions.offProvider', { provider: p.label }), id);
+      opt.disabled = !p.connected && id !== account;
+      provider.append(opt);
+    }
+    // An account that stands for no provider (an older, hand-made one) keeps its place while it is the one set.
+    if (!current) provider.append(new Option(this.view?.settings.accounts.find((a) => a.id === account)?.name ?? account, account));
+    provider.value = account;
+
+    // Anthropic: the models Claude Code listed, then its aliases; the others: their provider's own list.
+    const anthropic = current?.id === 'anthropic';
+    const models = anthropic ? [...this.models(), ...(current?.models ?? [])] : (current?.models ?? []);
+    const own = anthropic ? [...models.map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES] : models.map((m) => m.value);
+    const nameOf = (m: string) => models.find((x) => x.value === m)?.label ?? (anthropic ? m.charAt(0).toUpperCase() + m.slice(1) : m);
     const model = h('select', 'setup-select');
-    const known = [...new Set([...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES, value.model].filter(Boolean))];
-    model.append(new Option(t('setup.sessions.inherit'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
+    model.setAttribute('aria-label', t('setup.sessions.model'));
+    model.append(
+      new Option(t('setup.sessions.inherit'), ''),
+      ...[...new Set([...own, value.model].filter(Boolean))].map((m) => new Option(nameOf(m), m)),
+    );
     model.value = value.model;
+
     const effort = h('select', 'setup-select');
-    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
+    effort.setAttribute('aria-label', t('setup.sessions.effort'));
+    const levels = value.model && current ? effortsFor(models, value.model) : EFFORTS;
+    const kept = value.effort && !levels.includes(value.effort) ? [value.effort] : [];
+    effort.append(new Option(t('setup.sessions.inheritEffort'), ''), ...[...levels, ...kept].map((e) => new Option(effortLabel(e), e)));
     effort.value = value.effort;
-    const update = () => set({ model: model.value, effort: effort.value as Effort | '' });
+
+    provider.disabled = model.disabled = effort.disabled = this.busy;
+    provider.addEventListener('change', () => set(provider.value, { model: '', effort: value.effort }));
+    const update = () => set(account, { model: model.value, effort: effort.value as Effort | '' });
     model.addEventListener('change', update);
     effort.addEventListener('change', update);
-    const row = h('div', 'setup-row');
-    row.append(model, effort);
+    const row = h('div', 'setup-row setup-defaults');
+    row.append(provider, model, effort);
     f.append(row);
     return f;
   }
@@ -1104,14 +979,7 @@ export class SetupView {
     const s = v.settings;
     this.head(el, t('setup.accounts.title'), t('setup.accounts.lead'));
     this.providers.mount(el);
-
-    // Where the master and the workers run unless a post or the user says otherwise: a provider each.
-    const grid = h('div', 'setup-grid');
-    grid.append(
-      this.providerSelect(t('setup.accounts.master'), t('setup.accounts.master.hint'), s.masterAccount, s, (id) => void this.save({ masterAccount: id })),
-      this.providerSelect(t('setup.accounts.workers'), t('setup.accounts.workers.hint'), s.workerAccount, s, (id) => void this.save({ workerAccount: id })),
-    );
-    el.append(grid);
+    if (this.mode === 'onboarding') return;
 
     // Accounts made by hand before the providers' blocks existed: still there, only to remove.
     const legacy = s.accounts.filter((a) => providerOfAccount(a) === null);
@@ -1210,31 +1078,6 @@ export class SetupView {
     return f;
   }
 
-  /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
-  private providerSelect(label: string, hint: string, value: string, s: HubSettings, pick: (account: string) => void, inherit?: string): HTMLElement {
-    const f = this.field(label, hint);
-    const select = h('select', 'setup-select');
-    select.setAttribute('aria-label', label);
-    if (inherit !== undefined) select.append(new Option(inherit, ''));
-    const known = new Set<string>();
-    for (const p of this.providerList()) {
-      // A provider that is not connected cannot be picked (unless it is what is set now).
-      const off = !p.connected;
-      const id = p.accountId || `off:${p.id}`;
-      known.add(id);
-      const opt = new Option(off ? `${p.label} · ${t('provider.disconnected')}` : p.label, id);
-      opt.disabled = off && id !== value;
-      select.append(opt);
-    }
-    // An account that stands for no provider (an older, hand-made one) keeps its place while it is the one set.
-    if (value && !known.has(value)) select.append(new Option(s.accounts.find((a) => a.id === value)?.name ?? value, value));
-    select.value = value;
-    select.disabled = this.busy;
-    select.addEventListener('change', () => pick(select.value));
-    f.append(select);
-    return f;
-  }
-
   /** An account made by hand before the providers' blocks: named, and removable. */
   private legacyRow(a: Account): HTMLElement {
     const row = h('div', 'team-row');
@@ -1275,19 +1118,13 @@ export class SetupView {
   private accountErrorText(code: string): string {
     const own: Record<string, Key> = {
       'no-key': 'setup.accounts.err.noKey',
-      required: 'setup.accounts.err.noKey',
-      'no-claude': 'setup.claude.notFound',
-      'no-codex': 'setup.accounts.err.noCodex',
-      'no-gemini': 'setup.accounts.err.noGemini',
-      timeout: 'setup.claude.timeout',
-      'probe-failed': 'setup.claude.probeFailed',
+      required: 'provider.key.required',
       'not-found': 'setup.accounts.err.notFound',
       'http-404': 'setup.accounts.err.notFoundUrl',
       unauthorized: 'setup.accounts.err.refused',
       forbidden: 'setup.accounts.err.refused',
       format: 'setup.accounts.err.format',
       'no-model': 'setup.accounts.err.noModel',
-      'no-terminal': 'setup.accounts.noTerminal',
       'rate-limited': 'setup.accounts.err.rateLimited',
       network: 'setup.accounts.err.network',
       working: 'setup.accounts.err.working',
