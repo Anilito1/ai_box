@@ -67,6 +67,7 @@ import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { openTerminal } from './terminal';
+import { installTool, setToolsDir, type Tool } from './providers/tools';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
 
@@ -268,6 +269,7 @@ class Hub {
 
   constructor() {
     this.cfg = loadConfig(this.dataDir, systemLang());
+    setToolsDir(join(this.dataDir, 'tools'));
     setLang(this.cfg.language);
     this.mgr = new SessionManager({
       cfg: this.cfg,
@@ -387,15 +389,29 @@ class Hub {
       };
     };
     // Anthropic's accounts: the user's own sign-in, and the ones added beside it. The active one is what "Anthropic" is.
+    // With an API key chosen, the user's own access is the key: it is no longer one of the accounts to sign in.
     const own = viewOf(claude);
     const active = this.cfg.anthropicActive;
+    const keyMode = this.cfg.provider === 'api-key';
     const accounts: ProviderAccountView[] = [
-      { id: OWN_ACCOUNT, name: t('account.own'), ...own, active: active === '', removable: false },
+      ...(keyMode ? [] : [{ id: OWN_ACCOUNT, name: t('account.own'), ...own, active: active === '', removable: false }]),
       ...claudeAccounts.map((a, i) => ({ id: a.id, name: a.name, ...viewOf(others[i]), active: active === a.id, removable: true })),
     ];
-    const anthropic: MethodView = accounts.find((a) => a.active) ?? own;
+    const none: MethodView = { connected: false, detail: '', error: '' };
+    const anthropicKey: MethodView = keyMode && this.secrets.has('anthropicApiKey') ? { ...own, detail: '' } : none;
+    const anthropic: MethodView = accounts.find((a) => a.active) ?? (keyMode ? none : own);
+    const viaKey = keyMode && active === '';
+    const anthropicOn = viaKey ? anthropicKey.connected : anthropic.connected;
     const views: ProviderView[] = [
-      { id: 'anthropic', label: providerDef('anthropic').label, connected: anthropic.connected, method: anthropic.connected ? 'cli' : '', methods: { cli: anthropic }, accounts, cli: { found: claude.executable !== '', version: '', outdated: false } },
+      {
+        id: 'anthropic',
+        label: providerDef('anthropic').label,
+        connected: anthropicOn,
+        method: anthropicOn ? (viaKey ? 'apikey' : 'cli') : '',
+        methods: { cli: anthropic, apikey: anthropicKey },
+        accounts,
+        cli: { found: claude.executable !== '', version: '', outdated: false },
+      },
       {
         id: 'openai',
         label: providerDef('openai').label,
@@ -415,7 +431,7 @@ class Hub {
       },
     ];
     const states: Partial<Record<ProviderId, ProviderState>> = {
-      anthropic: { connected: anthropic.connected, accountId: 'default', method: anthropic.connected ? 'cli' : '' },
+      anthropic: { connected: anthropicOn, accountId: 'default', method: anthropicOn ? (viaKey ? 'apikey' : 'cli') : '' },
       openai: chatgpt.connected
         ? { connected: true, accountId: this.managed('openai', 'chatgpt')?.id ?? '', method: 'chatgpt' }
         : apikey.connected
@@ -436,8 +452,21 @@ class Hub {
   async connectProvider(provider: ProviderId, method: ProviderMethod, key: unknown) {
     const out = async (r: { ok: boolean; error: string; field: string }) => ({ ...r, views: await this.providerViews() });
     const typed = isStr(key) ? key.trim() : '';
-    if (method !== 'apikey' || (provider !== 'deepseek' && provider !== 'openai' && provider !== 'gemini')) return out({ ok: false, error: 'unsupported', field: '' });
+    if (method !== 'apikey') return out({ ok: false, error: 'unsupported', field: '' });
     if (!typed) return out({ ok: false, error: 'required', field: 'key' });
+    if (provider === 'anthropic') {
+      // The user's own access: Claude Code runs on this key instead of its own sign-in.
+      if (!API_KEY.test(typed)) return out({ ok: false, error: 'format', field: 'key' });
+      if (!this.secrets.available()) return out({ ok: false, error: 'no-keychain', field: 'key' });
+      const refused = await checkApiKey(typed);
+      if (refused) return out({ ok: false, error: refused, field: 'key' });
+      await this.secrets.set('anthropicApiKey', typed);
+      this.cfg.provider = 'api-key';
+      this.cfg.anthropicActive = '';
+      this.save();
+      this.mgr.accountsChanged();
+      return out({ ok: true, error: '', field: '' });
+    }
     if (!isOpenAIKey(typed)) return out({ ok: false, error: 'format', field: 'key' });
     if (provider === 'deepseek') {
       // The Anthropic-style address has no model list: the key is checked against DeepSeek's own.
@@ -497,6 +526,13 @@ class Hub {
   /** Opens the program's own sign-in in a terminal window (Claude Code, Codex): the user signs in there, never here. */
   async loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean> {
     if (provider === 'anthropic') {
+      // Back from an API key to Claude Code's own sign-in: a user already signed in there has nothing more to do.
+      if (this.cfg.provider === 'api-key') {
+        this.cfg.provider = 'claude-code';
+        this.save();
+        this.mgr.accountsChanged();
+        if ((await claudeStatus(this.cfg, this.mgr.environment(OWN_ACCOUNT))).status.account?.ready) return true;
+      }
       const exe = await claudeExecutable(this.cfg);
       return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, this.mgr.toolEnv());
     }
@@ -520,9 +556,32 @@ class Hub {
     return false;
   }
 
+  /**
+   * Installs (or updates) the program a provider's sign-in runs in: the app's own copy, with npm. Claude Code without
+   * Node.js comes from Anthropic's installer, in a terminal window (`opened`: the panel then waits for it).
+   */
+  async installCli(provider: ProviderId) {
+    const tool: Tool | null = provider === 'anthropic' ? 'claude' : provider === 'openai' ? 'codex' : provider === 'gemini' ? 'gemini' : null;
+    let error = tool ? await installTool(tool, this.mgr.toolEnv()) : 'unsupported';
+    let opened = false;
+    if (error === 'no-node' && tool === 'claude') {
+      opened = await openTerminal({ title: 'Claude Code', installer: 'claude' }, this.mgr.toolEnv());
+      if (opened) error = '';
+    }
+    if (tool === 'claude') this.executable = (await claudeExecutable(this.cfg)) || this.executable;
+    return { ok: error === '', error, field: '', opened, views: await this.providerViews() };
+  }
+
   /** Signs a provider out and forgets what the hub kept for it. Claude Code's own sign-out ends it for the terminal too. */
   async disconnectProvider(provider: ProviderId, method: ProviderMethod) {
     const out = async (r: { ok: boolean; error: string }) => ({ ...r, field: '', views: await this.providerViews() });
+    if (provider === 'anthropic' && method === 'apikey') {
+      await this.secrets.set('anthropicApiKey', null);
+      this.cfg.provider = 'claude-code';
+      this.save();
+      this.mgr.accountsChanged();
+      return out({ ok: true, error: '' });
+    }
     if (provider === 'anthropic') {
       await claudeLogout(await claudeExecutable(this.cfg), this.mgr.environment());
       return out({ ok: true, error: '' });
@@ -810,22 +869,6 @@ class Hub {
       if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
       return { ...this.view(), ok: true, error: '' };
     });
-    handle('settings:api-key', async (key) => {
-      if (key === null) {
-        await this.secrets.set('anthropicApiKey', null);
-        if (this.cfg.provider === 'api-key') this.cfg.provider = 'claude-code';
-        this.save();
-        return { ...this.view(), ok: true, error: '' };
-      }
-      if (!isStr(key) || !API_KEY.test(key.trim())) return { ...this.view(), ok: false, error: 'format' };
-      if (!this.secrets.available()) return { ...this.view(), ok: false, error: 'no-keychain' };
-      const refused = await checkApiKey(key.trim());
-      if (refused) return { ...this.view(), ok: false, error: refused };
-      await this.secrets.set('anthropicApiKey', key.trim());
-      this.cfg.provider = 'api-key';
-      this.save();
-      return { ...this.view(), ok: true, error: '' };
-    });
     // The team, one post at a time, with the checks of the master's tools (sessions.ts); the master hears of it next.
     handle('team:save', (role) => {
       const r = mgr.saveRole(role, 'user');
@@ -861,13 +904,6 @@ class Hub {
       this.executable = executable;
       return status;
     });
-    // Claude Code's own sign-in (or Anthropic's installer) in a terminal window: the user signs in there, never here.
-    handle('claude:terminal', async (action) => {
-      if (action === 'install') return openTerminal({ title: 'Claude Code', installer: 'claude' }, mgr.toolEnv());
-      if (action !== 'login') return false;
-      const exe = await claudeExecutable(this.cfg);
-      return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, mgr.toolEnv());
-    });
     handle('accounts:save', (account, key) => this.saveAccount(account, key));
     handle('accounts:delete', (id) => (isStr(id) ? this.deleteAccount(id) : this.view()));
     handle('accounts:check', (id) => (isStr(id) ? this.checkAccount(id) : { ready: false, detail: '', error: 'not-found', models: [] }));
@@ -879,8 +915,9 @@ class Hub {
     });
     handle('accounts:login', (id) => (isStr(id) ? this.loginAccount(id) : false));
     // The providers' blocks in Settings › Accounts.
-    const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'apikey' ? v : null);
+    const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'google' || v === 'apikey' ? v : null);
     handle('providers:state', () => this.providerViews());
+    handle('providers:install', (provider) => (isProviderId(provider) ? this.installCli(provider) : { ok: false, error: 'unsupported', field: '', opened: false, views: [] }));
     handle('providers:connect', (provider, method, key) => {
       const m = methodOf(method);
       return isProviderId(provider) && m ? this.connectProvider(provider, m, key) : { ok: false, error: 'unsupported', field: '', views: [] };

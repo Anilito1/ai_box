@@ -19,7 +19,7 @@ export interface ProviderDef {
 }
 
 export const PROVIDER_DEFS: ProviderDef[] = [
-  { id: 'anthropic', label: 'Anthropic', methods: ['cli'], keyUrl: '' },
+  { id: 'anthropic', label: 'Anthropic', methods: ['cli', 'apikey'], keyUrl: 'https://console.anthropic.com/settings/keys' },
   { id: 'openai', label: 'OpenAI', methods: ['chatgpt', 'apikey'], keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'deepseek', label: 'DeepSeek', methods: ['apikey'], keyUrl: 'https://platform.deepseek.com/api_keys' },
   { id: 'gemini', label: 'Gemini', methods: ['google', 'apikey'], keyUrl: 'https://aistudio.google.com/apikey' },

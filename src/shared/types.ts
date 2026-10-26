@@ -488,7 +488,7 @@ export type ChatItem = (
       text: string;
       tone: 'info' | 'error';
       /** A button that opens Settings › Claude. */
-      action?: 'claude-settings' | 'accounts-settings';
+      action?: 'accounts-settings';
       /** The raw message behind an error, shown folded under "Details". */
       detail?: string;
     }
@@ -672,8 +672,6 @@ export interface HubApi {
   openExternal(url: string): void;
   getSettings(): Promise<SettingsView>;
   saveSettings(patch: SettingsPatch): Promise<SettingsView & Result>;
-  /** Stores (or with null, deletes) the Anthropic API key after checking it with the API. */
-  setApiKey(key: string | null): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;
   /** The Codex program on this computer: found or not, its version, and whether the hub knows that version. */
   checkCodex(): Promise<CodexCli>;
@@ -684,6 +682,8 @@ export interface HubApi {
   /** Opens the program's own sign-in in a terminal window; false when none could open. */
   loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean>;
   disconnectProvider(provider: ProviderId, method: ProviderMethod): Promise<ProviderResult>;
+  /** Installs or updates the program a provider's sign-in runs in; `opened`: an installer runs in a terminal window. */
+  installProvider(provider: ProviderId): Promise<ProviderResult & { opened: boolean }>;
   /** Anthropic's accounts: use one (make it the active one), add one, sign one in again, remove one. */
   anthropicAccount(action: 'use' | 'add' | 'login' | 'remove', id: string): Promise<ProviderResult & { opened: boolean }>;
   /**
@@ -696,8 +696,6 @@ export interface HubApi {
   checkAccount(id: string): Promise<AccountStatus>;
   /** Opens a terminal window with Claude Code's own sign-in, for that Claude account's folder; false when none could open. */
   accountLogin(id: string): Promise<boolean>;
-  /** Opens a terminal window with Claude Code's own sign-in, or Anthropic's installer; false when none could open. */
-  claudeTerminal(action: 'login' | 'install'): Promise<boolean>;
   /** The GitHub CLI on this machine: installed or not, and the login it is signed in with (else empty). */
   ghStatus(): Promise<{ installed: boolean; login: string }>;
   /** Opens a terminal window with the GitHub CLI's own sign-in; false when none could open. */
