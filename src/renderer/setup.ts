@@ -1,4 +1,4 @@
-import { splitRecent } from '../shared/models';
+import { effortsFor, splitRecent } from '../shared/models';
 import { providerOfAccount } from '../shared/providers';
 import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
 import { DEFAULT_ACCOUNT } from '../shared/accounts';
@@ -1587,12 +1587,20 @@ export class SetupView {
     model.value = wanted;
     model.setAttribute('aria-label', t('team.field.model'));
     const effort = h('select', 'setup-select');
-    effort.append(new Option(t('team.autoEffortLong'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
-    effort.value = d.effort;
     effort.setAttribute('aria-label', t('team.field.effort'));
+    // The levels of the model picked, as its provider lists them (Codex: per model); a model that takes none leaves only auto.
+    const fillEfforts = () => {
+      const own = this.providerList().find((p) => p.accountId === (d.account || s.workerAccount))?.models ?? [];
+      const levels = d.model ? effortsFor(own, d.model) : EFFORTS;
+      const kept = d.effort && !levels.includes(d.effort) ? [d.effort] : [];
+      effort.replaceChildren(new Option(t('team.autoEffortLong'), ''), ...[...levels, ...kept].map((e) => new Option(effortLabel(e), e)));
+      effort.value = d.effort;
+    };
+    fillEfforts();
     model.addEventListener('change', () => {
       const [account, name] = model.value === '' ? ['', ''] : (model.value.split('|') as [string, string]);
       Object.assign(d, { account, model: name });
+      fillEfforts();
       changed();
     });
     effort.addEventListener('change', () => {

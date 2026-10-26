@@ -3,7 +3,6 @@ import { marked } from 'marked';
 import {
   ATTACH_LIMITS,
   base64Bytes,
-  EFFORTS,
   MENU_MODES,
   type AccountBadge,
   type ChatItem,
@@ -14,7 +13,7 @@ import {
   type ProviderBadge,
   type SessionView,
 } from '../shared/types';
-import { splitRecent } from '../shared/models';
+import { effortsFor, splitRecent } from '../shared/models';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
@@ -649,6 +648,8 @@ export class ChatView {
     };
     // The providers whose older models are unfolded behind "See more".
     const unfolded = new Set<string>();
+    // The effort picked on a provider's tab the session is not on yet: it goes with the model picked next.
+    let nextEffort: Effort | null = null;
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
         menu.replaceChildren();
@@ -683,7 +684,10 @@ export class ChatView {
           row.addEventListener('click', () => {
             // Provider and model in one go: the session moves to the provider if it is not there already.
             if (tab === current) this.hub.setModel(s.id, model.value);
-            else this.hub.setProviderModel(s.id, tab, model.value);
+            else if (nextEffort) {
+              this.hub.setEffort(s.id, nextEffort);
+              this.hub.setProviderModel(s.id, tab, model.value);
+            } else this.hub.setProviderModel(s.id, tab, model.value);
             close();
           });
           list.append(row);
@@ -699,15 +703,22 @@ export class ChatView {
           });
           list.append(more);
         }
-        // The effort belongs to the model the session runs: shown with its provider's tab.
-        const now = models.find((m) => m.value === s.model);
-        if (tab === current && !now?.noEffort) {
-          const efforts: Effort[] = now?.efforts.length ? now.efforts : EFFORTS;
+        // The effort of the model the session runs, on its provider's tab. On another provider's tab it is the effort the
+        // session takes when a model of that provider is picked: chosen first, applied with the model.
+        const fresh = tab !== current;
+        const shown = fresh ? (recent.find((m) => m.value !== 'default') ?? models[0]) : models.find((m) => m.value === s.model);
+        const efforts = effortsFor(models, shown?.value ?? s.model);
+        if (efforts.length > 0 && !(fresh && models.length === 0)) {
           root.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
           const seg = h('div', 'segmented efforts');
+          const active = fresh ? nextEffort : s.effort;
           for (const effort of efforts) {
-            const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
+            const b = h('button', effort === active ? 'seg active' : 'seg', effortLabel(effort));
             b.addEventListener('click', () => {
+              if (fresh) {
+                nextEffort = effort;
+                return draw();
+              }
               this.hub.setEffort(s.id, effort);
               close();
             });
