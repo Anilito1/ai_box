@@ -1,0 +1,103 @@
+{
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "connected": true,
+      "accountId": "default",
+      "plan": "max",
+      "news": {
+        "models": [
+          "claude-opus-5-5"
+        ],
+        "cli": {
+          "tool": "claude",
+          "current": "2.1.0",
+          "latest": "2.2.0",
+          "method": "npm",
+          "command": "npm i -g @anthropic-ai/claude-code"
+        },
+        "unseen": true
+      },
+      "models": [
+        {
+          "value": "claude-opus-5-5",
+          "label": "Opus 5.5",
+          "description": "Le plus capable",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5",
+          "description": "Rapide et équilibré",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "claude-haiku-4-5-20251001",
+          "label": "Haiku 4.5",
+          "description": "Le plus rapide",
+          "efforts": []
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "connected": true,
+      "accountId": "codex",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "models": [
+        {
+          "value": "gpt-5",
+          "label": "GPT-5",
+          "description": "Codex",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      ]
+    }
+  ],
+  "models": [
+    {
+      "value": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "description": "Le plus capable",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "value": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "description": "Rapide et équilibré",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "value": "claude-haiku-4-5-20251001",
+      "label": "Haiku 4.5",
+      "description": "Le plus rapide",
+      "efforts": []
+    }
+  ]
+}
