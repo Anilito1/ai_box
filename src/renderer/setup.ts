@@ -1,10 +1,14 @@
+import { ACCOUNT_LIMITS, ACCOUNTS_MAX, DEFAULT_ACCOUNT, normalizeAccount, OPENAI_URL } from '../shared/accounts';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
+  ACCOUNT_KINDS,
   APP_NAME,
   EFFORTS,
   PROVIDERS,
+  type Account,
+  type AccountStatus,
   type AgentFile,
   type ClaudeStatus,
   type Effort,
@@ -24,15 +28,15 @@ import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { updateSection } from './update';
 
-type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
+type Section = 'general' | 'claude' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
 type Row = { name: string; path: string; slug: string; detail: string; private: boolean; pushedAt: number };
 
 const STEPS: Section[] = ['general', 'claude', 'github', 'workspace', 'repos', 'sessions'];
-// The team is never part of the first run: it starts empty, nothing imposed.
-const SECTIONS: Section[] = [...STEPS, 'team', 'about'];
+// The team and the other accounts are never part of the first run: they start empty, nothing imposed.
+const SECTIONS: Section[] = ['general', 'claude', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
@@ -65,6 +69,14 @@ function stepReached(): Section {
 }
 
 /** Folder names as a list shows them: the last part, with its parent when two would read the same. */
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
+
 function folderNames(paths: string[]): string[] {
   const short = paths.map(folderName);
   return paths.map((p, i) => (short.filter((s) => s === short[i]).length > 1 ? p.split(/[\\/]/).filter(Boolean).slice(-2).join('/') : short[i]));
@@ -131,6 +143,20 @@ export class SetupView {
   /** `detail`: the raw words behind an error, folded under "Details". */
   private note: { text: string; tone: 'ok' | 'error'; detail?: string } | null = null;
   private busy = false;
+  /** Account being added or changed (a copy; empty id for a new one), else null for the list. */
+  private accountDraft: Account | null = null;
+  /** The key typed for it, kept across redraws; empty = keep the stored one. */
+  private accountKey = '';
+  /** Field the last save refused, outlined. */
+  private accountField = '';
+  /** Each account's last check, by id. */
+  private readonly accountStates = new Map<string, AccountStatus | 'checking'>();
+  /** Models the last checked OpenAI server listed, offered in the model fields. */
+  private accountModels: string[] = [];
+  private confirmAccountDelete = '';
+  /** A Claude account whose sign-in runs in a terminal window: its row is checked every few seconds until then. */
+  private accountWait: { id: string; until: number } | null = null;
+  private accountTimer = 0;
 
   constructor(
     private readonly hub: HubApi,
@@ -273,6 +299,10 @@ export class SetupView {
     this.draft = null;
     this.agents = null;
     this.confirmDelete = '';
+    this.accountDraft = null;
+    this.accountKey = '';
+    this.confirmAccountDelete = '';
+    this.accountWait = null;
     void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
@@ -318,6 +348,8 @@ export class SetupView {
         return this.general(el, v);
       case 'claude':
         return this.claudeSection(el, v);
+      case 'accounts':
+        return this.accountsSection(el, v);
       case 'github':
         return this.github(el, v);
       case 'workspace':
@@ -1075,6 +1107,282 @@ export class SetupView {
     return f;
   }
 
+  // ---------- accounts ----------
+
+  private accountsSection(el: HTMLElement, v: SettingsView): void {
+    if (this.accountDraft) return this.accountEditor(el, v, this.accountDraft);
+    const s = v.settings;
+    this.head(el, t('setup.accounts.title'), t('setup.accounts.lead'));
+    if (!this.claude && !this.checkingClaude) void this.checkClaude();
+
+    const grid = h('div', 'setup-grid');
+    grid.append(
+      this.accountSelect(t('setup.accounts.master'), t('setup.accounts.master.hint'), s.masterAccount, s, (id) => void this.save({ masterAccount: id })),
+      this.accountSelect(t('setup.accounts.workers'), t('setup.accounts.workers.hint'), s.workerAccount, s, (id) => void this.save({ workerAccount: id })),
+    );
+    el.append(grid);
+
+    const list = h('div', 'team-list');
+    list.append(this.usualAccountRow(s));
+    for (const a of s.accounts) list.append(this.accountRow(a));
+    el.append(list);
+
+    const full = s.accounts.length >= ACCOUNTS_MAX;
+    const add = this.field(t('setup.accounts.add'), full ? t('setup.accounts.full', { max: ACCOUNTS_MAX }) : t('setup.accounts.add.hint'));
+    const row = h('div', 'setup-row team-templates');
+    for (const kind of ACCOUNT_KINDS) row.append(this.button(t(`setup.accounts.add.${kind}`), kind === 'claude' ? 'btn' : 'btn ghost', () => this.editAccount(normalizeAccount({ kind })), full));
+    add.append(row);
+    el.append(add, h('p', 'setup-fine', t('setup.accounts.fine')));
+  }
+
+  /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
+  private accountSelect(label: string, hint: string, value: string, s: HubSettings, pick: (id: string) => void, inherit?: string): HTMLElement {
+    const f = this.field(label, hint);
+    const select = h('select', 'setup-select');
+    select.setAttribute('aria-label', label);
+    if (inherit !== undefined) select.append(new Option(inherit, ''));
+    select.append(new Option(t('account.default'), DEFAULT_ACCOUNT), ...s.accounts.map((a) => new Option(`${a.name} · ${t(`account.kind.${a.kind}`)}`, a.id)));
+    select.value = value;
+    select.disabled = this.busy;
+    select.addEventListener('change', () => pick(select.value));
+    f.append(select);
+    return f;
+  }
+
+  /** The Claude access of Settings › Claude: always there, changed in its own section. */
+  private usualAccountRow(s: HubSettings): HTMLElement {
+    const row = h('div', 'team-row');
+    const text = h('div', 'team-row-text');
+    const title = h('div', 'team-row-title');
+    title.append(h('b', '', t('account.default')), h('span', 'team-row-session', t(`setup.provider.${s.provider}` as Key)));
+    const tags = h('div', 'team-tags');
+    const a = this.claude?.account;
+    if (this.checkingClaude || !this.claude) tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
+    else if (a?.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...[a.email, a.plan].filter(Boolean).map((x) => h('span', 'setup-tag', x)));
+    else tags.append(h('span', 'setup-pill warn', t('setup.claude.noAccess')));
+    text.append(title, tags);
+    const actions = h('div', 'team-row-actions');
+    actions.append(this.button(t('setup.accounts.usualEdit'), 'btn ghost small', () => this.go('claude')));
+    row.append(text, actions);
+    return row;
+  }
+
+  private accountRow(a: Account): HTMLElement {
+    const row = h('div', 'team-row');
+    const text = h('div', 'team-row-text');
+    const title = h('div', 'team-row-title');
+    title.append(h('b', '', a.name), h('span', 'team-row-session', t(`account.kind.${a.kind}`)));
+    const tags = h('div', 'team-tags');
+    if (a.kind === 'openai') tags.append(h('span', 'setup-tag', hostOf(a.baseUrl)), h('span', 'setup-tag', a.smallModel ? `${a.model} · ${a.smallModel}` : a.model));
+    const st = this.accountStates.get(a.id);
+    if (st === undefined) void this.checkAccount(a.id);
+    if (!st || st === 'checking') tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
+    else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && a.kind !== 'openai' ? [h('span', 'setup-tag', st.detail)] : []));
+    else if (a.kind === 'claude' && !st.error) tags.append(h('span', 'setup-pill warn', t('setup.accounts.signedOut')));
+    else tags.append(h('span', 'setup-pill warn', this.accountErrorText(st.error)));
+    text.append(title, tags);
+    if (this.accountWait?.id === a.id) text.append(h('div', 'setup-wait', t('setup.accounts.waiting')));
+
+    const actions = h('div', 'team-row-actions');
+    if (this.confirmAccountDelete === a.id) {
+      actions.append(
+        h('span', 'setup-hint', t(a.kind === 'claude' ? 'setup.accounts.deleteAskClaude' : 'setup.accounts.deleteAsk', { name: a.name })),
+        this.button(t('team.delete'), 'btn danger small', () => void this.deleteAccount(a)),
+        this.button(t('setup.cancel'), 'btn ghost small', () => {
+          this.confirmAccountDelete = '';
+          this.render();
+        }),
+      );
+    } else {
+      if (a.kind === 'claude' && st && st !== 'checking' && !st.ready) actions.append(this.button(t('setup.accounts.signIn'), 'btn primary small', () => void this.accountLogin(a)));
+      actions.append(
+        this.button(t('setup.check'), 'btn ghost small', () => void this.checkAccount(a.id), st === 'checking'),
+        this.button(t('team.edit'), 'btn ghost small', () => this.editAccount(structuredClone(a))),
+        this.button(t('team.delete'), 'btn ghost small', () => {
+          this.confirmAccountDelete = a.id;
+          this.render();
+        }),
+      );
+    }
+    row.append(text, actions);
+    return row;
+  }
+
+  private editAccount(a: Account): void {
+    this.accountDraft = a;
+    this.accountKey = '';
+    this.accountField = '';
+    this.note = null;
+    this.render();
+  }
+
+  /** One account's fields. A Claude account has a name only: its sign-in happens in Claude Code. */
+  private accountEditor(el: HTMLElement, v: SettingsView, d: Account): void {
+    const kind = t(`account.kind.${d.kind}`);
+    this.head(el, d.id ? t('setup.accounts.editTitle', { name: d.name }) : t('setup.accounts.newTitle', { kind }), t(`setup.accounts.editor.${d.kind}`));
+    const mark = (field: string, f: HTMLElement) => {
+      if (this.accountField === field) f.classList.add('invalid');
+    };
+    // In a row, an input takes the width of its field.
+    const row = (...els: HTMLElement[]) => {
+      const r = h('div', 'setup-row');
+      r.append(...els);
+      return r;
+    };
+    const nameField = this.field(t('setup.accounts.name'), t('setup.accounts.name.hint'));
+    const name = this.input(d.name, t(`setup.accounts.name.placeholder.${d.kind}`));
+    name.maxLength = ACCOUNT_LIMITS.name;
+    name.dataset.autofocus = '';
+    name.addEventListener('input', () => (d.name = name.value));
+    nameField.append(row(name));
+    mark('name', nameField);
+    el.append(nameField);
+
+    if (d.kind === 'openai') {
+      const urlField = this.field(t('setup.accounts.baseUrl'), t('setup.accounts.baseUrl.hint'));
+      const url = this.input(d.baseUrl || OPENAI_URL, OPENAI_URL);
+      url.classList.add('wide');
+      url.addEventListener('input', () => (d.baseUrl = url.value));
+      urlField.append(row(url));
+      mark('baseUrl', urlField);
+      el.append(urlField);
+    }
+    if (d.kind !== 'claude') {
+      const stored = !!d.id && v.accountKeys.includes(d.id);
+      const hint = !v.secureStorage ? t('setup.err.keychain', { app: APP_NAME }) : stored ? t('setup.accounts.key.keep') : t(`setup.accounts.key.hint.${d.kind}`);
+      const keyField = this.field(t('setup.accounts.key'), hint);
+      const key = this.input(this.accountKey, stored ? '••••••••' : d.kind === 'openai' ? 'sk-…' : 'sk-ant-…', 'password');
+      key.addEventListener('input', () => (this.accountKey = key.value));
+      keyField.append(row(key), this.link(t(`setup.accounts.key.where.${d.kind}`), d.kind === 'openai' ? 'https://platform.openai.com/api-keys' : 'https://console.anthropic.com/settings/keys'));
+      mark('key', keyField);
+      el.append(keyField);
+    }
+    if (d.kind === 'openai') {
+      const grid = h('div', 'setup-grid');
+      const listId = 'account-models';
+      const models = h('datalist');
+      models.id = listId;
+      models.append(...this.accountModels.map((m) => new Option(m, m)));
+      const field = (key: 'model' | 'smallModel', placeholder: string) => {
+        const f = this.field(t(`setup.accounts.${key}`), t(`setup.accounts.${key}.hint`));
+        const input = this.input(d[key], placeholder);
+        input.setAttribute('list', listId);
+        input.addEventListener('input', () => (d[key] = input.value));
+        f.append(row(input));
+        mark(key, f);
+        return f;
+      };
+      grid.append(field('model', 'gpt-5'), field('smallModel', 'gpt-5-mini'));
+      el.append(grid, models);
+      if (this.accountModels.length > 0 && d.model && !this.accountModels.includes(d.model.trim())) el.append(h('div', 'setup-hint', t('setup.accounts.modelUnlisted', { model: d.model })));
+    }
+
+    const actions = h('div', 'setup-row team-editor-actions');
+    const label = d.id ? t('team.save') : d.kind === 'claude' ? t('setup.accounts.createSignIn') : t('setup.verifySave');
+    actions.append(
+      this.button(label, 'btn primary', () => void this.saveAccount(d)),
+      this.button(t('setup.cancel'), 'btn ghost', () => {
+        this.accountDraft = null;
+        this.accountKey = '';
+        this.accountField = '';
+        this.note = null;
+        this.render();
+      }),
+    );
+    el.append(actions);
+  }
+
+  private async saveAccount(d: Account): Promise<void> {
+    const r = await this.run(() => this.hub.saveAccount(d, this.accountKey.trim() ? this.accountKey.trim() : null));
+    this.view = r;
+    if (r.status) this.accountModels = r.status.models;
+    if (!r.ok) {
+      this.accountField = r.field;
+      const text = r.field && r.field !== 'key' && r.field !== 'baseUrl' ? t('team.err', { field: t(`setup.accounts.field.${r.field}` as Key), problem: t(`team.problem.${r.error}` as Key, { max: ACCOUNTS_MAX }) }) : this.accountErrorText(r.error);
+      this.flash(text, 'error', this.rawOf(r.error));
+      return this.render();
+    }
+    const isNew = !d.id;
+    this.accountDraft = null;
+    this.accountKey = '';
+    this.accountField = '';
+    if (r.status) this.accountStates.set(r.id, r.status);
+    else this.accountStates.delete(r.id);
+    this.flash(t(isNew ? 'setup.accounts.created' : 'setup.accounts.saved', { name: d.name.trim() }), 'ok');
+    this.render();
+    // A new Claude account signs in right away, in Claude Code's own window.
+    const saved = r.settings.accounts.find((a) => a.id === r.id);
+    if (isNew && saved?.kind === 'claude') await this.accountLogin(saved);
+  }
+
+  private async deleteAccount(a: Account): Promise<void> {
+    this.confirmAccountDelete = '';
+    const r = await this.run(() => this.hub.deleteAccount(a.id));
+    this.view = r;
+    this.accountStates.delete(a.id);
+    this.flash(r.ok ? t('setup.accounts.deleted', { name: a.name }) : t('setup.accounts.deleteWorking', { name: a.name }), r.ok ? 'ok' : 'error');
+    this.render();
+  }
+
+  private async checkAccount(id: string): Promise<void> {
+    this.accountStates.set(id, 'checking');
+    this.render();
+    const st = await this.hub.checkAccount(id);
+    this.accountStates.set(id, st);
+    if (st.models.length > 0) this.accountModels = st.models;
+    if (!this.root.hidden && this.section === 'accounts') this.render();
+  }
+
+  /** Claude Code's own sign-in for this account, in a terminal window; the row turns ready by itself once done. */
+  private async accountLogin(a: Account): Promise<void> {
+    const opened = await this.run(() => this.hub.accountLogin(a.id));
+    this.note = opened ? null : { text: t('setup.accounts.noTerminal'), tone: 'error' };
+    this.accountWait = opened ? { id: a.id, until: Date.now() + WAIT_MS } : null;
+    this.render();
+    if (opened) this.watchAccount();
+  }
+
+  private watchAccount(): void {
+    window.clearTimeout(this.accountTimer);
+    this.accountTimer = window.setTimeout(() => void this.watchAccountOnce(), 4000);
+  }
+
+  private async watchAccountOnce(): Promise<void> {
+    const wait = this.accountWait;
+    if (!wait || Date.now() > wait.until || this.root.hidden || this.section !== 'accounts') {
+      this.accountWait = null;
+      if (!this.root.hidden && this.section === 'accounts') this.render();
+      return;
+    }
+    const st = await this.hub.checkAccount(wait.id);
+    if (this.accountWait?.id !== wait.id) return;
+    this.accountStates.set(wait.id, st);
+    if (st.ready) {
+      this.accountWait = null;
+      this.flash(t('setup.accounts.signedIn', { name: this.view?.settings.accounts.find((a) => a.id === wait.id)?.name ?? '' }), 'ok');
+      this.render();
+      return;
+    }
+    this.render();
+    this.watchAccount();
+  }
+
+  /** An account check's or save's error code, in words. */
+  private accountErrorText(code: string): string {
+    const own: Record<string, Key> = {
+      'no-key': 'setup.accounts.err.noKey',
+      required: 'setup.accounts.err.noKey',
+      'no-claude': 'setup.claude.notFound',
+      timeout: 'setup.claude.timeout',
+      'probe-failed': 'setup.claude.probeFailed',
+      'not-found': 'setup.accounts.err.notFound',
+      'http-404': 'setup.accounts.err.notFoundUrl',
+      unauthorized: 'setup.accounts.err.refused',
+      forbidden: 'setup.accounts.err.refused',
+    };
+    return own[code] ? t(own[code]) : this.errorText(code, 'key');
+  }
+
   // ---------- team ----------
 
   /** The master changed the team: the list shows it (a post being edited stays as typed). */
@@ -1097,7 +1405,7 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     const full = team.length >= TEAM_MAX;
     const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
-    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', enabled: true }), full));
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', account: '', enabled: true }), full));
     for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
     row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
     add.append(row);
@@ -1381,6 +1689,18 @@ export class SetupView {
     if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
     grid.append(modeField);
     el.append(grid);
+
+    // Only once there is another account than the usual one to pick.
+    if (s.accounts.length > 0) {
+      const usual = s.accounts.find((a) => a.id === s.workerAccount)?.name ?? t('account.default');
+      const accountField = this.accountSelect(t('team.field.account'), t('team.account.hint'), d.account, s, (id) => {
+        d.account = id;
+        changed();
+      }, t('team.account.inherit', { account: usual }));
+      const control = accountField.querySelector('select');
+      if (control) mark('account', accountField, control);
+      el.append(accountField);
+    }
 
     const on = h('label', 'setup-toggle');
     const box = h('input');

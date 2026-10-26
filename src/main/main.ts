@@ -1,4 +1,5 @@
 import './shellPath';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,7 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
+import { checkAccount, isAccountRef, isLocalUrl, normalizeAccount } from '../shared/accounts';
 import { APP_ID } from '../shared/brand';
 import type { Lang } from '../shared/i18n';
 import {
@@ -23,6 +25,7 @@ import {
   base64Bytes,
   EFFORTS,
   IMAGE_TYPES,
+  type AccountStatus,
   type ChatItem,
   type Effort,
   type FoundRepo,
@@ -37,9 +40,11 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
+import { accountDir, accountEnv, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, removeClaudeDir } from './accounts';
 import { agentFiles } from './agents';
+import { Bridge, type BridgeAccount } from './bridge';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
-import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
+import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
 import { errorCode } from './errors';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
@@ -69,6 +74,7 @@ app.setPath(
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
 let updater: Updater | undefined;
+let bridge: Bridge | undefined;
 /** A restart from the settings: an update left for the close waits, the new hub starts right away. */
 let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
@@ -213,6 +219,13 @@ const handle = <T>(channel: string, fn: (...args: unknown[]) => T | Promise<T>) 
   });
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
 const systemLang = (): Lang => ((app.getPreferredSystemLanguages()[0] ?? app.getLocale()).toLowerCase().startsWith('fr') ? 'fr' : 'en');
 
 class Hub {
@@ -222,6 +235,8 @@ class Hub {
   readonly costLog = new CostLog(this.dataDir);
   readonly mgr: SessionManager;
   readonly updater: Updater;
+  /** Where the sessions of OpenAI accounts send Claude Code's requests. */
+  readonly bridge = new Bridge((id) => this.bridgeAccount(id));
   private readonly device = new DeviceFlow();
   private executable = '';
   private gh = '';
@@ -234,7 +249,7 @@ class Hub {
       cfg: this.cfg,
       dataDir: this.dataDir,
       executable: () => this.executable,
-      sessionEnv: () => this.sessionEnv(),
+      sessionEnv: (account) => this.sessionEnv(account),
       persist: () => this.save(),
       costLog: this.costLog,
     });
@@ -261,20 +276,113 @@ class Hub {
       claudeExecutable(this.cfg),
       this.cfg.github.source === 'gh' ? ghPath() : '',
       this.secrets.load(),
+      this.bridge.start(),
     ]);
   }
 
-  /** Claude access chosen in the settings, plus the GitHub sign-in when the user shares it with the sessions. */
-  sessionEnv(): { set: Record<string, string>; unset: string[] } {
-    const claude = claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
+  private bridgeAccount(id: string): BridgeAccount | null {
+    const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'openai');
+    return a ? { baseUrl: a.baseUrl, key: this.secrets.get(`account:${a.id}`), model: a.model, smallModel: a.smallModel } : null;
+  }
+
+  /**
+   * The access of a session's account (the Claude access chosen in the settings for "default"), plus the GitHub
+   * sign-in when the user shares it with the sessions.
+   */
+  sessionEnv(account: string): { set: Record<string, string>; unset: string[] } {
     const github = this.cfg.github.shareWithSessions ? githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh) : {};
-    return { set: { ...claude.set, ...github }, unset: claude.unset };
+    const extra = this.cfg.accounts.find((a) => a.id === account);
+    const access = extra
+      ? accountEnv(extra, { dataDir: this.dataDir, key: this.secrets.get(`account:${extra.id}`), bridge: { url: this.bridge.url(extra.id), token: this.bridge.token() } })
+      : claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
+    return { set: { ...access.set, ...github }, unset: access.unset };
+  }
+
+  /** An account checked now: signed in or not, with what. */
+  async checkAccount(id: string): Promise<AccountStatus> {
+    const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
+    const a = this.cfg.accounts.find((x) => x.id === id);
+    if (!a) return { ...none, error: 'not-found' };
+    const key = this.secrets.get(`account:${a.id}`);
+    if (a.kind === 'claude') {
+      const { executable, status } = await claudeStatus(this.cfg, this.mgr.environment(a.id));
+      if (!executable) return { ...none, error: 'no-claude' };
+      const who = status.account;
+      if (!who) return { ...none, error: status.error === 'timeout' ? 'timeout' : 'probe-failed' };
+      return { ...none, ready: who.ready, detail: [who.email, who.plan].filter(Boolean).join(' · ') };
+    }
+    if (a.kind === 'anthropic-key') {
+      if (!key) return { ...none, error: 'no-key' };
+      const refused = await checkApiKey(key);
+      return refused ? { ...none, error: refused } : { ...none, ready: true, detail: `sk-ant-…${key.slice(-4)}` };
+    }
+    const status = await checkOpenAI(a.baseUrl, key);
+    return { ...status, detail: [hostOf(a.baseUrl), a.model].join(' · ') };
+  }
+
+  /**
+   * Creates or changes an account, its key checked with its service before anything is stored. A Claude account
+   * gets its folder; its sign-in is the user's, in Claude Code (accounts:login).
+   */
+  async saveAccount(raw: unknown, key: unknown) {
+    const fail = (error: string, field = '') => ({ ...this.view(), ok: false, error, field, id: '', status: null as AccountStatus | null });
+    const account = normalizeAccount(raw);
+    const before = this.cfg.accounts.find((a) => a.id === account.id) ?? null;
+    if (!before) account.id = '';
+    else account.kind = before.kind; // A kind never changes: another kind is another account.
+    const bad = checkAccount(account, this.cfg.accounts);
+    if (bad) return fail(bad.problem, bad.field);
+    const typed = isStr(key) ? key.trim() : null;
+    let status: AccountStatus | null = null;
+    if (account.kind === 'anthropic-key') {
+      if (!typed && !(before && typed === null)) return fail('required', 'key');
+      if (typed) {
+        if (!API_KEY.test(typed)) return fail('format', 'key');
+        const refused = await checkApiKey(typed);
+        if (refused) return fail(refused, 'key');
+      }
+    } else if (account.kind === 'openai') {
+      if (typed && !isOpenAIKey(typed)) return fail('format', 'key');
+      const k = typed ?? (before ? this.secrets.get(`account:${before.id}`) : '');
+      if (!k && !isLocalUrl(account.baseUrl)) return fail('required', 'key');
+      status = await checkOpenAI(account.baseUrl, k);
+      if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
+    }
+    const storesKey = account.kind !== 'claude' && typed !== null;
+    if (storesKey && typed && !this.secrets.available()) return fail('no-keychain', 'key');
+    if (!account.id) account.id = `a-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
+    if (storesKey) await this.secrets.set(`account:${account.id}`, typed || null);
+    this.cfg.accounts = before ? this.cfg.accounts.map((a) => (a.id === account.id ? account : a)) : [...this.cfg.accounts, account];
+    if (account.kind === 'claude') prepareClaudeDir(accountDir(this.dataDir, account.id));
+    this.save();
+    this.mgr.accountsChanged();
+    return { ...this.view(), ok: true, error: '', field: '', id: account.id, status };
+  }
+
+  /** Forgets an account: a Claude one is signed out of Claude Code first. Not while one of its sessions works. */
+  async deleteAccount(id: string) {
+    const a = this.cfg.accounts.find((x) => x.id === id);
+    if (!a) return { ...this.view(), ok: true, error: '' };
+    if (this.mgr.workingOn(a.id)) return { ...this.view(), ok: false, error: 'working' };
+    const env = this.mgr.environment(a.id);
+    this.cfg.accounts = this.cfg.accounts.filter((x) => x.id !== a.id);
+    knownAccounts(this.cfg);
+    this.save();
+    // Its sessions move to their usual account first: none runs on it when it goes.
+    this.mgr.accountsChanged();
+    if (a.kind === 'claude') {
+      await claudeLogout(await claudeExecutable(this.cfg), env);
+      removeClaudeDir(this.dataDir, a.id);
+    }
+    if (this.secrets.has(`account:${a.id}`)) await this.secrets.set(`account:${a.id}`, null);
+    return { ...this.view(), ok: true, error: '' };
   }
 
   view(): SettingsView {
     return {
       settings: structuredClone(this.cfg),
       apiKeySet: this.secrets.has('anthropicApiKey'),
+      accountKeys: this.cfg.accounts.filter((a) => this.secrets.has(`account:${a.id}`)).map((a) => a.id),
       githubTokenSet: this.secrets.has('githubToken'),
       secureStorage: this.secrets.available(),
       defaultClientId: DEFAULT_CLIENT_ID !== '',
@@ -339,6 +447,7 @@ class Hub {
     on('session:model', (id, model) => isStr(id) && isStr(model) && MODEL.test(model) && mgr.setModel(id, model));
     on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
     on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
+    on('session:account', (id, account) => isStr(id) && (account === '' || isAccountRef(account)) && mgr.setAccount(id, account as string));
     on('session:decide', (id, requestId, decision) => {
       const d = decision as PermissionDecision | null;
       if (isStr(id) && isStr(requestId) && d && DECISIONS.includes(d.behavior) && (d.message === undefined || isStr(d.message))) {
@@ -390,6 +499,8 @@ class Hub {
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
       if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
+      // The master's or the workers' account may have changed.
+      mgr.accountsChanged();
       // The page is built in one language: it is reloaded in the new one.
       if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
       return { ...this.view(), ok: true, error: '' };
@@ -438,6 +549,18 @@ class Hub {
       if (action !== 'login') return false;
       const exe = await claudeExecutable(this.cfg);
       return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, mgr.toolEnv());
+    });
+    handle('accounts:save', (account, key) => this.saveAccount(account, key));
+    handle('accounts:delete', (id) => (isStr(id) ? this.deleteAccount(id) : this.view()));
+    handle('accounts:check', (id) => (isStr(id) ? this.checkAccount(id) : { ready: false, detail: '', error: 'not-found', models: [] }));
+    // Claude Code's own sign-in, in that account's folder: the user signs in there, through Anthropic's own flow.
+    handle('accounts:login', async (id) => {
+      const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'claude');
+      const exe = a ? await claudeExecutable(this.cfg) : '';
+      if (!a || !exe) return false;
+      const dir = accountDir(this.dataDir, a.id);
+      prepareClaudeDir(dir);
+      return openTerminal({ title: `Claude Code · ${a.name}`, file: exe, args: ['auth', 'login'], env: { CLAUDE_CONFIG_DIR: dir } }, mgr.environment(a.id));
     });
     handle('github:gh-status', async () => {
       const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
@@ -591,6 +714,7 @@ async function start(): Promise<void> {
   await hub.init();
   const mgr = hub.mgr;
   manager = mgr;
+  bridge = hub.bridge;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
@@ -640,6 +764,7 @@ if (!app.requestSingleInstanceLock()) {
     updater?.stop();
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
+    bridge?.stop();
   });
   app
     .whenReady()

@@ -5,6 +5,7 @@ import {
   base64Bytes,
   EFFORTS,
   MENU_MODES,
+  type AccountBadge,
   type ChatItem,
   type Effort,
   type Mode,
@@ -92,6 +93,7 @@ export class ChatView {
   private readonly input: HTMLTextAreaElement;
   private readonly modeBtn: HTMLButtonElement;
   private readonly modelBtn: HTMLButtonElement;
+  private readonly accountBtn: HTMLButtonElement;
   private readonly ctx: { root: HTMLSpanElement; arc: SVGCircleElement; text: HTMLSpanElement };
   private readonly cost: HTMLSpanElement;
   private readonly sendBtn: HTMLButtonElement;
@@ -122,6 +124,8 @@ export class ChatView {
   private session: SessionView | null = null;
   private items: Items | undefined;
   private models: ModelOption[] = [];
+  /** Accounts a worker can be moved to; the menu only shows with more than the usual one. */
+  private accounts: AccountBadge[] = [];
   /** The master's topic shown (its items only) and written in; null: everything. */
   private topic: { id: string; title: string } | null = null;
 
@@ -262,6 +266,9 @@ export class ChatView {
     // The field keeps the focus: the menu reads its keys.
     slashBtn.addEventListener('mousedown', (e) => e.preventDefault());
     slashBtn.addEventListener('click', () => this.slash.toggle());
+    this.accountBtn = h('button', 'cbtn');
+    this.accountBtn.hidden = true;
+    this.accountBtn.addEventListener('click', () => this.openAccountMenu());
 
     const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ring.setAttribute('viewBox', '0 0 18 18');
@@ -287,7 +294,7 @@ export class ChatView {
     this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, this.accountBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
     const box = h('div', 'composer-box');
     box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
@@ -336,8 +343,9 @@ export class ChatView {
   }
 
   /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
-  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
+  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = []): void {
     this.models = models;
+    this.accounts = accounts;
     const switched = (session?.id ?? null) !== this.sessionId;
     const previous = this.session;
     if (switched && previous) this.drafts.set(previous.id, { text: this.input.value, attachments: this.attachments });
@@ -450,6 +458,14 @@ export class ChatView {
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
     this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? effortLabel(s.effort) : ''), icon(ICONS.chevron, 'ico small'));
     this.modelBtn.title = t('chat.modelTitle');
+    // A worker's account, once there is more than the usual one to pick from.
+    const pickable = s.role === 'worker' && this.accounts.length > 1;
+    this.accountBtn.hidden = !pickable;
+    if (pickable) {
+      const name = this.accounts.find((a) => a.id === s.account)?.name ?? s.account;
+      this.accountBtn.replaceChildren(icon(ICONS.user), h('span', '', name), h('span', 'cbtn-muted', s.accountPending ? t('chat.accountPending') : ''), icon(ICONS.chevron, 'ico small'));
+      this.accountBtn.title = t('chat.accountTitle');
+    }
 
     const m = s.metrics;
     const pct = m?.contextPct ?? null;
@@ -615,10 +631,13 @@ export class ChatView {
   private openModelMenu(): void {
     const s = this.session;
     if (!s) return;
+    // A worker on an OpenAI account runs that account's model: only its effort is picked here.
+    const bridged = this.accounts.find((a) => a.id === s.account)?.kind === 'openai';
     openMenu(this.modelBtn, (menu, close) => {
       menu.append(h('div', 'menu-label', t('chat.model')));
-      if (this.models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
-      for (const model of this.models) {
+      if (bridged) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
+      else if (this.models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
+      for (const model of bridged ? [] : this.models) {
         const row = this.menuRow(model.label, model.description, model.value === s.model);
         row.addEventListener('click', () => {
           this.hub.setModel(s.id, model.value);
@@ -639,6 +658,32 @@ export class ChatView {
         seg.append(b);
       }
       menu.append(seg);
+    });
+  }
+
+  /** The accounts a worker can move to: it restarts there with its conversation, after its turn if it is at work. */
+  private openAccountMenu(): void {
+    const s = this.session;
+    if (!s) return;
+    openMenu(this.accountBtn, (menu, close) => {
+      menu.append(h('div', 'menu-label', t('chat.account')));
+      for (const a of this.accounts) {
+        const row = this.menuRow(a.name, t(`account.kind.${a.kind}`), a.id === s.account);
+        row.addEventListener('click', () => {
+          if (a.id !== s.account) this.hub.setAccount(s.id, a.id);
+          close();
+        });
+        menu.append(row);
+      }
+      if (s.userAccount) {
+        const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
+        back.addEventListener('click', () => {
+          this.hub.setAccount(s.id, '');
+          close();
+        });
+        menu.append(h('div', 'menu-sep'), back);
+      }
+      menu.append(h('div', 'menu-note', t('chat.accountNote')));
     });
   }
 

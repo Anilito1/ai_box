@@ -2,10 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
 import { isLang, type Lang } from '../shared/i18n';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
-import { EFFORTS, PROVIDERS, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
+import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
 import { UPDATE_MODES, type UpdateMode } from '../shared/update';
 
 export type HubConfig = HubSettings;
@@ -41,6 +42,9 @@ function defaults(lang: Lang): HubConfig {
     workerModels: ['opus', 'sonnet'],
     workerMaxEffort: 'xhigh',
     team: [],
+    accounts: [],
+    masterAccount: DEFAULT_ACCOUNT,
+    workerAccount: DEFAULT_ACCOUNT,
     parallel: { ...PARALLEL_DEFAULTS },
     permissionMode: '',
     masterInstructions: '',
@@ -85,6 +89,9 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     (v) => (cfg.workerModels = v),
   );
   take('workerMaxEffort', raw.workerMaxEffort, (v): v is Effort => EFFORTS.includes(v as Effort), (v) => (cfg.workerMaxEffort = v));
+  // An account the list no longer has falls back to "default" (see knownAccounts).
+  take('masterAccount', raw.masterAccount, isAccountRef, (v) => (cfg.masterAccount = v));
+  take('workerAccount', raw.workerAccount, isAccountRef, (v) => (cfg.workerAccount = v));
   take('parallel', raw.parallel, isParallel, (v) => (cfg.parallel = { perPost: v.perPost, maxWorkers: v.maxWorkers }));
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
@@ -110,6 +117,15 @@ function mergeOwn(cfg: HubConfig, raw: Raw): void {
       if (ROLE_ID.test(role.id) && !team.some((o) => o.id === role.id) && !checkRole(role, team)) team.push(role);
     }
     cfg.team = team;
+  }
+  // Read account by account too.
+  if (Array.isArray(raw.accounts)) {
+    const accounts: Account[] = [];
+    for (const a of raw.accounts.slice(0, ACCOUNTS_MAX)) {
+      const account = normalizeAccount(a);
+      if (ACCOUNT_ID.test(account.id) && !accounts.some((o) => o.id === account.id) && !checkAccount(account, accounts)) accounts.push(account);
+    }
+    cfg.accounts = accounts;
   }
   if (raw.claudePath === '' || isPath(raw.claudePath)) cfg.claudePath = raw.claudePath;
   const g = obj(raw.github);
@@ -158,7 +174,16 @@ export function loadConfig(dataDir: string, systemLang: Lang): HubConfig {
   }
   merge(cfg, raw);
   mergeOwn(cfg, raw);
+  knownAccounts(cfg);
   return cfg;
+}
+
+/** Every account a setting or a post names exists, else it is "default" (or the workers' account) again. */
+export function knownAccounts(cfg: HubConfig): void {
+  const known = (id: string) => id === DEFAULT_ACCOUNT || cfg.accounts.some((a) => a.id === id);
+  if (!known(cfg.masterAccount)) cfg.masterAccount = DEFAULT_ACCOUNT;
+  if (!known(cfg.workerAccount)) cfg.workerAccount = DEFAULT_ACCOUNT;
+  for (const r of cfg.team) if (r.account && !known(r.account)) r.account = '';
 }
 
 export function saveConfig(dataDir: string, cfg: HubConfig): void {
@@ -178,6 +203,9 @@ export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null 
   const added = (list: string[], before: string[]) => list.filter((p) => !before.includes(p));
   if (added(next.mainRepos, cfg.mainRepos).some((p) => !existsSync(join(p, '.git')))) return 'mainRepos';
   if (added(next.workspaces, cfg.workspaces).some((p) => !isDir(p))) return 'workspaces';
+  const known = (id: string) => id === DEFAULT_ACCOUNT || cfg.accounts.some((a) => a.id === id);
+  if (!known(next.masterAccount)) return 'masterAccount';
+  if (!known(next.workerAccount)) return 'workerAccount';
   Object.assign(cfg, next);
   return null;
 }
@@ -197,6 +225,7 @@ export function prepareRole(cfg: HubConfig, raw: unknown): RoleCheck {
   const error = checkRole(role, cfg.team);
   if (error) return { error };
   if (!role.folders.every(isDir)) return { error: { field: 'folders', problem: 'format' } };
+  if (role.account && role.account !== DEFAULT_ACCOUNT && !cfg.accounts.some((a) => a.id === role.account)) return { error: { field: 'account', problem: 'format' } };
   if (!role.id) role.id = `r-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
   return { role };
 }

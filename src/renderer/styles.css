@@ -4152,6 +4152,9 @@ kbd,
 .setup-select {
   min-width: 190px;
 }
+.setup-input.wide {
+  max-width: 560px;
+}
 .setup-textarea {
   width: 100%;
   resize: vertical;
@@ -4360,6 +4363,10 @@ kbd,
 .setup-pill.ok {
   background: var(--ok-soft);
   color: var(--ok);
+}
+.setup-pill.warn {
+  background: var(--warn-soft);
+  color: var(--warn);
 }
 .setup-advanced {
   margin: var(--sp-1) 0 0;

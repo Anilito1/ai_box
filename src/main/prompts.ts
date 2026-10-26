@@ -63,12 +63,28 @@ export const rosterKey = (cfg: HubConfig) =>
     cfg.workerModels,
     cfg.workerMaxEffort,
     cfg.parallel,
+    cfg.accounts.map((a) => [a.name, a.kind, a.model]),
+    cfg.workerAccount,
   ]);
 
+/** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
+function accountsText(cfg: HubConfig, l: Lang): string {
+  if (cfg.accounts.length === 0) return '';
+  const kinds = {
+    fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible' },
+    en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible' },
+  }[l];
+  const usual = cfg.accounts.find((a) => a.id === cfg.workerAccount)?.name ?? 'default';
+  const list = cfg.accounts.map((a) => `${a.name} (${kinds[a.kind]}${a.kind === 'openai' ? ` · ${a.model}` : ''})`).join(', ');
+  return l === 'fr'
+    ? ` Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle.`
+    : ` Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model.`;
+}
+
 const allowedText = (cfg: HubConfig, l: Lang) =>
-  l === 'fr'
+  (l === 'fr'
     ? `Modèles autorisés : ${cfg.workerModels.join(', ')} ; effort maximal : ${cfg.workerMaxEffort}. En parallèle : ${cfg.parallel.perPost} instances par poste au plus, ${cfg.parallel.maxWorkers} workers actifs en tout.`
-    : `Allowed models: ${cfg.workerModels.join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`;
+    : `Allowed models: ${cfg.workerModels.join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`) + accountsText(cfg, l);
 
 /** Added to the next message the master gets once the user changed the team or the allowed models. */
 export function rosterBlock(cfg: HubConfig, l: Lang = lang()): string {

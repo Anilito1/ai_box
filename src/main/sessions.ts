@@ -25,6 +25,7 @@ import { addUsage, sumUsage, totalsOf, turnDelta, ZERO, type CostRole, type Tota
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
+import { DEFAULT_ACCOUNT, findAccount, firstAccount, runsClaude } from '../shared/accounts';
 import {
   capEffort,
   fromTemplate,
@@ -39,6 +40,8 @@ import {
 } from '../shared/team';
 import {
   EFFORTS,
+  type AccountBadge,
+  type AccountKind,
   type ChatItem,
   type Effort,
   type HubEventKind,
@@ -125,8 +128,15 @@ class Inbox implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending'> {
   sessionId: string;
+  /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
+  accountId: string;
+  /** Account its running process was started on; empty when closed. */
+  runAccount: string;
+  /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
+  switchPending: boolean;
+  pendingTo: string;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
   items: Map<string, ChatItem>;
@@ -229,6 +239,8 @@ type Persisted = {
   | 'instanceOf'
   | 'tree'
   | 'readOnly'
+  | 'accountId'
+  | 'userAccount'
 >;
 
 export interface ManagerOptions {
@@ -237,8 +249,8 @@ export interface ManagerOptions {
   dataDir: string;
   /** Claude Code executable to run; empty = the SDK's default. */
   executable(): string;
-  /** Variables added to (set) or removed from (unset) the environment of every session: Claude access, GitHub. */
-  sessionEnv(): { set: Record<string, string>; unset: string[] };
+  /** Variables added to (set) or removed from (unset) the environment of a session on this account: its access, GitHub. */
+  sessionEnv(account: string): { set: Record<string, string>; unset: string[] };
   /** Writes the settings: the master's tools change the team. */
   persist(): void;
   /** Where each turn's cost goes. */
@@ -390,8 +402,9 @@ export class SessionManager extends EventEmitter {
   private modelInfos: ModelInfo[] = [];
   /** Commands of the last session that started: offered to one that has not run yet. */
   private lastCommands: SlashCommand[] = [];
-  private rateLimits: RateLimits | null = null;
-  private usageCheckedAt = 0;
+  /** Plan limits by account, and when each was last asked. */
+  private readonly rateLimits = new Map<string, RateLimits>();
+  private readonly usageCheckedAt = new Map<string, number>();
   private reposCache: { at: number; text: string } | null = null;
   private readonly pendingItems = new Map<string, Map<string, ChatItem>>();
   private emitTimer: NodeJS.Timeout | null = null;
@@ -591,6 +604,11 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** A session running on this account is in the middle of something. */
+  workingOn(account: string): boolean {
+    return [...this.sessions.values()].some((s) => s.query && s.runAccount === account && this.isWorking(s));
+  }
+
   /** Sessions whose work a close would cut: a turn in progress, or background tasks left running after one. */
   busySessions(): number {
     return [...this.sessions.values()].filter((s) => s.query && this.isWorking(s)).length;
@@ -641,6 +659,102 @@ export class SessionManager extends EventEmitter {
 
   decide(id: string, requestId: string, decision: PermissionDecision): void {
     this.sessions.get(id)?.pending.get(requestId)?.(decision);
+  }
+
+  // ---------- accounts ----------
+
+  /**
+   * Moves a session to an account ("default", an account id; empty: back to its post's or the usual one). Picked by
+   * the user, the master's later choices leave it alone. It restarts on the new account with its conversation, now if
+   * it is idle, else once its turn is over. Returns what the master is told.
+   */
+  setAccount(id: string, account: string, byUser = true): string {
+    const s = this.sessions.get(id);
+    if (!s) return '';
+    if (account && account !== DEFAULT_ACCOUNT && !this.opts.cfg.accounts.some((a) => a.id === account)) return '';
+    s.accountId = account;
+    if (byUser) s.userAccount = account !== '';
+    return this.applyAccount(s);
+  }
+
+  /** The settings changed an account, a default or a post: each running session goes where it now belongs. */
+  accountsChanged(): void {
+    const { cfg } = this.opts;
+    for (const s of this.sessions.values()) {
+      if (s.accountId && s.accountId !== DEFAULT_ACCOUNT && !cfg.accounts.some((a) => a.id === s.accountId)) Object.assign(s, { accountId: '', userAccount: false });
+      if (s.query) this.applyAccount(s);
+    }
+    this.changed();
+  }
+
+  /** The account a session runs on: its own pick, else its post's (or the master's setting), else the workers'. */
+  private accountOf(s: Session): string {
+    const { cfg } = this.opts;
+    return s.role === 'master'
+      ? firstAccount(cfg.accounts, s.accountId, cfg.masterAccount)
+      : firstAccount(cfg.accounts, s.accountId, this.postOf(s)?.account, cfg.workerAccount);
+  }
+
+  private kindOf(account: string): AccountKind | 'default' {
+    return this.opts.cfg.accounts.find((a) => a.id === account)?.kind ?? 'default';
+  }
+
+  private accountName(account: string): string {
+    return this.opts.cfg.accounts.find((a) => a.id === account)?.name ?? t('account.default');
+  }
+
+  private accountBadges(): AccountBadge[] {
+    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind }))];
+  }
+
+  /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
+  private accountRef(ref: string): string {
+    const found = findAccount(this.opts.cfg.accounts, ref);
+    if (!found) throw new Error(t('account.notFound', { name: ref, list: this.accountBadges().map((a) => a.name).join(', ') }));
+    return found === DEFAULT_ACCOUNT ? DEFAULT_ACCOUNT : found.id;
+  }
+
+  private applyAccount(s: Session): string {
+    const want = this.accountOf(s);
+    const name = this.accountName(want);
+    if (!s.query || s.runAccount === want) {
+      s.switchPending = false;
+      this.changed();
+      return t(s.query ? 'account.already' : 'account.next', { name: s.name, account: name });
+    }
+    if (!this.settled(s)) {
+      // Said once per switch: the settings call this again at each save.
+      if (!s.switchPending || s.pendingTo !== want) this.notice(s, t('notice.accountAfterTurn', { account: name }), 'info');
+      s.switchPending = true;
+      s.pendingTo = want;
+      this.changed();
+      return t('account.afterTurn', { name: s.name, account: name });
+    }
+    this.relaunch(s);
+    return t('account.now', { name: s.name, account: name });
+  }
+
+  /** A new process on the same conversation. Unlike stop(), its worktree stays as it is: the work goes on. */
+  private relaunch(s: Session): void {
+    const q = s.query;
+    s.inbox?.close();
+    this.teardown(s);
+    q?.close();
+    this.notice(s, t('notice.accountSwitched', { account: this.accountName(this.accountOf(s)) }), 'info');
+    void this.launch(s, s.started);
+    this.changed();
+  }
+
+  /** The turn that held a switch is over (with its background tasks): the session restarts on its new account. */
+  private switchIfDone(s: Session, q: Query): void {
+    if (s.query !== q || !s.switchPending) return;
+    if (!this.settled(s) || Date.now() - s.activeAt < SILENCE_MS) {
+      setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
+      return;
+    }
+    if (s.runAccount === this.accountOf(s)) s.switchPending = false;
+    else this.relaunch(s);
+    this.changed();
   }
 
   // ---------- slash commands (composer) ----------
@@ -772,8 +886,14 @@ export class SessionManager extends EventEmitter {
         compacting: s.compacting,
         retrying: s.retrying,
         error: s.error,
+        account: s.runAccount || this.accountOf(s),
+        accountPending: s.switchPending,
+        userAccount: s.userAccount,
       }));
-    return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits, topics: this.topics.list() };
+    // The status bar shows the limits of the master's account.
+    const master = this.sessions.get(MASTER_ID);
+    const limits = this.rateLimits.get(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT) ?? null;
+    return { sessions, models: this.modelOptions(), rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -884,6 +1004,10 @@ export class SessionManager extends EventEmitter {
     s.mode = mode ?? (await this.settingsMode(s.cwd));
     if (this.quitting || s.inbox !== inbox) return;
     const executable = this.opts.executable();
+    // The account is fixed for the life of the process: a switch starts another one on the same conversation.
+    const account = this.accountOf(s);
+    s.runAccount = account;
+    s.switchPending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
@@ -891,8 +1015,9 @@ export class SessionManager extends EventEmitter {
     const options: Options = {
       cwd: s.cwd,
       ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
-      // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
-      ...(s.fixedModel ? { model: s.fixedModel } : {}),
+      // No model/effort = the CLI resolves them from settings.json, exactly like a normal session. On a bridged
+      // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
+      ...(s.fixedModel && runsClaude(this.kindOf(account)) ? { model: s.fixedModel } : {}),
       ...(s.fixedEffort ? { effort: s.fixedEffort } : {}),
       ...(mode ? { permissionMode: mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
@@ -915,7 +1040,7 @@ export class SessionManager extends EventEmitter {
       allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
       canUseTool: (name, input, o) => this.askPermission(s, name, input, o),
       onElicitation: (req, o) => this.answerElicitation(s, req, o.signal),
-      env: this.environment(),
+      env: this.environment(account),
       ...(resume ? { resume: s.sessionId } : { sessionId: s.sessionId }),
     };
 
@@ -964,6 +1089,8 @@ export class SessionManager extends EventEmitter {
     s.inbox = null;
     s.liveId = null;
     s.queued = 0;
+    s.runAccount = '';
+    s.switchPending = false;
     // Withdrawn, not refused: nobody answered them.
     for (const finish of [...s.pending.values()]) finish(null);
     s.status = 'exited';
@@ -1165,8 +1292,9 @@ export class SessionManager extends EventEmitter {
         this.countTurn(s, totalsOf(msg.total_cost_usd, msg.modelUsage));
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        if (s.switchPending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
-        void this.refreshUsage(q);
+        void this.refreshUsage(s, q);
         break;
       }
     }
@@ -1214,7 +1342,8 @@ export class SessionManager extends EventEmitter {
   private async onReady(s: Session, q: Query): Promise<void> {
     try {
       const init = await q.initializationResult();
-      if (init.models.length > 0) this.modelInfos = init.models;
+      // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
+      if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount))) this.modelInfos = init.models;
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
       return; // The session failed to start: consume() reports it.
@@ -1226,7 +1355,7 @@ export class SessionManager extends EventEmitter {
       s.idleAt = Date.now();
     }
     await this.refreshContext(s, q);
-    void this.refreshUsage(q);
+    void this.refreshUsage(s, q);
     this.changed();
   }
 
@@ -1295,20 +1424,21 @@ export class SessionManager extends EventEmitter {
     this.notice(s, t('notice.compactedTo', { before: tokens(before), after: tokens(after), pct: Math.max(1, Math.round((after / size) * 100)) }), 'info');
   }
 
-  /** Plan limits (5 h / 7 days) from the SDK's experimental /usage API, at most once a minute. */
-  private async refreshUsage(q: Query): Promise<void> {
-    if (Date.now() - this.usageCheckedAt < 60_000) return;
-    this.usageCheckedAt = Date.now();
+  /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
+  private async refreshUsage(s: Session, q: Query): Promise<void> {
+    const account = s.runAccount || DEFAULT_ACCOUNT;
+    if (!runsClaude(this.kindOf(account)) || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
+    this.usageCheckedAt.set(account, Date.now());
     try {
       const limits = (await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })).rate_limits;
       if (!limits) return;
       const epoch = (iso: string | null | undefined) => (iso ? Date.parse(iso) / 1000 : null);
-      this.rateLimits = {
+      this.rateLimits.set(account, {
         fiveHourPct: limits.five_hour?.utilization ?? null,
         fiveHourResetsAt: epoch(limits.five_hour?.resets_at),
         sevenDayPct: limits.seven_day?.utilization ?? null,
         sevenDayResetsAt: epoch(limits.seven_day?.resets_at),
-      };
+      });
       this.changed();
     } catch {
       // Experimental API unavailable in this CLI version: the status bar simply omits plan limits.
@@ -1798,6 +1928,7 @@ export class SessionManager extends EventEmitter {
       .enum(EFFORTS as [Effort, ...Effort[]])
       .nullish()
       .describe(t('tool.effort'));
+    const account = z.string().nullish().describe(t('tool.account', { list: this.accountBadges().map((a) => a.name).join(', ') }));
     const byPost = z.string().describe(t('tool.role.byName'));
     const topicSpec = topicToolSpec();
     const postFields = {
@@ -1827,6 +1958,7 @@ export class SessionManager extends EventEmitter {
             read_only: z.boolean().nullish().describe(t('tool.spawn.readOnly')),
             model,
             effort,
+            account,
           },
           (args, extra) =>
             run(async () => {
@@ -1848,6 +1980,7 @@ export class SessionManager extends EventEmitter {
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
             model,
             effort,
+            account,
           },
           (args) => run(() => this.messageWorker(args)),
         ),
@@ -1958,10 +2091,12 @@ export class SessionManager extends EventEmitter {
     read_only?: boolean | null;
     model?: string | null;
     effort?: Effort | null;
+    account?: string | null;
   }): Promise<string> {
     const { cfg } = this.opts;
     const mission = args.mission.trim();
     if (!mission) throw new Error(t('spawn.empty'));
+    const accountId = args.account?.trim() ? this.accountRef(args.account) : '';
     const post = args.role?.trim() ? this.findRole(args.role) : null;
     if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
     const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
@@ -1995,7 +2130,7 @@ export class SessionManager extends EventEmitter {
     }
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
-    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true });
+    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true, accountId });
     this.topics.alias(spawnedName(args), s.name);
     const plan = s.tree ? installPlan(s.tree) : null;
     // Only where nothing waits for an approval: an install runs the packages' own scripts.
@@ -2020,6 +2155,7 @@ export class SessionManager extends EventEmitter {
     const others = post ? this.instances(post.id).filter((w) => w !== s && w.inbox).map((w) => w.name) : [];
     return [
       t('spawn.started', { name: s.name, model: model || t('spawn.usualModel'), effort: effort ?? t('spawn.usualEffort'), cwd }),
+      ...(cfg.accounts.length > 0 ? [t('spawn.account', { account: this.accountName(this.accountOf(s)) })] : []),
       ...(post ? [t('instance.started', { post: post.name, main: sessionNameOf(post), others: others.join(', ') || t('report.none') })] : []),
       ...(made ? [t('tree.made', { branch: made.tree.branch, base: made.tree.baseRef || 'HEAD', sha: made.tree.base.slice(0, 8) }), ...(made.stale ? [t('tree.stale')] : [])] : []),
       ...(plan ? [t(byHub ? 'install.byHub' : 'install.byWorker', { command: planText(plan) })] : []),
@@ -2044,10 +2180,18 @@ export class SessionManager extends EventEmitter {
     return { name: s.name, main: sessionNameOf(post), others: others.map((w) => w.name), readOnly: s.readOnly };
   }
 
-  private async messageWorker(args: { name: string; message: string; interrupt?: boolean | null; model?: string | null; effort?: Effort | null }): Promise<string> {
+  private async messageWorker(args: {
+    name: string;
+    message: string;
+    interrupt?: boolean | null;
+    model?: string | null;
+    effort?: Effort | null;
+    account?: string | null;
+  }): Promise<string> {
     const s = this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
+    const accountId = args.account?.trim() ? this.accountRef(args.account) : null;
     if (s.retiring) await s.retiring;
     if (this.ended(s)) throw new Error(t('instance.ended', { name: s.name }));
     if (!s.inbox && this.orphan(s)) throw new Error(t('instance.orphan', { name: s.name }));
@@ -2065,6 +2209,13 @@ export class SessionManager extends EventEmitter {
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
     if (args.interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
+    // Before the message: an idle worker restarts on the new account right away, and the message goes to that process.
+    const accountNote =
+      accountId === null || accountId === this.accountOf(s)
+        ? ''
+        : s.userAccount
+          ? t('account.locked', { name: s.name, account: this.accountName(this.accountOf(s)) })
+          : this.setAccount(s.id, accountId, false);
     s.owesReport = true;
     s.closeWhenDone = false;
     this.deliver(s, { text: `${newMission ? tags().mission(s.name) : tags().master}\n${message}`, images: [], from: masterName() });
@@ -2074,7 +2225,7 @@ export class SessionManager extends EventEmitter {
         ? t('message.interrupted', { name: s.name })
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
-    return [state, ...runs, ...this.choiceNotes(choice.notes)].join('\n');
+    return [state, ...runs, ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
@@ -2162,6 +2313,11 @@ export class SessionManager extends EventEmitter {
     const { cfg } = this.opts;
     cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
     const notes = s && before ? this.applyRun(s, before, role, by) : [];
+    if (before && before.account !== role.account) {
+      // Changed by the user, the post's account replaces one picked by hand on its workers.
+      if (by === 'user') for (const w of [s, ...this.instances(role.id)]) if (w) Object.assign(w, { accountId: '', userAccount: false });
+      this.accountsChanged();
+    }
     this.teamChanged();
     return { role, before, notes };
   }
@@ -2566,7 +2722,8 @@ export class SessionManager extends EventEmitter {
     const mine = [s.userModel ? t('workers.userModel') : '', s.userEffort ? t('workers.userEffort') : ''].filter(Boolean);
     const since = s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '';
     const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`);
-    return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''} · ${ctx} · ${cost} · ${s.cwd}`;
+    const account = this.opts.cfg.accounts.length > 0 ? ` · ${t('workers.account', { name: this.accountName(s.runAccount || this.accountOf(s)) })}${s.userAccount ? ` (${t('workers.byUser', { what: t('workers.userAccount') })})` : ''}` : '';
+    return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''}${account} · ${ctx} · ${cost} · ${s.cwd}`;
   }
 
   /** Its worktree as the master reads it: branch, and what was kept at the last close. */
@@ -2580,7 +2737,9 @@ export class SessionManager extends EventEmitter {
 
   private listWorkers(): string {
     const workers = this.visible().filter((s) => s.role === 'worker');
-    if (workers.length === 0) return t('workers.none');
+    const { cfg } = this.opts;
+    const accounts = cfg.accounts.length > 0 ? t('workers.accounts', { list: this.accountBadges().map((a) => a.name).join(', '), usual: this.accountName(firstAccount(cfg.accounts, cfg.workerAccount)) }) : '';
+    if (workers.length === 0) return [t('workers.none'), accounts].filter(Boolean).join('\n');
     const block = (s: Session) => {
       const post = this.roleOf(s);
       const lines = [`${s.instanceOf ? '  ↳ ' : '- '}${this.workerLine(s)}`];
@@ -2593,13 +2752,14 @@ export class SessionManager extends EventEmitter {
       if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
       return lines.join('\n');
     };
-    const { team } = this.opts.cfg;
+    const { team } = cfg;
     const order = (s: Session) => team.findIndex((r) => r.id === s.roleId);
     const posts = workers.filter((s) => s.roleId).sort((a, b) => order(a) - order(b));
     // An instance goes under its post; one whose post is gone, with the ad-hoc workers.
     const under = (p: Session) => workers.filter((w) => w.instanceOf === p.roleId);
     const adhoc = workers.filter((s) => !s.roleId && !(s.instanceOf && posts.some((p) => p.roleId === s.instanceOf)));
     return [
+      accounts,
       posts.length > 0 ? `${t('workers.team')}\n${posts.flatMap((p) => [p, ...under(p)]).map(block).join('\n')}` : '',
       adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
     ]
@@ -2690,6 +2850,11 @@ export class SessionManager extends EventEmitter {
   /** Display model: the explicit choice, else what settings.json resolved to (as a picker alias when one matches). */
   private applyModel(s: Session, modelId: string): void {
     if (!modelId) return;
+    // On a bridged account the model is the account's: shown as it is, the Claude choice kept for the next account.
+    if (s.runAccount && !runsClaude(this.kindOf(s.runAccount))) {
+      s.modelLabel = modelId;
+      return;
+    }
     const alias = this.modelInfos.find((m) => m.resolvedModel === modelId && m.value !== 'default')?.value;
     s.model = s.fixedModel || alias || modelId;
     s.modelLabel = this.labelFor(s.model, modelId);
@@ -2763,19 +2928,24 @@ export class SessionManager extends EventEmitter {
       usageBase: Promise.resolve(null),
       usageSeen: null,
       commands: [],
+      accountId: '',
+      runAccount: '',
+      switchPending: false,
+      pendingTo: '',
+      userAccount: false,
     };
     this.sessions.set(id, s);
     return s;
   }
 
-  /** Environment of a Claude Code process started by the hub: the hub's own, without a parent session's variables. */
-  environment(): Record<string, string> {
-    return { ...this.toolEnv(), ...this.opts.sessionEnv().set };
+  /** Environment of a Claude Code process started by the hub on an account: the hub's own, without a parent session's variables. */
+  environment(account = DEFAULT_ACCOUNT): Record<string, string> {
+    const { set, unset } = this.opts.sessionEnv(account);
+    return { ...this.toolEnv(unset), ...set };
   }
 
   /** Environment of the hub's own tools (an install, a sign-in terminal): the same, without the Claude access and GitHub sign-in added. */
-  toolEnv(): Record<string, string> {
-    const { unset } = this.opts.sessionEnv();
+  toolEnv(unset = this.opts.sessionEnv(DEFAULT_ACCOUNT).unset): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined && !PARENT_SESSION_VARS.test(key) && !unset.includes(key)) env[key] = value;
@@ -2844,6 +3014,8 @@ export class SessionManager extends EventEmitter {
       instanceOf: s.instanceOf,
       tree: s.tree,
       readOnly: s.readOnly,
+      accountId: s.accountId,
+      userAccount: s.userAccount,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),

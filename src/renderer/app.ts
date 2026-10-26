@@ -62,7 +62,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null, topics: [] };
+let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null, topics: [], accounts: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 
@@ -325,10 +325,10 @@ function render(): void {
 
   workspace.classList.toggle('expanded', opened !== null);
   const master = sessions.find((s) => s.role === 'master');
-  masterView.show(master, master && store.get(master.id), models);
+  masterView.show(master, master && store.get(master.id), models, snapshot.accounts);
   topicsView.update(snapshot.topics, master && store.get(master.id));
   const worker = sessions.find((s) => s.id === opened);
-  workerView.show(worker, worker && store.get(worker.id), models);
+  workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts);
   renderStatusbar(snapshot.rateLimits);
   renderRepos();
 }

@@ -350,6 +350,21 @@ const en = {
   'update.realign.go': 'Realign',
   'update.realign.busy': 'Sessions are working. Realign once they are done.',
   'terminal.close': 'Done. Press Enter to close this window. ',
+  'account.default': 'Usual Claude access',
+  'account.notFound': 'No account "{name}". Accounts: {list}.',
+  'account.already': '"{name}" already runs on the account {account}.',
+  'account.next': '"{name}" will run on the account {account} at its next start.',
+  'account.afterTurn': '"{name}" moves to the account {account} once its turn is over.',
+  'account.now': '"{name}" restarted on the account {account}, with its conversation.',
+  'account.locked': 'Account unchanged: the user picked {account} for "{name}" by hand.',
+  'notice.accountAfterTurn': 'Moves to the account {account} once this turn is over.',
+  'notice.accountSwitched': 'Now on the account {account}: the conversation goes on.',
+  'tool.account':
+    "Account the worker runs on, by its name: one of {list}. Left out: its post's account, else the workers' usual one (list_workers shows them). Given to message_worker, the worker restarts on it with its conversation. An account of another provider (OpenAI…) runs that provider's model whatever model you name",
+  'spawn.account': 'Account: {account}.',
+  'workers.account': 'account {name}',
+  'workers.userAccount': 'account',
+  'workers.accounts': 'Accounts: {list} (workers by default: {usual}).',
 };
 
 type Key = keyof typeof en;
@@ -710,6 +725,21 @@ const fr: Record<Key, string> = {
   'update.realign.go': 'Réaligner',
   'update.realign.busy': 'Des sessions travaillent. Réaligne quand elles auront fini.',
   'terminal.close': 'Terminé. Appuie sur Entrée pour fermer cette fenêtre. ',
+  'account.default': 'Accès Claude habituel',
+  'account.notFound': 'Aucun compte « {name} ». Comptes : {list}.',
+  'account.already': '"{name}" tourne déjà sur le compte {account}.',
+  'account.next': '"{name}" tournera sur le compte {account} à son prochain démarrage.',
+  'account.afterTurn': '"{name}" passera sur le compte {account} à la fin de son tour.',
+  'account.now': '"{name}" a redémarré sur le compte {account}, avec sa conversation.',
+  'account.locked': "Compte inchangé : l'utilisateur a choisi {account} pour \"{name}\" à la main.",
+  'notice.accountAfterTurn': 'Passe sur le compte {account} à la fin de ce tour.',
+  'notice.accountSwitched': 'Maintenant sur le compte {account} : la conversation continue.',
+  'tool.account':
+    "Compte sur lequel le worker tourne, par son nom : parmi {list}. Omis : le compte de son poste, sinon celui des workers (list_workers les donne). Passé à message_worker, le worker redémarre dessus avec sa conversation. Un compte d'un autre fournisseur (OpenAI…) fait tourner le modèle de ce fournisseur, quel que soit le modèle que tu nommes",
+  'spawn.account': 'Compte : {account}.',
+  'workers.account': 'compte {name}',
+  'workers.userAccount': 'compte',
+  'workers.accounts': 'Comptes : {list} (workers par défaut : {usual}).',
 };
 
 let current: Lang = 'en';

@@ -2,8 +2,10 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeStorage } from 'electron';
 
-export type SecretName = 'anthropicApiKey' | 'githubToken';
-const NAMES: SecretName[] = ['anthropicApiKey', 'githubToken'];
+/** `account:<id>`: the key of an extra account (an Anthropic API key, an OpenAI key). */
+export type SecretName = 'anthropicApiKey' | 'githubToken' | `account:${string}`;
+const NAMES = ['anthropicApiKey', 'githubToken'];
+const isName = (name: string): name is SecretName => NAMES.includes(name) || /^account:a-[a-z0-9]{8}$/.test(name);
 
 /**
  * Secrets encrypted with the OS keychain (DPAPI, Keychain, libsecret/kwallet) through Electron's safeStorage, in
@@ -26,7 +28,7 @@ export class Secrets {
     let stale = false;
     try {
       const stored = JSON.parse(readFileSync(this.file, 'utf8')) as Record<string, unknown>;
-      for (const name of NAMES) {
+      for (const name of Object.keys(stored).filter(isName)) {
         const v = stored[name];
         if (typeof v !== 'string' || !v) continue;
         const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(v, 'base64'));
@@ -61,7 +63,7 @@ export class Secrets {
 
   private async write(): Promise<void> {
     const stored: Record<string, string> = {};
-    for (const [k, v] of Object.entries(this.values)) stored[k] = (await safeStorage.encryptStringAsync(v)).toString('base64');
+    for (const [k, v] of Object.entries(this.values)) if (v) stored[k] = (await safeStorage.encryptStringAsync(v)).toString('base64');
     writeFileSync(`${this.file}.tmp`, JSON.stringify(stored), { mode: 0o600 });
     renameSync(`${this.file}.tmp`, this.file);
   }
