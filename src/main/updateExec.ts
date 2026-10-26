@@ -6,11 +6,17 @@ import { npmCliCandidates } from './updateLogic';
 // Running npm for an update, and the helper's lock, shared by the hub and the helper (no Electron): always an
 // argument list, never a shell.
 
-/** Runs a program, its output kept to the last 20 000 characters; `code` is -1 when it could not start or timed out. */
-export function run(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: number): Promise<{ code: number; out: string }> {
+/**
+ * Runs a program, its output kept to the last 20 000 characters (and handed to `onData` as it comes); `code` is -1 when
+ * it could not start or timed out.
+ */
+export function run(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeout: number, onData?: (text: string) => void): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
     let out = '';
-    const keep = (chunk: Buffer) => (out = (out + chunk.toString()).slice(-20_000));
+    const keep = (chunk: Buffer) => {
+      out = (out + chunk.toString()).slice(-20_000);
+      onData?.(chunk.toString());
+    };
     const child = spawn(exe, args, { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const timer = setTimeout(() => child.kill(), timeout);
     child.stdout.on('data', keep);

@@ -12,6 +12,7 @@ import { SetupView } from './setup';
 import { TopicsView } from './topics';
 import './tooltip';
 import { initNews } from './news';
+import { initCliUpdates } from './cliUpdate';
 import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
 
@@ -481,6 +482,7 @@ hub.onRepos((paths) => {
   $('repos-empty').hidden = paths.length > 0;
 });
 initNews(hub);
+initCliUpdates(hub);
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
 initUpdates(hub, () => setup.isOpen || capsView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);

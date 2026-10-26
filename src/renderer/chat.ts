@@ -14,9 +14,11 @@ import {
   type SessionView,
 } from '../shared/types';
 import { effortsFor, splitRecent } from '../shared/models';
-import { modelKey, type CliUpdate } from '../shared/news';
+import { modelKey } from '../shared/news';
+import { isProviderId } from '../shared/providers';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
+import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { mascotOf, mascotPicture, sessionMascot } from './mascot';
@@ -707,8 +709,8 @@ export class ChatView {
         const recent = models.filter((m) => shownFirst.has(m));
         const older = split.older.filter((m) => !isNew(m));
         const open = unfolded.has(tab);
-        const update = this.providers.find((p) => p.id === tab)?.news.cli;
-        if (update) list.append(this.cliUpdateBox(update));
+        const box = isProviderId(tab) ? cliUpdateBox(tab, this.providers.find((p) => p.id === tab)?.news.cli ?? null) : null;
+        if (box) list.append(box);
         const addModel = (model: ModelOption) => {
           const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model, isNew(model));
           row.addEventListener('click', () => {
@@ -792,28 +794,6 @@ export class ChatView {
       };
       draw();
     });
-  }
-
-  /** "Update available: claude 2.1.287 → 2.1.311", with the command that suits how the program was installed. */
-  private cliUpdateBox(update: CliUpdate): HTMLElement {
-    const box = h('div', 'cli-update');
-    box.append(h('div', 'cli-update-title', t('chat.cliUpdate', { tool: update.tool, current: update.current, latest: update.latest })));
-    const note = update.method === 'brew' ? t('chat.cliUpdate.brew') : update.method === 'app' ? t('chat.cliUpdate.app') : '';
-    if (note) box.append(h('div', 'cli-update-note', note));
-    if (update.command) {
-      const row = h('div', 'cli-update-cmd');
-      const copy = h('button', 'btn ghost small', t('chat.cliUpdate.copy'));
-      copy.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void navigator.clipboard.writeText(update.command).then(() => {
-          copy.textContent = t('chat.cliUpdate.copied');
-          window.setTimeout(() => (copy.textContent = t('chat.cliUpdate.copy')), 1500);
-        });
-      });
-      row.append(h('code', '', update.command), copy);
-      box.append(row);
-    }
-    return box;
   }
 
   private menuRow(label: string, hint: string, checked: boolean, isNew = false): HTMLButtonElement {

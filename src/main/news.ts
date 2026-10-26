@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { acknowledge, advance, CLI_PACKAGES, emptyMemory, installMethod, isNewer, updateCommand, type CliUpdate, type NewsMemory, type NewsToast, type ProviderNews } from '../shared/news';
+import { brewApiVersion, planUpdate, updateChoice } from '../shared/cliUpdate';
+import { acknowledge, advance, brewPackage, CLI_PACKAGES, emptyMemory, installMethod, isNewer, updateCommand, type CliUpdate, type NewsMemory, type NewsToast, type ProviderNews } from '../shared/news';
 import type { ProviderId } from '../shared/providers';
 
 // What is new at the providers the user connected: a model the menu can offer now, a newer version of a provider's
@@ -48,8 +49,18 @@ export async function latestVersion(pkg: string): Promise<string> {
   }
 }
 
+/** The version Homebrew offers for a cask or a formula (its public API: no brew run), empty when it cannot be told. */
+export async function brewVersion(kind: 'cask' | 'formula', name: string): Promise<string> {
+  try {
+    const res = await fetch(`https://formulae.brew.sh/api/${kind}/${encodeURIComponent(name)}.json`, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS) });
+    return res.ok ? brewApiVersion(kind, await res.json()) : '';
+  } catch {
+    return '';
+  }
+}
+
 /** The program at a path with its links followed (a Homebrew `bin/claude` points into the Caskroom). */
-function resolved(path: string): string {
+export function resolved(path: string): string {
   try {
     return existsSync(path) ? realpathSync(path) : path;
   } catch {
@@ -77,6 +88,9 @@ export class ProviderNewsWatch {
   private memory: NewsMemory;
   private latest: Partial<Record<ProviderId, string>> = {};
   private asked = 0;
+  /** What Homebrew offers, by "cask/claude-code", asked at the same pace as the registry. */
+  private brew = new Map<string, { version: string; at: number }>();
+  private programs: NewsReading['programs'] = {};
   private last: { cli: Partial<Record<ProviderId, CliUpdate | null>> } = { cli: {} };
   private lastNews: Partial<Record<ProviderId, ProviderNews>> = {};
 
@@ -103,13 +117,42 @@ export class ProviderNewsWatch {
         out[id] = null;
         continue;
       }
-      const method = installMethod(resolved(prog.path), this.deps.toolsDir);
-      out[id] = { tool: CLI_PACKAGES[id]?.tool ?? '', current: prog.version, latest, method, command: updateCommand(id, method, this.deps.toolsDir) };
+      const path = resolved(prog.path);
+      const method = installMethod(path, this.deps.toolsDir);
+      const reach = method === 'brew' ? await this.brewReach(path) : '';
+      const command = updateCommand(id, method, this.deps.toolsDir, path);
+      const base = { tool: CLI_PACKAGES[id]?.tool ?? '', current: prog.version, latest, method, command, path, reach, ...updateChoice(id, method, prog.version, latest, reach) };
+      // A button only where one click has steps to run (else the command stays to copy).
+      const can = (action: 'upgrade' | 'switch') => planUpdate({ provider: id, action, update: base, home: '', tmp: '', npmWritable: true }).length > 0;
+      out[id] = { ...base, upgrade: base.upgrade && can('upgrade'), switchTo: base.switchTo && can('switch') ? base.switchTo : '' };
     }
     return out;
   }
 
+  /** The version Homebrew has for the package a program came from; a failed ask is tried again at the next check. */
+  private async brewReach(path: string): Promise<string> {
+    const pkg = brewPackage(path);
+    if (!pkg) return '';
+    const key = `${pkg.kind}/${pkg.name}`;
+    const known = this.brew.get(key);
+    if (known && Date.now() - known.at < REGISTRY_EVERY_MS) return known.version;
+    const version = await brewVersion(pkg.kind, pkg.name);
+    if (version) this.brew.set(key, { version, at: Date.now() });
+    return version || known?.version || '';
+  }
+
+  /** The update a provider's program has now (null: up to date or not known). */
+  update(provider: ProviderId): CliUpdate | null {
+    return this.last.cli[provider] ?? null;
+  }
+
+  /** The program found at the last check, with its version. */
+  program(provider: ProviderId): { path: string; version: string } | null {
+    return this.programs[provider] ?? null;
+  }
+
   async check(reading: NewsReading): Promise<void> {
+    this.programs = reading.programs;
     const cli = await this.updates(reading.programs, reading.connected);
     this.last = { cli };
     const step = advance(this.memory, { connected: reading.connected, offered: reading.offered, cli });

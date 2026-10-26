@@ -5860,6 +5860,9 @@ input[type='radio']:focus-visible {
   background: var(--accent-soft);
 }
 .cli-update-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text);
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -5868,21 +5871,72 @@ input[type='radio']:focus-visible {
   color: var(--text-3);
   font-size: var(--fs-sm);
 }
-.cli-update-cmd {
+.cli-update-title.ok .ico {
+  color: var(--ok);
+}
+.cli-update-title.failed .ico {
+  color: var(--danger);
+}
+.cli-update-title .ico.spin {
+  color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.cli-update-note.warn {
+  color: var(--warn);
+}
+.cli-update-actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
 }
-.cli-update-cmd code {
-  max-width: 100%;
+.cli-update-actions .btn {
+  height: auto;
+  min-height: var(--ctl-sm);
+  padding: 4px 10px;
+  text-align: left;
   white-space: normal;
-  overflow-wrap: anywhere;
-  padding: 3px 6px;
+}
+.cli-update-copy {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.cli-update-copy:hover {
+  color: var(--text-2);
+}
+.cli-update-log summary {
+  color: var(--text-3);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.cli-update-log pre {
+  max-height: 160px;
+  margin: 6px 0 0;
+  overflow: auto;
+  padding: 6px 8px;
   border-radius: var(--r-sm);
   background: var(--hover-strong);
   color: var(--text-2);
-  font: 11.5px / 1.4 var(--font-mono);
+  font: 11px / 1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cli-update-card {
+  width: 340px;
+}
+.cli-update-card .cli-update {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
 }
 .news-stack {
   position: fixed;

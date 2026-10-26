@@ -633,6 +633,11 @@ export class SessionManager extends EventEmitter {
     return [...this.sessions.values()].filter((s) => s.query && this.isWorking(s)).length;
   }
 
+  /** Sessions whose process runs this program: they keep the version they started with until they start again. */
+  runningOn(harness: HarnessId): number {
+    return [...this.sessions.values()].filter((s) => s.query && s.runAccount && harnessOf(this.kindOf(s.runAccount)) === harness).length;
+  }
+
   // ---------- live controls (composer) ----------
 
   /** `byUser`: picked by hand in the composer, so the master's later choices leave it alone. */
