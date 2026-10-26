@@ -548,7 +548,8 @@ function modelOf(id: MascotId, gltf: GLTF): Model {
   const clips = new Map(gltf.animations.map((clip) => [clip.name, clip]));
   const missing = Object.keys(CLIPS).filter((name) => !clips.has(name));
   if (missing.length > 0) console.warn(`${id}.glb: clips missing: ${missing.join(', ')}`);
-  return { rig, camera, clips, expressions: expressions(clips), recolor: RECOLOR[id] };
+  // Clawd blinks over every clip, as it always has: its blink only closes the eyes it has.
+  return { rig, camera, clips, expressions: id === 'clawd' ? new Set() : expressions(clips), recolor: RECOLOR[id] };
 }
 
 function expressions(clips: Map<string, AnimationClip>): Set<string> {

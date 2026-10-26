@@ -125,6 +125,8 @@ export class Avatar {
   private flat: SVGSVGElement | HTMLImageElement | null = null;
   private session: SessionView | null = null;
   private mascot: MascotId = 'clawd';
+  /** Bumped by each follow(): a model that arrives for an older one is dropped. */
+  private following = 0;
   private lastClick = 0;
 
   private readonly large: boolean;
@@ -164,8 +166,11 @@ export class Avatar {
   }
 
   private follow(s: SessionView, mascot: MascotId): void {
+    const turn = ++this.following;
     this.view?.dispose();
     this.view = null;
+    // Another character: its last frame goes rather than show until the new one draws.
+    if (mascot !== this.mascot) this.canvas.getContext('bitmaprenderer')?.transferFromImageBitmap(null);
     this.flat?.remove();
     this.flat = null;
     this.mascot = mascot;
@@ -179,7 +184,7 @@ export class Avatar {
     }
     void clawdStage().then(async (stage) => {
       const model = await stage?.model(mascot);
-      if (this.session?.id !== s.id || this.mascot !== mascot) return; // Switched to another session or provider meanwhile.
+      if (turn !== this.following) return; // Switched to another session or provider meanwhile.
       if (!stage || !model) return this.fallback();
       drawable.add(mascot);
       this.view = stage.attach(this.canvas, mindOf(s.id), model, shadeOf(s), this.large, () => this.fallback());
