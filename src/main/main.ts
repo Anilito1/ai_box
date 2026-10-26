@@ -65,6 +65,7 @@ import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { openTerminal } from './terminal';
+import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1020,6 +1021,12 @@ async function start(): Promise<void> {
     app.quit();
     return;
   }
+  const built = app.isPackaged ? null : await buildIfStale(app.getAppPath());
+  if (built?.kind === 'rebuilt') {
+    app.relaunch();
+    app.exit(0);
+    return;
+  }
   const hub = new Hub();
   await hub.init();
   hub.warmProviders();
@@ -1042,6 +1049,14 @@ async function start(): Promise<void> {
     if (!app.isPackaged) app.dock?.setIcon(join(here, '..', 'assets', 'icon.png'));
   }
   createWindow(mgr, hub.cfg.language);
+  if (built?.kind === 'failed') {
+    // The hub runs on its previous build; the raw output is not shown, a button copies it.
+    void dialog
+      .showMessageBox({ type: 'warning', title: APP_NAME, message: t('startup.buildFailed', { app: APP_NAME }), buttons: [t('update.ok'), t('startup.copy')], defaultId: 0, cancelId: 0 })
+      .then(({ response }) => {
+        if (response === 1) clipboard.writeText(built.detail);
+      });
+  }
   // A first run waits for the setup: the master needs Claude access before it starts.
   hub.startMaster();
   hub.setWatchers();

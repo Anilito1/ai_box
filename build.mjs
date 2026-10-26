@@ -1,5 +1,9 @@
 import { build } from 'esbuild';
-import { cpSync, mkdirSync } from 'node:fs';
+import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { sourceStamp, STAMP_FILE } from './scripts/sourceStamp.mjs';
+
+// Taken before building: a file changed meanwhile makes the next start build again.
+const stamp = sourceStamp('.');
 
 const common = { bundle: true, target: 'es2022', logLevel: 'warning' };
 const renderer = { ...common, platform: 'browser', format: 'iife', minify: true };
@@ -28,4 +32,5 @@ cpSync('src/renderer/index.html', 'dist/renderer/index.html');
 cpSync('src/renderer/styles.css', 'dist/renderer/styles.css');
 cpSync('assets/logo.png', 'dist/renderer/logo.png');
 cpSync('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
+writeFileSync(STAMP_FILE, stamp);
 console.log('build ok');
