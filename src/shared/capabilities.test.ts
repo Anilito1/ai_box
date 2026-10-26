@@ -77,7 +77,7 @@ test('draftError checks the name, the repo, the command, the URL and the pairs',
   assert.equal(draftError(draft({ env: { 'BAD-KEY': 'v' } }), []), 'env');
   assert.equal(draftError(draft({ transport: 'http', url: 'ftp://x' }), []), 'url');
   assert.equal(draftError(draft({ transport: 'http', url: 'https://x.com/mcp', headers: { 'X Bad': 'v' } }), []), 'headers');
-  assert.equal(draftError(draft({ transport: 'sse', url: 'https://x.com/sse' }), []), '');
+  assert.equal(draftError(draft({ transport: 'http', url: 'https://x.com/mcp' }), []), '');
 });
 
 test('draftJson writes what claude mcp add-json takes', () => {
@@ -93,13 +93,15 @@ test('mcpReach: off plugin nowhere, repo servers per repo, denied connectors mas
 });
 
 test('capabilitiesText lists what can be used and only counts what is off', () => {
-  const base: McpEntry = { name: '', source: 'user', transport: 'stdio', target: '', envKeys: [], headerKeys: [], project: '', plugin: '', state: 'connected', reach: 'everywhere' };
-  const skill = { kind: 'skill', name: '', dir: '', description: '', source: 'user', path: '', project: '', plugin: '', reach: 'everywhere' } as const;
+  const base: McpEntry = { name: '', source: 'user', transport: 'stdio', target: '', project: '', plugin: '', state: 'connected', reach: 'everywhere' };
+  const skill = { name: '', dir: '', description: '', source: 'user', project: '', plugin: '', reach: 'everywhere' } as const;
   const c: Capabilities = {
     mcp: [
       { ...base, name: 'hub-db' },
       { ...base, name: 'repo-db', source: 'project', project: 'C:/r/app', reach: 'repo' },
       { ...base, name: 'plugin:x:y', source: 'plugin', reach: 'nowhere' },
+      { ...base, name: 'claude.ai Gmail', source: 'claude.ai', state: 'needs-auth', reach: 'master-only' },
+      { ...base, name: 'broken', state: 'failed' },
     ],
     skills: [
       { ...skill, name: 'deploy', description: 'Deploy  the\nbackend' },
@@ -112,9 +114,11 @@ test('capabilitiesText lists what can be used and only counts what is off', () =
   };
   const text = capabilitiesText(c);
   assert.match(text, /state checked 2026-10-26 08:30 UTC/);
-  assert.match(text, /- hub-db \[user, connected\] master\+workers/);
-  assert.match(text, /- repo-db \[project, connected\] sessions in C:\/r\/app/);
-  assert.match(text, /- deploy \[user\] master\+workers: Deploy the backend/);
+  assert.match(text, /- hub-db \[personal, connected\] master\+workers/);
+  assert.match(text, /- repo-db \[project, connected\] sessions in C:\/r\/app only/);
+  assert.match(text, /- claude.ai Gmail \[claude.ai, needs sign-in\] master only/);
+  assert.match(text, /- deploy \[personal\] master\+workers: Deploy the backend/);
+  assert.ok(text.indexOf('repo-db') < text.indexOf('Gmail') && text.indexOf('Gmail') < text.indexOf('broken'));
   assert.doesNotMatch(text, /plugin:x:y|old/);
   assert.match(text, /2 more installed but off/);
 });

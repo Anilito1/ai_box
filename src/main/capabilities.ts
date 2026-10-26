@@ -37,8 +37,6 @@ const CLAUDE_DIR = join(HOME, '.claude');
 const DIRS = {
   skills: join(CLAUDE_DIR, 'skills'),
   skillsOff: join(CLAUDE_DIR, 'skills-disabled'),
-  agents: join(CLAUDE_DIR, 'agents'),
-  agentsOff: join(CLAUDE_DIR, 'agents-disabled'),
 };
 const SETTINGS = join(CLAUDE_DIR, 'settings.json');
 const LIST_MS = 120_000;
@@ -84,7 +82,7 @@ const listDir = (dir: string) => {
   }
 };
 
-/** A SKILL.md (or agent file) read for its name and description; null when absent, too big or unreadable. */
+/** A SKILL.md read for its name and description; null when absent, too big or unreadable. */
 function frontmatter(file: string): { name: string; description: string } | null {
   try {
     const info = lstatSync(file);
@@ -97,12 +95,11 @@ function frontmatter(file: string): { name: string; description: string } | null
 }
 
 /** Skill folders of a place: each child holding a SKILL.md. */
-function skillsIn(dir: string): { dir: string; path: string; name: string; description: string }[] {
+function skillsIn(dir: string): { dir: string; name: string; description: string }[] {
   const found = [];
   for (const name of listDir(dir)) {
-    const path = join(dir, name);
-    const meta = frontmatter(join(path, 'SKILL.md'));
-    if (meta) found.push({ dir: name, path, name: meta.name || name, description: meta.description });
+    const meta = frontmatter(join(dir, name, 'SKILL.md'));
+    if (meta) found.push({ dir: name, name: meta.name || name, description: meta.description });
   }
   return found;
 }
@@ -119,8 +116,6 @@ function entry(name: string, cfg: Obj, source: McpSource, extra: Partial<McpEntr
     source,
     transport: transportOf(cfg),
     target: targetOf(cfg),
-    envKeys: isObj(cfg.env) ? Object.keys(cfg.env) : [],
-    headerKeys: isObj(cfg.headers) ? Object.keys(cfg.headers) : [],
     project: '',
     plugin: '',
     state: 'unknown',
@@ -161,7 +156,7 @@ function pluginSkills(p: Plugin): ReturnType<typeof skillsIn> {
     const own = frontmatter(join(dir, 'SKILL.md'));
     if (!own) return skillsIn(dir);
     const name = dir.split(/[\\/]/).pop() ?? dir;
-    return [{ dir: name, path: dir, name: own.name || name, description: own.description }];
+    return [{ dir: name, name: own.name || name, description: own.description }];
   });
 }
 
@@ -211,6 +206,7 @@ export class CapabilityStore {
   private triedAt = 0;
   private checkError = '';
   private checking: Promise<void> | null = null;
+  private added = false;
 
   constructor(private readonly deps: CapabilityDeps) {}
 
@@ -270,7 +266,7 @@ export class CapabilityStore {
       }
       const own = pluginSkills(p);
       for (const s of own) {
-        skills.push({ kind: 'skill', name: `${p.name}:${s.name}`, dir: s.dir, description: s.description, source: 'plugin', path: s.path, project: '', plugin: p.id, reach: p.enabled ? 'everywhere' : 'nowhere' });
+        skills.push({ name: `${p.name}:${s.name}`, dir: s.dir, description: s.description, source: 'plugin', project: '', plugin: p.id, reach: p.enabled ? 'everywhere' : 'nowhere' });
       }
       pluginRows.push({ id: p.id, name: p.name, enabled: p.enabled, skills: own.length, mcp: servers.length });
     }
@@ -280,22 +276,25 @@ export class CapabilityStore {
       mcp.push(entry(row.name, {}, source, { target: row.target, state: row.state, reach: mcpReach(source, row.name, true) }));
     }
 
-    const add = (kind: 'skill' | 'agent', source: SkillEntry['source'], list: { dir: string; path: string; name: string; description: string }[], project = '') => {
+    const add = (source: SkillEntry['source'], dir: string, project = '') => {
       const reach = source === 'disabled' ? 'nowhere' : source === 'project' ? 'repo' : 'everywhere';
-      for (const s of list) skills.push({ kind, name: s.name, dir: s.dir, description: s.description, source, path: s.path, project, plugin: '', reach });
+      for (const s of skillsIn(dir)) skills.push({ name: s.name, dir: s.dir, description: s.description, source, project, plugin: '', reach });
     };
-    add('skill', 'user', skillsIn(DIRS.skills));
-    add('skill', 'disabled', skillsIn(DIRS.skillsOff));
-    add('agent', 'user', agentsIn(DIRS.agents));
-    add('agent', 'disabled', agentsIn(DIRS.agentsOff));
-    for (const repo of repos) add('skill', 'project', skillsIn(join(repo, '.claude', 'skills')), repo);
+    add('user', DIRS.skills);
+    add('disabled', DIRS.skillsOff);
+    for (const repo of repos) add('project', join(repo, '.claude', 'skills'), repo);
 
     return { mcp, skills, plugins: pluginRows, repos: [...cfg.mainRepos], checkedAt: this.checkedAt, checkError: this.checkError };
   }
 
-  /** Asks Claude Code for each server's state (it starts or calls each one: some seconds). One check at a time. */
+  /**
+   * Asks Claude Code for each server's state (it starts or calls each one: some seconds). One check at a time; a
+   * server added during a check gets a fresh one after it.
+   */
   check(): Promise<void> {
-    this.checking ??= this.runCheck().finally(() => (this.checking = null));
+    if (this.checking) return this.added ? this.checking.then(() => this.check()) : this.checking;
+    this.added = false;
+    this.checking = this.runCheck().finally(() => (this.checking = null));
     return this.checking;
   }
 
@@ -353,6 +352,7 @@ export class CapabilityStore {
     const cwd = d.scope === 'project' ? d.project : masterCwd(this.deps.cfg);
     const r = await run(exe, ['mcp', 'add-json', '-s', d.scope, d.name, draftJson(d)], cwd, this.deps.env(), GET_MS);
     if (r.code !== 0) return this.result('cli', scrub(r.out, [...Object.values(d.env), ...Object.values(d.headers), d.url, ...d.args]));
+    this.added = true;
     void this.check();
     return this.result();
   }
@@ -372,13 +372,12 @@ export class CapabilityStore {
     return this.result();
   }
 
-  /** Disables (to the -disabled folder, reversible) or enables back a skill or a subagent of the user's. */
-  moveSkill(kind: unknown, dir: unknown, enable: unknown): CapResult {
-    const places = placesOf(kind);
-    if (!places || typeof enable !== 'boolean') return this.result('format');
-    const [from, to] = enable ? [places.off, places.on] : [places.on, places.off];
-    const src = within(from, dir, places.ext);
-    const dest = within(to, dir, places.ext);
+  /** Disables (to ~/.claude/skills-disabled, reversible) or enables back a skill of the user's. */
+  moveSkill(dir: unknown, enable: unknown): CapResult {
+    if (typeof enable !== 'boolean') return this.result('format');
+    const [from, to] = enable ? [DIRS.skillsOff, DIRS.skills] : [DIRS.skills, DIRS.skillsOff];
+    const src = within(from, dir);
+    const dest = within(to, dir);
     if (!src || !dest) return this.result('format');
     if (!exists(src)) return this.result('missing');
     if (exists(dest)) return this.result('exists');
@@ -391,11 +390,10 @@ export class CapabilityStore {
     return this.result();
   }
 
-  /** Deletes a skill or subagent of the user's for good, active or disabled. */
-  deleteSkill(kind: unknown, dir: unknown, disabled: unknown): CapResult {
-    const places = placesOf(kind);
-    if (!places || typeof disabled !== 'boolean') return this.result('format');
-    const path = within(disabled ? places.off : places.on, dir, places.ext);
+  /** Deletes a skill of the user's for good, active or disabled. */
+  deleteSkill(dir: unknown, disabled: unknown): CapResult {
+    if (typeof disabled !== 'boolean') return this.result('format');
+    const path = within(disabled ? DIRS.skillsOff : DIRS.skills, dir);
     if (!path) return this.result('format');
     if (!exists(path)) return this.result('missing');
     try {
@@ -407,20 +405,24 @@ export class CapabilityStore {
     return this.result();
   }
 
-  /** A pasted SKILL.md becomes ~/.claude/skills/<its name>/SKILL.md; a name already taken (active or disabled) is refused. */
-  pasteSkill(text: unknown): CapResult {
-    if (!isStr(text) || text.length > SKILL_BYTES_MAX) return this.result('format');
+  /**
+   * A pasted SKILL.md becomes ~/.claude/skills/<name>/SKILL.md. Its header needs a description, and its own name, if
+   * it gives one, must be this one; a name already taken (active or disabled) is refused.
+   */
+  pasteSkill(name: unknown, text: unknown): CapResult {
+    if (!isStr(text) || Buffer.byteLength(text) > SKILL_BYTES_MAX || !isStr(name)) return this.result('format');
     const fields = parseAgentFile(text)?.fields;
-    const name = fields?.name ?? '';
-    if (!fields || !SKILL_NAME.test(name) || !fields.description) return this.result('skill-format');
-    const dest = within(DIRS.skills, name, '');
-    const off = within(DIRS.skillsOff, name, '');
-    if (!dest || !off) return this.result('skill-format');
+    if (!SKILL_NAME.test(name)) return this.result('skill-name');
+    if (!fields?.description || (fields.name && fields.name !== name)) return this.result('skill-format');
+    const dest = within(DIRS.skills, name);
+    const off = within(DIRS.skillsOff, name);
+    if (!dest || !off) return this.result('skill-name');
     if (exists(dest) || exists(off)) return this.result('exists');
     try {
       mkdirSync(dest, { recursive: true });
       writeFileSync(join(dest, 'SKILL.md'), text, { flag: 'wx' });
     } catch (err) {
+      rmSync(dest, { recursive: true, force: true });
       return this.result('fs', err instanceof Error ? err.message : String(err));
     }
     return this.result();
@@ -429,9 +431,9 @@ export class CapabilityStore {
   /** `npx skills add <repo> --skill <name>`, for the user (global), copied into ~/.claude/skills. */
   async githubSkill(url: unknown, skill: unknown): Promise<CapResult> {
     if (!isStr(url) || !GITHUB_URL.test(url) || !isStr(skill) || !SKILL_NAME.test(skill)) return this.result('format');
-    const dest = within(DIRS.skills, skill, '');
+    const dest = within(DIRS.skills, skill);
     if (!dest) return this.result('format');
-    if (exists(dest) || exists(within(DIRS.skillsOff, skill, '') ?? dest)) return this.result('exists');
+    if (exists(dest) || exists(within(DIRS.skillsOff, skill) || dest)) return this.result('exists');
     const env = this.deps.toolEnv();
     const npx = await npxCli(env);
     if (!npx) return this.result('no-node');
@@ -463,27 +465,10 @@ export class CapabilityStore {
   }
 }
 
-function agentsIn(dir: string): { dir: string; path: string; name: string; description: string }[] {
-  return listDir(dir)
-    .filter((n) => n.toLowerCase().endsWith('.md'))
-    .flatMap((file) => {
-      const path = join(dir, file);
-      const meta = frontmatter(path);
-      const base = file.slice(0, -3);
-      return meta ? [{ dir: base, path, name: meta.name || base, description: meta.description }] : [];
-    });
-}
-
-function placesOf(kind: unknown): { on: string; off: string; ext: string } | null {
-  if (kind === 'skill') return { on: DIRS.skills, off: DIRS.skillsOff, ext: '' };
-  if (kind === 'agent') return { on: DIRS.agents, off: DIRS.agentsOff, ext: '.md' };
-  return null;
-}
-
-/** `base/<name><ext>`, only when the name is a plain one and the path stays right inside `base`. */
-function within(base: string, name: unknown, ext: string): string {
+/** `base/<name>`, only when the name is a plain one and the path stays right inside `base`. */
+function within(base: string, name: unknown): string {
   if (!isStr(name) || !SKILL_NAME.test(name) || name.includes('..')) return '';
-  const path = resolve(base, `${name}${ext}`);
+  const path = resolve(base, name);
   return dirname(path) === resolve(base) ? path : '';
 }
 

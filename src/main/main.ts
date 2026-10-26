@@ -851,9 +851,9 @@ class Hub {
     });
     handle('caps:mcp-add', (draft) => this.caps.addMcp(draft));
     handle('caps:mcp-remove', (name, source, project) => this.caps.removeMcp(name, source, project));
-    handle('caps:skill-move', (kind, dir, enable) => this.caps.moveSkill(kind, dir, enable));
-    handle('caps:skill-delete', (kind, dir, disabled) => this.caps.deleteSkill(kind, dir, disabled));
-    handle('caps:skill-paste', (text) => this.caps.pasteSkill(text));
+    handle('caps:skill-move', (dir, enable) => this.caps.moveSkill(dir, enable));
+    handle('caps:skill-delete', (dir, disabled) => this.caps.deleteSkill(dir, disabled));
+    handle('caps:skill-paste', (name, text) => this.caps.pasteSkill(name, text));
     handle('caps:skill-github', (url, skill) => this.caps.githubSkill(url, skill));
     handle('caps:plugin', (id, on) => this.caps.setPlugin(id, on));
     handle('claude:check', async () => {

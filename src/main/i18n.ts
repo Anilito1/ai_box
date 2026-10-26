@@ -85,7 +85,7 @@ const en = {
     'Every hub worker, the team (permanent workers) first: status (asleep, ready, working…), folder (cwd), post, mission, model, effort, context, cost, background tasks, preview of its last message.',
   'tool.listRepos': "Local git repositories under {roots} (worktrees included): name, path, remote, current branch. A worker's cwd = the folder's root.",
   'tool.listCapabilities':
-    'Read only. MCP servers (source, state: connected, needs-auth, failed…) and skills/subagents installed on this computer, with who can use each: master+workers, master only, or only sessions whose cwd is a given repo. Use it to name the right skills and connectors in a brief.',
+    'Read only. MCP servers (connected first, then to connect, then in error) and skills installed on this computer, one line each: name, source, state, who can use it (master+workers, master only, or only sessions whose cwd is a given repo). Use it to name the right skills and connectors in a brief.',
   'tool.spawn':
     'Starts a Claude Code worker in the hub with a self-contained mission: an ad-hoc worker, or with role an extra instance of a post for a parallel job. Returns its name (for message_worker and close_worker). It will send you its final report.',
   'tool.spawn.name': 'Short kebab-case name describing the mission (e.g. "fix-api")',
@@ -478,7 +478,7 @@ const fr: Record<Key, string> = {
     "Tous les workers du hub, l'équipe (workers permanents) d'abord : statut (endormi, prêt, en cours…), dossier (cwd), poste, mission, modèle, effort, contexte, coût, tâches de fond, aperçu du dernier message.",
   'tool.listRepos': "Dépôts git locaux sous {roots} (worktrees compris) : nom, chemin, remote, branche courante. Le cwd d'un worker = la racine du dossier.",
   'tool.listCapabilities':
-    "Lecture seule. Serveurs MCP (source, état : connecté, auth requise, échec…) et skills/sous-agents installés sur cet ordinateur, avec qui peut s'en servir : maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné. Sert à citer les bons skills et connecteurs dans un brief.",
+    "Lecture seule. Serveurs MCP (connectés d'abord, puis à connecter, puis en erreur) et skills installés sur cet ordinateur, une ligne chacun : nom, source, état, qui peut s'en servir (maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné). Sert à citer les bons skills et connecteurs dans un brief.",
   'tool.spawn':
     "Lance un worker Claude Code dans le hub avec une mission autonome : un ponctuel, ou avec role une instance de plus d'un poste pour un chantier en parallèle. Retourne son nom (pour message_worker et close_worker). Il t'enverra son rapport final.",
   'tool.spawn.name': 'Nom court en kebab-case décrivant la mission (ex. "fix-api")',
