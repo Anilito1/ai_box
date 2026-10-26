@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { AccountStatus } from '../../../shared/types';
 import { errorCode } from '../../errors';
 import { CodexClient } from './client';
 import { modelsOf, rateLimitsOf } from './adapter';
+import { codexBinary, localTool } from '../tools';
 import type { RateLimits } from '../../../shared/types';
 import type { AgentModel } from '../types';
 
@@ -14,14 +15,20 @@ const obj = (v: unknown): Json => (v && typeof v === 'object' && !Array.isArray(
 
 const EXE = process.platform === 'win32' ? 'codex.exe' : 'codex';
 
-/** Codex as the user installed it: the configured path, else the PATH, else the usual folders. */
+/**
+ * Codex: the configured path, else the app's own copy, else the user's install (the PATH, then the usual folders). An
+ * npm install on Windows puts shell wrappers on the PATH, which cannot start without a shell: the binary behind them.
+ */
 export function codexExecutable(configured = ''): Promise<string> {
   if (configured && existsSync(configured)) return Promise.resolve(configured);
+  const local = localTool('codex');
+  if (local) return Promise.resolve(local);
   const usual = [join(homedir(), '.local', 'bin', EXE), `/opt/homebrew/bin/${EXE}`, `/usr/local/bin/${EXE}`];
   return new Promise((resolve) => {
     execFile(process.platform === 'win32' ? 'where' : 'which', ['codex'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
       const lines = err ? [] : stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      resolve([...lines, ...usual].find((p) => existsSync(p)) ?? '');
+      const real = (l: string) => (process.platform !== 'win32' || /\.exe$/i.test(l) ? l : codexBinary(join(dirname(l), 'node_modules')));
+      resolve([...lines.map(real), ...usual].find((p) => p && existsSync(p)) ?? '');
     });
   });
 }

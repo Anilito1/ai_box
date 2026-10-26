@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { toolCommand } from '../tools';
 
 type Json = Record<string, unknown>;
 
@@ -47,7 +48,8 @@ export class AcpClient {
 
   /** Starts the agent and completes the handshake; answers what the agent says it can do. */
   async start(): Promise<Json> {
-    const child = spawn(this.opts.executable, ['--acp'], { cwd: this.opts.cwd, env: this.opts.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const [file, args] = toolCommand(this.opts.executable, ['--acp']);
+    const child = spawn(file, args, { cwd: this.opts.cwd, env: this.opts.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
     child.stderr?.on('data', (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-STDERR_KEEP)));
     const exited = new Promise<void>((resolve) => {

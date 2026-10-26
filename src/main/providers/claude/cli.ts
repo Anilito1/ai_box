@@ -7,6 +7,7 @@ import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ClaudeStatus } from '../../../shared/types';
 import type { HubConfig } from '../../config';
 import { errorCode, httpCode } from '../../errors';
+import { localTool } from '../tools';
 
 const require = createRequire(import.meta.url);
 const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';
@@ -42,10 +43,10 @@ function installedExecutable(): Promise<string> {
   });
 }
 
-/** Executable the sessions run: the configured one, else the SDK's own binary, else the user's install. */
+/** Executable the sessions run: the configured one, else the SDK's own binary, else the app's own copy, else the user's install. */
 export async function claudeExecutable(cfg: HubConfig, installed?: string): Promise<string> {
   if (cfg.claudePath && existsSync(cfg.claudePath)) return cfg.claudePath;
-  return bundledExecutable() || (installed ?? (await installedExecutable()));
+  return bundledExecutable() || localTool('claude') || (installed ?? (await installedExecutable()));
 }
 
 /**
