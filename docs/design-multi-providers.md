@@ -46,6 +46,16 @@ Sous un fournisseur, le hub tient un compte qu'il crée lui-même : Anthropic = 
 
 ---
 
+## 0 quater. Gemini et plusieurs comptes Anthropic
+
+**Gemini** (CLI `@google/gemini-cli` 0.65.0, lu en réel, installé hors global). Ce qui existe, vérifié : `gemini --acp` parle l'Agent Client Protocol (JSON-RPC, une ligne par message) : `initialize` annonce les méthodes d'auth (`oauth-personal` « Log in with Google », `gemini-api-key`, Vertex, gateway), `loadSession: true`, MCP `http`/`sse` (donc les outils du hub passent par le même serveur MCP loopback que Codex, avec un en-tête `Authorization`), des modes (`default`, `autoEdit`, `yolo`, `plan`) et la liste des modèles dans la réponse de `session/new`. Les demandes de permission arrivent par `session/request_permission` (options `allow_once`…), les mises à jour par `session/update` (`agent_message_chunk`, `agent_thought_chunk`, `tool_call`, `tool_call_update`, `usage_update`), la réponse de `session/prompt` porte `stopReason` et l'usage par modèle. `-o stream-json` existe aussi (un processus par tour), non utilisé. `GEMINI_CLI_HOME` déplace tout le dossier (`$GEMINI_CLI_HOME/.gemini`) : un dossier par compte. Le hub fait lancer la connexion Google par le CLI lui-même (`authenticate` `oauth-personal` sur une session ACP : le CLI ouvre le navigateur et garde `oauth_creds.json` dans le dossier du compte) ; il ne lit que la présence de ce fichier et l'email de `google_accounts.json`, jamais les jetons.
+
+Ce qui manque ou n'est pas vérifié en réel (pas de connexion lancée) : le flux complet d'un vrai tour (formats exacts de `tool_call`, noms des outils MCP dans les titres, texte exact des erreurs de quota — la limite est détectée sur le code 429 que le CLI renvoie, « Rate limit exceeded ») ; pas d'effort ni de dossiers supplémentaires par poste (le protocole n'a pas de champ pour eux) ; pas de prompt système : les instructions du hub ouvrent le premier message d'une conversation ; pas de coût en dollars (tokens seulement) ; pas de commandes ni de skills Claude ; pas de steer (un message pendant un tour attend la fin du tour).
+
+**Plusieurs comptes Anthropic** : `default` désigne désormais *le compte Anthropic actif* (`cfg.anthropicActive`, vide = connexion de Claude Code de l'utilisateur) et `own` sa connexion propre. Chaque compte ajouté est un compte `claude` avec son `CLAUDE_CONFIG_DIR` (existant : conversations, réglages et skills partagés par liens). « Utiliser ce compte » change l'actif sans toucher aux sessions en cours (elles gardent leur processus) ; limites et replis sont comptés par compte réel. Le maître voit les comptes dans le roster et choisit avec `account` (nom, ou « principal »). Même logique pour Codex et Gemini : non faite (un compte par méthode).
+
+---
+
 ## 1. État des lieux
 
 ### 1.1 Ce que contient déjà `feature/multi-comptes`

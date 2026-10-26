@@ -5090,3 +5090,43 @@ input[type='radio']:focus-visible {
 .provider-tabs .seg.off {
   opacity: 0.5;
 }
+.provider-accounts {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.provider-account {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.provider-account:last-child {
+  border-bottom: 0;
+}
+.provider-account.active {
+  background: var(--accent-soft);
+}
+.provider-account-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.provider-account-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.provider-account-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}

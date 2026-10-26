@@ -55,6 +55,7 @@ const api: HubApi = {
   connectProvider: (provider, method, key) => ipcRenderer.invoke('providers:connect', provider, method, key),
   loginProvider: (provider, method) => ipcRenderer.invoke('providers:login', provider, method),
   disconnectProvider: (provider, method) => ipcRenderer.invoke('providers:disconnect', provider, method),
+  anthropicAccount: (action, id) => ipcRenderer.invoke('providers:anthropicAccount', action, id),
   saveAccount: (account, key) => ipcRenderer.invoke('accounts:save', account, key),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   checkAccount: (id) => ipcRenderer.invoke('accounts:check', id),

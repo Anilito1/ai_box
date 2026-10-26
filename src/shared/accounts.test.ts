@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { checkAccount, findAccount, firstAccount, hasServer, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL, pinsModel } = await import('./accounts');
+const { canonAccount, checkAccount, findAccount, isAccountRef, isBuiltinAccount, firstAccount, hasServer, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL, pinsModel } = await import('./accounts');
 const { PRESETS } = await import('./presets');
 type Account = import('./types').Account;
 
@@ -89,4 +89,17 @@ test('the presets are valid accounts of their own kind, with distinct ids', () =
     const a = normalizeAccount({ kind: p.kind, name: p.label, baseUrl: p.baseUrl, model: p.kind === 'openai' ? 'some-model' : p.model });
     assert.equal(checkAccount(a, []), null, p.id);
   }
+});
+
+test('"default" is the active Anthropic account, "own" the user’s own sign-in whichever is active', () => {
+  assert.equal(canonAccount('default', ''), 'own');
+  assert.equal(canonAccount('default', 'a-claude01'), 'a-claude01');
+  assert.equal(canonAccount('own', 'a-claude01'), 'own');
+  assert.equal(canonAccount('a-other001', 'a-claude01'), 'a-other001');
+  assert.equal(isBuiltinAccount('own') && isBuiltinAccount('default') && !isBuiltinAccount('a-claude01'), true);
+  assert.equal(isAccountRef('own') && isAccountRef('default') && isAccountRef('a-claude01') && !isAccountRef('mine'), true);
+  assert.equal(findAccount([claude('a-claude01', 'Work')], 'Principal'), 'own');
+  assert.equal(findAccount([claude('a-claude01', 'Work')], 'work')?.valueOf() === 'own', false);
+  assert.equal(firstAccount([claude('a-claude01', 'Work')], 'own', 'default'), 'own');
+  assert.deepEqual(checkAccount(claude('', 'Own'), []), { field: 'name', problem: 'reserved' });
 });

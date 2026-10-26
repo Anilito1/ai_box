@@ -25,7 +25,7 @@ export function humanError(raw: string): string {
   if (/ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|socket hang up|fetch failed|network error/i.test(raw)) return t('error.network');
   if (status === 429 || status === 529 || /overloaded|rate.?limit|usage limit/i.test(raw)) return t('error.overloaded');
   if (status === 402 || /credit balance|billing/i.test(raw)) return t('error.billing');
-  if (status === 401 || /unauthori[sz]ed|authentication_error|invalid.{0,20}api.?key|oauth token|token.{0,20}(expired|revoked)|please run \/login/i.test(raw)) return t('error.auth');
+  if (status === 401 || /not signed in|unauthori[sz]ed|authentication_error|invalid.{0,20}api.?key|oauth token|token.{0,20}(expired|revoked)|please run \/login/i.test(raw)) return t('error.auth');
   if (/prompt is too long|context.{0,20}(length|window|limit)|too many tokens/i.test(raw)) return t('error.tooLong');
   if (status >= 500 || /internal server error|api_error/i.test(raw)) return t('error.server');
   return t('error.unknown');

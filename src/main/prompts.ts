@@ -76,6 +76,7 @@ export const rosterKey = (cfg: HubConfig) =>
     cfg.parallel,
     cfg.accounts.map((a) => [a.name, a.kind, a.model]),
     cfg.workerAccount,
+    cfg.anthropicActive,
     providerLines,
   ]);
 
@@ -86,24 +87,33 @@ function providersText(l: Lang): string {
     .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${p.models.join(', ') || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
     .join(' ; ');
   return l === 'fr'
-    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (anthropic, openai ou deepseek) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
-    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (anthropic, openai or deepseek) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
+    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (anthropic, openai, deepseek ou gemini) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
+    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (anthropic, openai, deepseek or gemini) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
 }
 
 /** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
 function accountsText(cfg: HubConfig, l: Lang): string {
-  // The accounts of the providers are the providers' business (above): only an older, hand-made one is named here.
+  // Anthropic may have several accounts: the master names the one a worker runs on (the active one by default).
+  const claude = cfg.accounts.filter((a) => a.kind === 'claude');
+  const active = claude.find((a) => a.id === cfg.anthropicActive)?.name ?? (l === 'fr' ? 'principal' : 'main');
+  const anthropic =
+    claude.length === 0
+      ? ''
+      : l === 'fr'
+        ? ` Comptes Anthropic : principal (le Claude Code de l'utilisateur), ${claude.map((a) => a.name).join(', ')} ; actif : ${active}. Un worker tourne sur le compte actif ; pour un compte précis : account de spawn_worker ou de message_worker (le nom du compte, ou "principal"), seulement si l'utilisateur le demande.`
+        : ` Anthropic accounts: main (the user's own Claude Code), ${claude.map((a) => a.name).join(', ')}; active: ${active}. A worker runs on the active account; for a given account: account of spawn_worker or message_worker (the account's name, or "main"), only when the user asks.`;
+  // The accounts of the other providers are the providers' business (above): only an older, hand-made one is named here.
   const own = cfg.accounts.filter((a) => providerOfAccount(a) === null);
-  if (own.length === 0) return '';
+  if (own.length === 0) return anthropic;
   const kinds = {
-    fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible', 'anthropic-compatible': 'compatible Anthropic', codex: 'Codex (ChatGPT)' },
-    en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible', 'anthropic-compatible': 'Anthropic-compatible', codex: 'Codex (ChatGPT)' },
+    fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible', 'anthropic-compatible': 'compatible Anthropic', codex: 'Codex (ChatGPT)', gemini: 'Gemini (Google)', 'gemini-key': 'Gemini (clé API)' },
+    en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible', 'anthropic-compatible': 'Anthropic-compatible', codex: 'Codex (ChatGPT)', gemini: 'Gemini (Google)', 'gemini-key': 'Gemini (API key)' },
   }[l];
   const usual = cfg.accounts.find((a) => a.id === cfg.workerAccount)?.name ?? 'default';
   const list = own.map((a) => `${a.name} (${kinds[a.kind]}${a.model ? ` · ${a.model}` : ''})`).join(', ');
   return l === 'fr'
-    ? ` Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle ; un compte Codex (ChatGPT) tourne sur les modèles de Codex : omets model pour son modèle par défaut.`
-    : ` Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model; a Codex (ChatGPT) account runs on Codex's models: leave model out for its default.`;
+    ? `${anthropic} Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle ; un compte Codex (ChatGPT) tourne sur les modèles de Codex : omets model pour son modèle par défaut.`
+    : `${anthropic} Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model; a Codex (ChatGPT) account runs on Codex's models: leave model out for its default.`;
 }
 
 const allowedText = (cfg: HubConfig, l: Lang) =>

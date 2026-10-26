@@ -683,8 +683,8 @@ export class ChatView {
           menu.append(row);
         }
         // The effort belongs to the model the session runs: shown with its provider's tab.
-        if (tab === current) {
-          const now = models.find((m) => m.value === s.model);
+        const now = models.find((m) => m.value === s.model);
+        if (tab === current && !now?.noEffort) {
           const efforts: Effort[] = now?.efforts.length ? now.efforts : EFFORTS;
           menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
           const seg = h('div', 'segmented');

@@ -8,7 +8,7 @@ import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from 
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
-import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, pinsModel, runsClaude } from '../shared/accounts';
+import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff } from '../shared/passation';
@@ -243,6 +243,8 @@ export interface ManagerOptions {
   executable(): string;
   /** Codex executable to run; empty = none found. */
   codexExecutable(): string;
+  /** Gemini CLI executable to run; empty = none found. */
+  geminiExecutable(): string;
   /** Where the hub's tools are served to programs that reach them over HTTP. */
   mcpHub: McpHub;
   /** Variables added to (set) or removed from (unset) the environment of a session on this account: its access, GitHub. */
@@ -597,7 +599,7 @@ export class SessionManager extends EventEmitter {
 
   /** The plan limits of an account, as its program last told them. */
   setLimits(account: string, limits: RateLimits): void {
-    this.rateLimits.set(account, limits);
+    this.rateLimits.set(this.canon(account), limits);
     this.changed();
   }
 
@@ -669,7 +671,7 @@ export class SessionManager extends EventEmitter {
   setAccount(id: string, account: string, byUser = true): string {
     const s = this.sessions.get(id);
     if (!s) return '';
-    if (account && account !== DEFAULT_ACCOUNT && !this.opts.cfg.accounts.some((a) => a.id === account)) return '';
+    if (account && !isBuiltinAccount(account) && !this.opts.cfg.accounts.some((a) => a.id === account)) return '';
     s.accountId = account;
     if (byUser) s.userAccount = account !== '';
     // Moved by hand (or by the master): it is no longer "away" from anywhere.
@@ -704,7 +706,7 @@ export class SessionManager extends EventEmitter {
     return PROVIDER_DEFS.map((def) => {
       const r = resolveProvider(this.providerStates, def.id);
       const account = 'account' in r ? r.account : '';
-      const models = account ? (account === DEFAULT_ACCOUNT ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
+      const models = account ? (isBuiltinAccount(account) ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
       return { id: def.id, label: def.label, connected: account !== '', accountId: account, models };
     });
   }
@@ -742,7 +744,7 @@ export class SessionManager extends EventEmitter {
   accountsChanged(): void {
     const { cfg } = this.opts;
     for (const s of this.sessions.values()) {
-      if (s.accountId && s.accountId !== DEFAULT_ACCOUNT && !cfg.accounts.some((a) => a.id === s.accountId)) Object.assign(s, { accountId: '', userAccount: false });
+      if (s.accountId && !isBuiltinAccount(s.accountId) && !cfg.accounts.some((a) => a.id === s.accountId)) Object.assign(s, { accountId: '', userAccount: false });
       if (s.query) this.applyAccount(s);
     }
     this.changed();
@@ -775,22 +777,29 @@ export class SessionManager extends EventEmitter {
   /** A failed start that means the program is not there: for Claude, no executable was found either. */
   private missingProgram(s: Session, failure: string): boolean {
     const adapter = this.adapterOf(s);
-    return adapter.isMissingProgram(failure) || !(adapter.harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable());
+    return adapter.isMissingProgram(failure) || !this.executableOf(adapter.harness);
+  }
+
+  /** The account behind a name: "default" is whichever Anthropic account is active ("own" when it is the user's own). */
+  private canon(account: string): string {
+    return canonAccount(account, this.opts.cfg.anthropicActive);
   }
 
   private accountName(account: string): string {
-    return this.opts.cfg.accounts.find((a) => a.id === account)?.name ?? t('account.default');
+    const id = this.canon(account);
+    return this.opts.cfg.accounts.find((a) => a.id === id)?.name ?? t(id === OWN_ACCOUNT && this.opts.cfg.accounts.some((a) => a.kind === 'claude') ? 'account.own' : 'account.default');
   }
 
   private accountBadges(): AccountBadge[] {
-    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, provider: providerOfAccount(a) ?? ('' as const), pinned: this.pinned(a.id), limitedUntil: this.limitedSeconds(a.id) }))];
+    const claudeAccounts = this.opts.cfg.accounts.some((a) => a.kind === 'claude');
+    return [{ id: DEFAULT_ACCOUNT, name: this.accountName(DEFAULT_ACCOUNT), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...(claudeAccounts ? [{ id: OWN_ACCOUNT, name: t('account.own'), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(OWN_ACCOUNT) }] : []), ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, provider: providerOfAccount(a) ?? ('' as const), pinned: this.pinned(a.id), limitedUntil: this.limitedSeconds(a.id) }))];
   }
 
   /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
   private accountRef(ref: string): string {
     const found = findAccount(this.opts.cfg.accounts, ref);
     if (!found) throw new Error(t('account.notFound', { name: ref, list: this.accountBadges().map((a) => a.name).join(', ') }));
-    return found === DEFAULT_ACCOUNT ? DEFAULT_ACCOUNT : found.id;
+    return typeof found === 'string' ? found : found.id;
   }
 
   private applyAccount(s: Session): string {
@@ -839,17 +848,17 @@ export class SessionManager extends EventEmitter {
   // ---------- fallback ----------
 
   private limitedSeconds(account: string): number | null {
-    const at = this.cooldowns.limitedUntil(account, Date.now());
+    const at = this.cooldowns.limitedUntil(this.canon(account), Date.now());
     return at ? Math.ceil(at / 1000) : null;
   }
 
   /** An account the chain may send a session to: it exists, its program is there, and a paid one has the user's word. */
   private usableFallback(account: string): boolean {
     const { cfg } = this.opts;
-    if (account !== DEFAULT_ACCOUNT && !cfg.accounts.some((a) => a.id === account)) return false;
-    const paid = account === DEFAULT_ACCOUNT ? cfg.provider === 'api-key' : isPaid(this.kindOf(account));
+    if (!isBuiltinAccount(account) && !cfg.accounts.some((a) => a.id === account)) return false;
+    const paid = isBuiltinAccount(account) ? cfg.provider === 'api-key' : isPaid(this.kindOf(account));
     if (paid && !cfg.fallback.paidOk.includes(account)) return false;
-    return harnessOf(this.kindOf(account)) === 'claude' ? !!this.opts.executable() : !!this.opts.codexExecutable();
+    return !!this.executableOf(harnessOf(this.kindOf(account)));
   }
 
   private nextStep(from: string): FallbackStep | null {
@@ -861,7 +870,7 @@ export class SessionManager extends EventEmitter {
   /** An account reached a limit: it rests until it opens again, and a session of it goes on with the chain's next account. */
   private onLimit(s: Session, q: AgentProcess, signal: LimitSignal): void {
     const account = s.runAccount || this.accountOf(s);
-    this.cooldowns.set(account, signal, Date.now());
+    this.cooldowns.set(this.canon(account), signal, Date.now());
     this.save();
     this.changed();
     if (s.fallbackPending || !this.opts.cfg.fallback.enabled) return;
@@ -893,7 +902,7 @@ export class SessionManager extends EventEmitter {
 
   private async handoffNote(s: Session, kind: 'away' | 'back', from: string, to: string, reason: 'rate' | 'quota' | 'auth' | 'ready'): Promise<string> {
     const items = [...s.items.values()];
-    const opens = this.cooldowns.limitedUntil(from, Date.now());
+    const opens = this.cooldowns.limitedUntil(this.canon(from), Date.now());
     return buildHandoff({
       lang: lang(),
       kind,
@@ -942,7 +951,7 @@ export class SessionManager extends EventEmitter {
     const from = s.runAccount || this.accountOf(s);
     if (s.home === null) Object.assign(s, { home: s.accountId, fallbackAt: Date.now(), fallbackMark: s.items.size });
     s.fallbackModel = step.model;
-    const opens = this.cooldowns.limitedUntil(from, Date.now());
+    const opens = this.cooldowns.limitedUntil(this.canon(from), Date.now());
     const when = opens ? ` ${t('fallback.until', { time: new Date(opens).toLocaleTimeString(lang(), { hour: '2-digit', minute: '2-digit' }) })}` : '';
     this.notice(s, t('notice.fallbackAway', { from: this.accountName(from), to: this.accountName(step.account), when }), 'info');
     if (s.role === 'worker') this.notifyMaster(t('hub.fallback', { name: displayName(s), from: this.accountName(from), to: this.accountName(step.account) }), t('hub.fallback.note', { reason }), s);
@@ -988,7 +997,7 @@ export class SessionManager extends EventEmitter {
           return true;
         }
         if (step) {
-          void this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(account) === 'quota' ? 'quota' : 'rate').then((note) => {
+          void this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(this.canon(account)) === 'quota' ? 'quota' : 'rate').then((note) => {
             this.moveAway(s, step, 'rate', { ...prompt, text: `${note}\n\n${prompt.text}` });
           });
           return true;
@@ -1145,7 +1154,7 @@ export class SessionManager extends EventEmitter {
       }));
     // The status bar shows the limits of the master's account.
     const master = this.sessions.get(MASTER_ID);
-    const limits = this.rateLimits.get(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT) ?? null;
+    const limits = this.rateLimits.get(this.canon(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT)) ?? null;
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
     return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
@@ -1243,7 +1252,7 @@ export class SessionManager extends EventEmitter {
     const account = this.accountOf(s);
     const harness = harnessOf(this.kindOf(account));
     const adapter = adapterFor(harness);
-    const executable = harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable();
+    const executable = this.executableOf(harness);
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
     if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account) }))) {
       resume = false;
@@ -1328,11 +1337,11 @@ export class SessionManager extends EventEmitter {
     if (this.quitting) return;
     // The program is missing: the fix is in the settings, not in the conversation.
     const noClaude = noProgram && harness === 'claude';
-    const noCodex = noProgram && harness === 'codex';
-    s.error = noClaude ? t('error.noClaude') : noCodex ? t('error.noCodex') : humanError(failure);
+    const noOther = noProgram && harness !== 'claude';
+    s.error = noClaude ? t('error.noClaude') : noOther ? t(harness === 'gemini' ? 'error.noGemini' : 'error.noCodex') : humanError(failure);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
-    else if (noCodex) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noCodex'), tone: 'error', action: 'accounts-settings' });
+    else if (noOther) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(harness === 'gemini' ? 'notice.noGemini' : 'notice.noCodex'), tone: 'error', action: 'accounts-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);
   }
@@ -1578,7 +1587,7 @@ export class SessionManager extends EventEmitter {
       const init = await q.ready();
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
       if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount)) && !this.pinned(s.runAccount)) this.modelInfos = init.models;
-      else if (init.models.length > 0 && this.kindOf(s.runAccount) === 'codex') this.setCatalog(s.runAccount, init.models);
+      else if (init.models.length > 0 && harnessOf(this.kindOf(s.runAccount)) !== 'claude') this.setCatalog(s.runAccount, init.models);
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
       return; // The session failed to start: consume() reports it.
@@ -1658,7 +1667,7 @@ export class SessionManager extends EventEmitter {
 
   /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
   private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
-    const account = s.runAccount || DEFAULT_ACCOUNT;
+    const account = this.canon(s.runAccount || DEFAULT_ACCOUNT);
     if (this.kindOf(account) === 'openai' || this.kindOf(account) === 'anthropic-compatible' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
     this.usageCheckedAt.set(account, Date.now());
     try {
@@ -1853,7 +1862,7 @@ export class SessionManager extends EventEmitter {
     try {
       const account = s.runAccount || this.accountOf(s);
       const harness = harnessOf(this.kindOf(account));
-      const ctx = { executable: harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable(), env: this.environment(account) };
+      const ctx = { executable: this.executableOf(harness), env: this.environment(account) };
       const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd, ctx)).slice(-HISTORY_MAX);
       for (const m of messages) {
         const { blocks } = m;
@@ -3090,14 +3099,20 @@ export class SessionManager extends EventEmitter {
       label: modelLabel(m.value, m.displayName),
       description: m.description && !this.modelInfos.includes(m) ? m.description : modelHint(m.value, m.displayName),
       efforts: m.efforts,
+      ...(m.noEffort ? { noEffort: true } : {}),
     }));
   }
 
   /** The model list of the program an account runs on. */
-  /** The account offers models of its own (Codex, OpenAI's API, DeepSeek) rather than Claude's. */
+  /** The program an account's sessions run (its path, empty when it was not found). */
+  private executableOf(harness: HarnessId): string {
+    return harness === 'claude' ? this.opts.executable() : harness === 'codex' ? this.opts.codexExecutable() : this.opts.geminiExecutable();
+  }
+
+  /** The account offers models of its own (Codex, Gemini, OpenAI's API, DeepSeek) rather than Claude's. */
   private ownCatalog(account: string): boolean {
     const a = this.opts.cfg.accounts.find((x) => x.id === account);
-    return !!a && (a.kind === 'codex' || a.kind === 'openai' || providerOfAccount(a) === 'deepseek');
+    return !!a && (a.kind === 'codex' || a.kind === 'gemini' || a.kind === 'gemini-key' || a.kind === 'openai' || providerOfAccount(a) === 'deepseek');
   }
 
   private catalogOf(account: string): AgentModel[] {
@@ -3145,12 +3160,12 @@ export class SessionManager extends EventEmitter {
       s.modelLabel = modelId;
       return;
     }
-    if (s.runAccount && this.kindOf(s.runAccount) === 'codex') {
+    if (s.runAccount && harnessOf(this.kindOf(s.runAccount)) !== 'claude' && this.ownCatalog(s.runAccount)) {
       s.model = modelId;
       s.modelLabel = this.catalogOf(s.runAccount).find((m) => m.value === modelId)?.displayName ?? modelId;
       return;
     }
-    if (s.runAccount && this.ownCatalog(s.runAccount) && this.kindOf(s.runAccount) !== 'codex') {
+    if (s.runAccount && this.ownCatalog(s.runAccount)) {
       // OpenAI's API or DeepSeek: the session's pick if the account has it, else what runs; DeepSeek says only its own name.
       const catalog = this.catalogOf(s.runAccount);
       const picked = catalog.find((m) => m.value === s.fixedModel);

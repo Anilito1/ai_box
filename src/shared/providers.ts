@@ -5,9 +5,9 @@ import type { Account, AccountKind } from './types';
 // editor. Under a provider there is an account of the hub (what sessions actually run on): the user never sees it.
 // To add a provider (a local model, say), add an entry here, a way to connect it in main/providers.ts, and its card.
 
-export type ProviderId = 'anthropic' | 'openai' | 'deepseek';
-/** How a provider is connected: its program's own sign-in (`cli`, `chatgpt`), or an API key. */
-export type ProviderMethod = 'cli' | 'chatgpt' | 'apikey';
+export type ProviderId = 'anthropic' | 'openai' | 'deepseek' | 'gemini';
+/** How a provider is connected: its program's own sign-in (`cli`, `chatgpt`, `google`), or an API key. */
+export type ProviderMethod = 'cli' | 'chatgpt' | 'google' | 'apikey';
 
 export interface ProviderDef {
   id: ProviderId;
@@ -22,6 +22,7 @@ export const PROVIDER_DEFS: ProviderDef[] = [
   { id: 'anthropic', label: 'Anthropic', methods: ['cli'], keyUrl: '' },
   { id: 'openai', label: 'OpenAI', methods: ['chatgpt', 'apikey'], keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'deepseek', label: 'DeepSeek', methods: ['apikey'], keyUrl: 'https://platform.deepseek.com/api_keys' },
+  { id: 'gemini', label: 'Gemini', methods: ['google', 'apikey'], keyUrl: 'https://aistudio.google.com/apikey' },
 ];
 
 export const PROVIDER_IDS: ProviderId[] = PROVIDER_DEFS.map((p) => p.id);
@@ -29,7 +30,7 @@ export const isProviderId = (v: unknown): v is ProviderId => typeof v === 'strin
 export const providerDef = (id: ProviderId): ProviderDef => PROVIDER_DEFS.find((p) => p.id === id) as ProviderDef;
 
 /** The names of the accounts the hub makes for a provider; the user does not choose them. */
-export const MANAGED_NAMES = { chatgpt: 'OpenAI (ChatGPT)', openaiKey: 'OpenAI (API)', deepseek: 'DeepSeek' } as const;
+export const MANAGED_NAMES = { chatgpt: 'OpenAI (ChatGPT)', openaiKey: 'OpenAI (API)', deepseek: 'DeepSeek', google: 'Gemini (Google)', geminiKey: 'Gemini (API)' } as const;
 export const DEEPSEEK_URL = 'https://api.deepseek.com/anthropic';
 
 const host = (url: string) => {
@@ -41,19 +42,20 @@ const host = (url: string) => {
 };
 
 /** The provider an account belongs to, null for an account none of the blocks stands for (an older, hand-made one). */
-export function providerOfAccount(a: Pick<Account, 'kind' | 'baseUrl'> | typeof DEFAULT_ACCOUNT): ProviderId | null {
-  if (a === DEFAULT_ACCOUNT) return 'anthropic';
+export function providerOfAccount(a: Pick<Account, 'kind' | 'baseUrl'> | typeof DEFAULT_ACCOUNT | 'own'): ProviderId | null {
+  if (typeof a === 'string') return 'anthropic';
   const kind: AccountKind = a.kind;
   if (kind === 'claude' || kind === 'anthropic-key') return 'anthropic';
   if (kind === 'codex') return 'openai';
+  if (kind === 'gemini' || kind === 'gemini-key') return 'gemini';
   if (kind === 'openai') return host(a.baseUrl) === host(OPENAI_URL) ? 'openai' : null;
   return host(a.baseUrl) === host(DEEPSEEK_URL) ? 'deepseek' : null;
 }
 
 /** The method an account of a provider stands for. */
-export function methodOfAccount(a: Pick<Account, 'kind'> | typeof DEFAULT_ACCOUNT): ProviderMethod {
-  if (a === DEFAULT_ACCOUNT) return 'cli';
-  return a.kind === 'codex' ? 'chatgpt' : a.kind === 'claude' ? 'cli' : 'apikey';
+export function methodOfAccount(a: Pick<Account, 'kind'> | typeof DEFAULT_ACCOUNT | 'own'): ProviderMethod {
+  if (typeof a === 'string') return 'cli';
+  return a.kind === 'codex' ? 'chatgpt' : a.kind === 'gemini' ? 'google' : a.kind === 'claude' ? 'cli' : 'apikey';
 }
 
 /**
@@ -88,7 +90,7 @@ export interface ProviderState {
  */
 export function resolveProvider(states: Partial<Record<ProviderId, ProviderState>>, id: unknown): { account: string } | { error: 'unknown' | 'disconnected' } {
   const key = typeof id === 'string' ? id.trim().toLowerCase() : '';
-  const alias: Record<string, ProviderId> = { claude: 'anthropic', codex: 'openai', chatgpt: 'openai' };
+  const alias: Record<string, ProviderId> = { claude: 'anthropic', codex: 'openai', chatgpt: 'openai', google: 'gemini' };
   const provider = isProviderId(key) ? key : alias[key];
   if (!provider) return { error: 'unknown' };
   const state = states[provider] ?? (provider === 'anthropic' ? { connected: true, accountId: DEFAULT_ACCOUNT, method: 'cli' as const } : null);

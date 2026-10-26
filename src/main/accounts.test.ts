@@ -16,7 +16,7 @@ mkdirSync(join(base, 'skills'));
 process.env.CLAUDE_CONFIG_DIR = base;
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const { accountDir, accountEnv, checkAnthropicCompatible, prepareClaudeDir, prepareCodexDir, removeClaudeDir, removeCodexDir } = await import('./accounts');
+const { accountDir, accountEnv, checkAnthropicCompatible, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } = await import('./accounts');
 const { createServer } = await import('node:http');
 type Account = import('../shared/types').Account;
 const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '', isolated: false };
@@ -115,4 +115,22 @@ test('checkAnthropicCompatible: a refused key is refused; a server without a mod
   } finally {
     server.close();
   }
+});
+
+test('accountEnv: a Gemini account has a folder of its own for the CLI; the key only for a key account, the user’s own variables dropped', () => {
+  const ctx = { dataDir: data, key: 'AIza-key', bridge: { url: '', token: '' } };
+  const google: Account = { ...claude, id: 'a-gem00001', kind: 'gemini', isolated: true };
+  const g = accountEnv(google, ctx);
+  assert.equal(g.set.GEMINI_CLI_HOME, accountDir(data, google.id));
+  assert.equal(g.set.GEMINI_API_KEY, undefined, 'a Google sign-in never carries a key');
+  assert.ok(g.unset.includes('GEMINI_API_KEY') && g.unset.includes('GOOGLE_GENAI_USE_VERTEXAI'));
+  assert.ok(existsSync(join(accountDir(data, google.id), '.gemini')));
+  const k = accountEnv({ ...google, id: 'a-gem00002', kind: 'gemini-key' }, ctx);
+  assert.equal(k.set.GEMINI_API_KEY, 'AIza-key');
+  assert.equal(k.set.GEMINI_CLI_HOME, accountDir(data, 'a-gem00002'));
+  assert.equal(accountEnv({ ...google, id: 'a-gem00002', kind: 'gemini-key' }, { ...ctx, key: '' }).set.GEMINI_API_KEY, undefined);
+  prepareGeminiDir(accountDir(data, google.id));
+  removeGeminiDir(data, google.id);
+  removeGeminiDir(data, 'a-gem00002');
+  assert.ok(!existsSync(accountDir(data, google.id)));
 });

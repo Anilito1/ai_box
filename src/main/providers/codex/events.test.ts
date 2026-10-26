@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { errorCodeOf, errorName, historyOf, limitOf, resetOf, CodexStream } from './events';
+import { errorCodeOf, errorName, errorStatus, historyOf, limitOf, resetOf, CodexStream } from './events';
 import { clampEffort, policyOf, sandboxPolicy } from './modes';
 import { modelsOf, rateLimitsOf, userInputOf } from './adapter';
 import { versionAtLeast } from './cli';
@@ -152,4 +152,17 @@ test('versionAtLeast compares numbers, not strings', () => {
   assert.equal(versionAtLeast('0.170.2', '0.163.0'), true);
   assert.equal(versionAtLeast('0.9.0', '0.163.0'), false);
   assert.equal(versionAtLeast('1.0.0-beta', '0.163.0'), true);
+});
+
+test('a stream cut with 401 (no sign-in) is an authentication problem, not a server one; a 429 a rate limit', () => {
+  const info = { responseStreamDisconnected: { httpStatusCode: 401 } };
+  assert.equal(errorStatus(info), 401);
+  assert.equal(errorStatus('unauthorized'), 0);
+  assert.equal(errorCodeOf(errorName(info), errorStatus(info)), 'authentication_failed');
+  assert.equal(errorCodeOf('responseStreamDisconnected', 429), 'rate_limit');
+  assert.deepEqual(limitOf('responseStreamDisconnected', null, 401), { kind: 'auth', resetsAt: null, source: 'codex:401' });
+  const s = new CodexStream(() => 'm');
+  const events = s.handle('error', { error: { message: 'x', codexErrorInfo: info }, willRetry: false, turnId: 't' });
+  assert.equal(events[0].type === 'limit' && events[0].signal.kind, 'auth');
+  assert.equal(events[1].type === 'assistant' && events[1].error, 'authentication_failed');
 });

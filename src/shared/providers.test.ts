@@ -13,6 +13,10 @@ test('which provider an account belongs to: by kind, and by address for the serv
   assert.equal(providerOfAccount(acct('openai', 'https://openrouter.ai/api/v1')), null, 'a hand-made one stands for no block');
   assert.equal(providerOfAccount(acct('anthropic-compatible', 'https://api.deepseek.com/anthropic')), 'deepseek');
   assert.equal(providerOfAccount(acct('anthropic-compatible', 'https://elsewhere.example/anthropic')), null);
+  assert.equal(providerOfAccount(acct('gemini')), 'gemini');
+  assert.equal(providerOfAccount(acct('gemini-key')), 'gemini');
+  assert.equal(methodOfAccount(acct('gemini')), 'google');
+  assert.equal(methodOfAccount(acct('gemini-key')), 'apikey');
   assert.equal(methodOfAccount(acct('codex')), 'chatgpt');
   assert.equal(methodOfAccount(acct('openai')), 'apikey');
   assert.equal(methodOfAccount('default'), 'cli');
@@ -22,6 +26,7 @@ test('a provider is asked for by its id or the name of its program; only a conne
   const states = { openai: { connected: true, accountId: 'a-oai00001', method: 'chatgpt' as const }, deepseek: { connected: false, accountId: '', method: '' as const } };
   assert.deepEqual(resolveProvider(states, 'openai'), { account: 'a-oai00001' });
   assert.deepEqual(resolveProvider(states, ' Codex '), { account: 'a-oai00001' });
+  assert.deepEqual(resolveProvider({ gemini: { connected: true, accountId: 'a-gem00001', method: 'google' } }, 'Google'), { account: 'a-gem00001' });
   assert.deepEqual(resolveProvider(states, 'deepseek'), { error: 'disconnected' });
   assert.deepEqual(resolveProvider(states, 'mistral'), { error: 'unknown' });
   assert.deepEqual(resolveProvider(states, undefined), { error: 'unknown' });

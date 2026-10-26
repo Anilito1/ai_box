@@ -113,8 +113,16 @@ export function errorName(info: unknown): string {
   return Object.keys(obj(info))[0] ?? '';
 }
 
-/** The code the hub's error wording knows (see errors.ts), for an error of Codex. */
-export function errorCodeOf(name: string): string {
+/** The HTTP status Codex forwards inside an error (`{ responseStreamDisconnected: { httpStatusCode: 401 } }`), else 0. */
+export function errorStatus(info: unknown): number {
+  const inner = obj(Object.values(obj(info))[0]);
+  return num(inner.httpStatusCode);
+}
+
+/** The code the hub's error wording knows (see errors.ts), for an error of Codex; the status it forwards counts. */
+export function errorCodeOf(name: string, status = 0): string {
+  if (status === 401 || status === 403) return 'authentication_failed';
+  if (status === 429) return 'rate_limit';
   switch (name) {
     case 'usageLimitExceeded':
     case 'rateLimitExceeded':
@@ -155,7 +163,9 @@ export function resetOf(snapshot: Json | null): number | null {
   return num(cap.resetsAt) > 0 ? num(cap.resetsAt) : null;
 }
 
-export function limitOf(name: string, snapshot: Json | null): LimitSignal | null {
+export function limitOf(name: string, snapshot: Json | null, status = 0): LimitSignal | null {
+  if (status === 401 || status === 403) return { kind: 'auth', resetsAt: null, source: `codex:${status}` };
+  if (status === 429) return { kind: 'rate', resetsAt: resetOf(snapshot), source: 'codex:429' };
   if (name === 'usageLimitExceeded') return { kind: 'quota', resetsAt: resetOf(snapshot), source: 'codex:usageLimitExceeded' };
   if (name === 'rateLimitExceeded') return { kind: 'rate', resetsAt: resetOf(snapshot), source: 'codex:rateLimitExceeded' };
   if (name === 'unauthorized') return { kind: 'auth', resetsAt: null, source: 'codex:unauthorized' };
@@ -223,10 +233,11 @@ export class CodexStream {
         const error = obj(p.error);
         if (p.willRetry === true) return [{ type: 'retry' }];
         const name = errorName(error.codexErrorInfo);
+        const status = errorStatus(error.codexErrorInfo);
         const events: AgentEvent[] = [];
-        const limit = limitOf(name, this.limits);
+        const limit = limitOf(name, this.limits, status);
         if (limit) events.push({ type: 'limit', signal: limit });
-        events.push({ type: 'assistant', id: `error-${str(p.turnId) || Date.now()}`, blocks: [], error: errorCodeOf(name), contextTokens: 0 });
+        events.push({ type: 'assistant', id: `error-${str(p.turnId) || Date.now()}`, blocks: [], error: errorCodeOf(name, status), contextTokens: 0 });
         return events;
       }
       case 'turn/completed': {

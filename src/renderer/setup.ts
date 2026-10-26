@@ -1275,6 +1275,7 @@ export class SetupView {
       required: 'setup.accounts.err.noKey',
       'no-claude': 'setup.claude.notFound',
       'no-codex': 'setup.accounts.err.noCodex',
+      'no-gemini': 'setup.accounts.err.noGemini',
       timeout: 'setup.claude.timeout',
       'probe-failed': 'setup.claude.probeFailed',
       'not-found': 'setup.accounts.err.notFound',

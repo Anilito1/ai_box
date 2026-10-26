@@ -11,7 +11,9 @@ export { APP_NAME } from './brand';
 export type Role = 'master' | 'worker';
 export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
 /** The program that runs an agent: Claude Code (also for Anthropic-compatible and bridged accounts) or Codex. */
-export type HarnessId = 'claude' | 'codex';
+export type HarnessId = 'claude' | 'codex' | 'gemini';
+/** Every harness there is: a Record, so adding one to HarnessId fails to compile until it is listed here (and tested). */
+export const HARNESSES: Record<HarnessId, true> = { claude: true, codex: true, gemini: true };
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 import type { FallbackConfig } from './fallback';
 import type { ProviderId, ProviderMethod } from './providers';
@@ -37,6 +39,8 @@ export interface ModelOption {
   label: string;
   description: string;
   efforts: Effort[];
+  /** The model takes no effort setting (Gemini's): the menu shows none. */
+  noEffort?: boolean;
 }
 
 export interface Metrics {
@@ -83,10 +87,12 @@ export interface TeamRole {
  * account signed in through Claude Code's own sign-in, in a Claude Code folder of its own; `anthropic-key`: an
  * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge;
  * `anthropic-compatible`: any server that speaks Anthropic's Messages API (DeepSeek…), reached by Claude Code directly;
- * `codex`: a ChatGPT account signed in through Codex's own sign-in, driven by the Codex program (its own harness).
+ * `codex`: a ChatGPT account signed in through Codex's own sign-in, driven by the Codex program (its own harness);
+ * `gemini`: a Google account signed in through the Gemini CLI's own sign-in, `gemini-key`: a Gemini API key, both driven
+ * by the Gemini CLI over its Agent Client Protocol (a harness of its own).
  */
-export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'anthropic-compatible' | 'codex';
-export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'anthropic-compatible', 'codex'];
+export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'anthropic-compatible' | 'codex' | 'gemini' | 'gemini-key';
+export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'anthropic-compatible', 'codex', 'gemini', 'gemini-key'];
 
 export interface Account {
   /** "a-" + 8 characters, made by the main process. */
@@ -402,6 +408,20 @@ export interface ProviderBadge {
   models: ModelOption[];
 }
 
+/** An Anthropic account in its block: who it is, whether it is signed in, whether it is the one in use. */
+export interface ProviderAccountView {
+  /** An account id, or "own" for the user's own Claude Code sign-in. */
+  id: string;
+  name: string;
+  /** Email and plan, once signed in. */
+  detail: string;
+  connected: boolean;
+  error: string;
+  active: boolean;
+  /** An account the hub made: it can be removed. The user's own sign-in cannot. */
+  removable: boolean;
+}
+
 /** One way of connecting a provider, as its block in Settings › Accounts shows it. */
 export interface MethodView {
   connected: boolean;
@@ -426,6 +446,8 @@ export interface ProviderView {
   connected: boolean;
   /** The method that is connected (the first when several are), else empty. */
   method: ProviderMethod | '';
+  /** Anthropic only: the accounts there are, the active one marked. */
+  accounts?: ProviderAccountView[];
   methods: Partial<Record<ProviderMethod, MethodView>>;
   /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
   cli: { found: boolean; version: string; outdated: boolean } | null;
@@ -509,6 +531,8 @@ export interface HubSettings {
   /** Account the master runs on, and the one workers run on unless their post or the user picks another. */
   masterAccount: string;
   workerAccount: string;
+  /** The Anthropic account "default" stands for: an account id, or empty for the user's own Claude Code sign-in. */
+  anthropicActive: string;
   /** Automatic fallback to another account when one reaches a limit. */
   fallback: FallbackConfig;
   /** Instances of one post at the same time (its own worker included), and workers running at the same time. */
@@ -545,7 +569,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts' | 'anthropicActive'>> & {
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -659,6 +683,8 @@ export interface HubApi {
   /** Opens the program's own sign-in in a terminal window; false when none could open. */
   loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean>;
   disconnectProvider(provider: ProviderId, method: ProviderMethod): Promise<ProviderResult>;
+  /** Anthropic's accounts: use one (make it the active one), add one, sign one in again, remove one. */
+  anthropicAccount(action: 'use' | 'add' | 'login' | 'remove', id: string): Promise<ProviderResult & { opened: boolean }>;
   /**
    * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
    * '' to remove it. A key is checked with its service first; `field` names the field refused.

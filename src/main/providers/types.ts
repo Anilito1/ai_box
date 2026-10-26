@@ -17,6 +17,8 @@ export interface AgentModel {
   /** The canonical model id `value` stands for (an alias), when known. */
   resolvedModel?: string;
   efforts: Effort[];
+  /** The model takes no effort setting. */
+  noEffort?: boolean;
 }
 
 /** A command or skill of the program (typed with a "/"), as it lists them. */

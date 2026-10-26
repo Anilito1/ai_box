@@ -1,5 +1,5 @@
-import { providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
-import type { HubApi, ProviderView } from '../shared/types';
+import { PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
+import type { HubApi, ProviderAccountView, ProviderView } from '../shared/types';
 import { h } from './dom';
 import { t } from './i18n';
 
@@ -14,6 +14,13 @@ const MARK: Record<ProviderId, { letter: string; color: string }> = {
   anthropic: { letter: 'A', color: '#d97757' },
   openai: { letter: 'O', color: '#10a37f' },
   deepseek: { letter: 'D', color: '#4d6bfe' },
+  gemini: { letter: 'G', color: '#4285f4' },
+};
+
+/** The providers that offer their program's own sign-in beside an API key: how each says it. */
+const TWO_WAYS: Partial<Record<ProviderId, { login: ProviderMethod; install: string }>> = {
+  openai: { login: 'chatgpt', install: 'npm install -g @openai/codex' },
+  gemini: { login: 'google', install: 'npm install -g @google/gemini-cli' },
 };
 
 export interface PanelHost {
@@ -35,7 +42,10 @@ export class ProvidersPanel {
   private readonly keys: Partial<Record<ProviderId, string>> = {};
   private readonly errors: Partial<Record<ProviderId, string>> = {};
   private confirming: ProviderId | '' = '';
-  private waiting: { provider: ProviderId; until: number } | null = null;
+  private waiting: { provider: ProviderId; until: number; account?: string } | null = null;
+  /** The Anthropic account whose removal or sign-out waits for a yes, and the one an action is running on. */
+  private confirmAccount = '';
+  private busyAccount = '';
   private timer = 0;
 
   constructor(
@@ -48,6 +58,7 @@ export class ProvidersPanel {
     window.clearTimeout(this.timer);
     this.waiting = null;
     this.confirming = '';
+    this.confirmAccount = '';
     for (const k of Object.keys(this.keys) as ProviderId[]) delete this.keys[k];
     for (const k of Object.keys(this.errors) as ProviderId[]) delete this.errors[k];
   }
@@ -56,7 +67,7 @@ export class ProvidersPanel {
   mount(el: HTMLElement): void {
     if (!this.views && !this.loading) void this.refresh();
     const wrap = h('div', 'provider-cards');
-    for (const def of ['anthropic', 'openai', 'deepseek'] as ProviderId[]) wrap.append(this.card(def));
+    for (const def of PROVIDER_DEFS) wrap.append(this.card(def.id));
     el.append(wrap);
   }
 
@@ -70,7 +81,8 @@ export class ProvidersPanel {
       this.loading = false;
     }
     const w = this.waiting;
-    if (w && this.views.find((v) => v.id === w.provider)?.connected) this.waiting = null;
+    const view = w ? this.views.find((v) => v.id === w.provider) : undefined;
+    if (w && (w.account ? view?.accounts?.find((a) => a.id === w.account)?.connected : view?.connected)) this.waiting = null;
     this.host.rerender();
   }
 
@@ -114,7 +126,7 @@ export class ProvidersPanel {
 
     const body = h('div', 'provider-body');
     if (id === 'anthropic') this.anthropicBody(body, v);
-    else if (id === 'openai') this.openaiBody(body, v);
+    else if (TWO_WAYS[id]) this.twoWaysBody(body, id, v);
     else this.keyBody(body, id, v, 'apikey');
     if (error) body.append(h('div', 'provider-error', error));
     card.append(body);
@@ -138,8 +150,69 @@ export class ProvidersPanel {
       el.append(h('p', 'provider-hint', t('provider.anthropic.missing')), this.button(t('provider.anthropic.install'), 'btn primary small', () => void this.install()));
       return;
     }
-    if (v.connected) return el.append(this.disconnectRow('anthropic', 'cli', t('provider.anthropic.confirm')));
-    el.append(h('p', 'provider-hint', t('provider.anthropic.hint')), this.signIn('anthropic', 'cli', t('provider.anthropic.signIn')));
+    // Several accounts: the active one serves the master and the new workers; one at work keeps its own.
+    const accounts = v.accounts ?? [];
+    el.append(h('p', 'provider-hint', t(accounts.length > 1 ? 'provider.accounts.hint' : 'provider.anthropic.hint')));
+    const list = h('div', 'provider-accounts');
+    for (const a of accounts) list.append(this.accountRow(a));
+    el.append(list);
+    el.append(this.button(this.busyAccount === 'add' ? t('provider.connecting') : t('provider.accounts.add'), 'btn ghost small', () => void this.accountAction('add', ''), this.busyAccount !== ''));
+  }
+
+  private accountRow(a: ProviderAccountView): HTMLElement {
+    const row = h('div', a.active ? 'provider-account active' : 'provider-account');
+    const text = h('div', 'provider-account-text');
+    const title = h('div', 'provider-account-title');
+    title.append(h('b', '', a.name));
+    if (a.active) title.append(h('span', 'setup-pill', t('provider.accounts.active')));
+    title.append(a.connected ? h('span', 'setup-pill ok', t('provider.connected')) : h('span', 'setup-pill warn', t(a.removable ? 'provider.accounts.expired' : 'provider.disconnected')));
+    text.append(title);
+    if (a.detail) text.append(h('span', 'provider-sub', a.detail));
+    if (this.waiting?.account === a.id) text.append(h('span', 'provider-wait', t('provider.waiting')));
+    const actions = h('div', 'provider-account-actions');
+    const busy = this.busyAccount !== '';
+    if (this.confirmAccount === a.id) {
+      actions.append(
+        h('span', 'provider-hint', t(a.removable ? 'provider.accounts.removeConfirm' : 'provider.anthropic.confirm', { name: a.name })),
+        this.button(t(a.removable ? 'provider.accounts.remove' : 'provider.disconnect'), 'btn danger small', () => void this.accountAction(a.removable ? 'remove' : 'logout', a.id), busy),
+        this.button(t('setup.cancel'), 'btn ghost small', () => {
+          this.confirmAccount = '';
+          this.host.rerender();
+        }),
+      );
+    } else {
+      if (!a.active && a.connected) actions.append(this.button(t('provider.accounts.use'), 'btn primary small', () => void this.accountAction('use', a.id), busy));
+      if (!a.connected) actions.append(this.button(t('provider.accounts.relogin'), 'btn primary small', () => void this.accountAction('login', a.id), busy));
+      if (a.removable || a.connected) {
+        actions.append(
+          this.button(t(a.removable ? 'provider.accounts.remove' : 'provider.disconnect'), 'btn ghost small', () => {
+            this.confirmAccount = a.id;
+            this.host.rerender();
+          }, busy),
+        );
+      }
+    }
+    row.append(text, actions);
+    return row;
+  }
+
+  private async accountAction(action: 'use' | 'add' | 'login' | 'remove' | 'logout', id: string): Promise<void> {
+    this.busyAccount = action === 'add' ? 'add' : id;
+    this.confirmAccount = '';
+    delete this.errors.anthropic;
+    this.host.rerender();
+    // Signing the user's own account out is the provider's own sign-out.
+    const r = action === 'logout' ? { ...(await this.hub.disconnectProvider('anthropic', 'cli')), opened: false } : await this.hub.anthropicAccount(action, id);
+    this.busyAccount = '';
+    if (r.views.length > 0) this.views = r.views;
+    if (!r.ok) this.errors.anthropic = r.error || 'unknown';
+    // A sign-in was opened in a terminal window: the account is looked at every few seconds until it is in.
+    const account = action === 'add' ? this.views?.find((v) => v.id === 'anthropic')?.accounts?.at(-1)?.id : id;
+    if (r.opened && account) {
+      this.waiting = { provider: 'anthropic', until: Date.now() + WAIT_MS, account };
+      this.watch();
+    }
+    this.host.rerender();
   }
 
   private async install(): Promise<void> {
@@ -149,33 +222,35 @@ export class ProvidersPanel {
     this.host.rerender();
   }
 
-  // ---------- OpenAI: ChatGPT sign-in or an API key ----------
+  // ---------- OpenAI, Gemini: the program's own sign-in (ChatGPT, Google) or an API key ----------
 
-  private openaiBody(el: HTMLElement, v: ProviderView | undefined): void {
-    if (!v) return;
-    const method: ProviderMethod = this.shown.openai ?? (v.method || 'chatgpt');
+  private twoWaysBody(el: HTMLElement, id: ProviderId, v: ProviderView | undefined): void {
+    const way = TWO_WAYS[id];
+    if (!v || !way) return;
+    const pre = `provider.${id}`;
+    const method: ProviderMethod = this.shown[id] ?? (v.method || way.login);
     const seg = h('div', 'provider-methods');
-    for (const m of ['chatgpt', 'apikey'] as const) {
+    for (const m of [way.login, 'apikey'] as ('chatgpt' | 'google' | 'apikey')[]) {
       const on = v.methods[m]?.connected;
       const b = h('button', m === method ? 'seg active' : 'seg', `${t(`provider.method.${m}`)}${on ? ' ✓' : ''}`);
       b.addEventListener('click', () => {
-        this.shown.openai = m;
-        delete this.errors.openai;
+        this.shown[id] = m;
+        delete this.errors[id];
         this.host.rerender();
       });
       seg.append(b);
     }
     el.append(seg);
-    if (method === 'apikey') return this.keyBody(el, 'openai', v, 'apikey');
+    if (method === 'apikey') return this.keyBody(el, id, v, 'apikey');
 
     const cli = v.cli;
     if (cli && !cli.found) {
-      el.append(h('p', 'provider-hint', t('provider.openai.missing')), h('code', 'provider-code', 'npm install -g @openai/codex'));
+      el.append(h('p', 'provider-hint', t(`${pre}.missing` as Parameters<typeof t>[0])), h('code', 'provider-code', way.install));
       return;
     }
-    if (cli?.outdated) el.append(h('p', 'provider-hint warn', t('provider.openai.outdated', { version: cli.version })));
-    if (v.methods.chatgpt?.connected) return el.append(this.disconnectRow('openai', 'chatgpt', t('provider.openai.confirm')));
-    el.append(h('p', 'provider-hint', t('provider.openai.hint')), this.signIn('openai', 'chatgpt', t('provider.openai.signIn')));
+    if (cli?.outdated) el.append(h('p', 'provider-hint warn', t(`${pre}.outdated` as Parameters<typeof t>[0], { version: cli.version })));
+    if (v.methods[way.login]?.connected) return el.append(this.disconnectRow(id, way.login, t(`${pre}.confirm` as Parameters<typeof t>[0])));
+    el.append(h('p', 'provider-hint', t(`${pre}.hint` as Parameters<typeof t>[0])), this.signIn(id, way.login, t(`${pre}.signIn` as Parameters<typeof t>[0])));
   }
 
   // ---------- API key (DeepSeek, OpenAI's key) ----------
@@ -197,7 +272,7 @@ export class ProvidersPanel {
     });
     const go = this.button(this.busy.has(id) ? t('provider.connecting') : t('provider.connect'), 'btn primary', () => void this.connect(id, method), this.busy.has(id));
     row.append(input, go);
-    el.append(h('p', 'provider-hint', t(id === 'openai' ? 'provider.openai.keyHint' : 'provider.deepseek.hint')), row);
+    el.append(h('p', 'provider-hint', t(`provider.${id}.${id === 'deepseek' ? 'hint' : 'keyHint'}` as Parameters<typeof t>[0])), row);
     const url = providerDef(id).keyUrl;
     if (url) {
       const link = h('button', 'setup-link', t('provider.key.where', { name: providerDef(id).label }));
@@ -229,7 +304,7 @@ export class ProvidersPanel {
     const box = h('div', 'provider-actions');
     const waiting = this.waiting?.provider === id;
     box.append(this.button(label, 'btn primary', () => void this.login(id, method), this.busy.has(id)));
-    if (waiting) box.append(h('span', 'provider-wait', t('provider.waiting')));
+    if (waiting) box.append(h('span', 'provider-wait', t(method === 'google' ? 'provider.waitingBrowser' : 'provider.waiting')));
     return box;
   }
 
@@ -242,7 +317,7 @@ export class ProvidersPanel {
     if (opened) {
       this.waiting = { provider: id, until: Date.now() + WAIT_MS };
       this.watch();
-    } else this.errors[id] = id === 'openai' ? 'no-codex' : 'no-terminal';
+    } else this.errors[id] = id === 'openai' ? 'no-codex' : id === 'gemini' ? 'no-gemini' : 'no-terminal';
     this.host.rerender();
   }
 

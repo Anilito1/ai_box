@@ -127,6 +127,15 @@ export function accountEnv(account: Account, ctx: AccountEnvContext): { set: Rec
       prepareCodexDir(dir);
       return { set: { CODEX_HOME: dir }, unset };
     }
+    case 'gemini':
+    case 'gemini-key': {
+      // The Gemini CLI keeps what belongs to an account under GEMINI_CLI_HOME/.gemini: a folder of the hub's own per
+      // account. A key in the user's environment would take the place of the Google sign-in this account stands for.
+      const dir = accountDir(ctx.dataDir, account.id);
+      prepareGeminiDir(dir);
+      const unset = ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_APPLICATION_CREDENTIALS'];
+      return { set: { GEMINI_CLI_HOME: dir, ...(account.kind === 'gemini-key' && ctx.key ? { GEMINI_API_KEY: ctx.key } : {}) }, unset };
+    }
     case 'anthropic-compatible': {
       // Claude Code talks to the server itself. With no model named, Claude's own names go out and the server maps
       // them (DeepSeek: names that start with "claude"); with one, every name lands on it.
@@ -195,6 +204,18 @@ export function prepareCodexDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = join(dir, 'config.toml');
   if (!existsSync(config)) writeFileSync(config, '# Written by Claude Hub. This folder is one Codex account of the hub: its sign-in and its sessions.\n', { mode: 0o600 });
+}
+
+/** Makes the folder of a Gemini account: the CLI's home for it, where it keeps the sign-in and the conversations. */
+export function prepareGeminiDir(dir: string): void {
+  mkdirSync(join(dir, '.gemini'), { recursive: true, mode: 0o700 });
+}
+
+/** Removes a Gemini account's folder: with it goes the sign-in the CLI kept there. */
+export function removeGeminiDir(dataDir: string, id: string): void {
+  const dir = accountDir(dataDir, id);
+  if (!dir.startsWith(join(dataDir, 'accounts') + sep) || !existsSync(dir)) return;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** Removes a Codex account's own folder (its sign-in was ended first). Never the user's own Codex folder. */
