@@ -1,3 +1,7 @@
+import { providerOfAccount } from '../shared/providers';
+import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
+import { DEFAULT_ACCOUNT } from '../shared/accounts';
+import { ProvidersPanel } from './providers';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
@@ -5,6 +9,8 @@ import {
   APP_NAME,
   EFFORTS,
   PROVIDERS,
+  type Account,
+  type ProviderBadge,
   type AgentFile,
   type ClaudeStatus,
   type Effort,
@@ -24,15 +30,15 @@ import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { updateSection } from './update';
 
-type Section = 'general' | 'claude' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
+type Section = 'general' | 'claude' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
 type Row = { name: string; path: string; slug: string; detail: string; private: boolean; pushedAt: number };
 
 const STEPS: Section[] = ['general', 'claude', 'github', 'workspace', 'repos', 'sessions'];
-// The team is never part of the first run: it starts empty, nothing imposed.
-const SECTIONS: Section[] = [...STEPS, 'team', 'about'];
+// The team and the other accounts are never part of the first run: they start empty, nothing imposed.
+const SECTIONS: Section[] = ['general', 'claude', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
@@ -131,11 +137,21 @@ export class SetupView {
   /** `detail`: the raw words behind an error, folded under "Details". */
   private note: { text: string; tone: 'ok' | 'error'; detail?: string } | null = null;
   private busy = false;
+  /** The providers' blocks of Settings › Accounts. */
+  private readonly providers: ProvidersPanel;
+  private confirmAccountDelete = '';
 
   constructor(
     private readonly hub: HubApi,
     private readonly models: () => ModelOption[],
+    /** The models an account lists for itself (Codex), else null: Claude's list applies. */
+    private readonly catalog: (account: string) => ModelOption[] | null = () => null,
+    /** When an account's limit ends (epoch seconds), while it is limited. */
+    private readonly limitedUntil: (account: string) => number | null = () => null,
+    /** The providers, connected or not, with the account behind each. */
+    private readonly providerList: () => ProviderBadge[] = () => [],
   ) {
+    this.providers = new ProvidersPanel(hub, { rerender: () => this.render(), errorText: (code) => this.accountErrorText(code), visible: () => !this.root.hidden && this.section === 'accounts' });
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
     this.root.setAttribute('aria-labelledby', 'setup-title');
@@ -273,6 +289,8 @@ export class SetupView {
     this.draft = null;
     this.agents = null;
     this.confirmDelete = '';
+    this.confirmAccountDelete = '';
+    this.providers.reset();
     void this.flush(false);
     if (this.device) this.hub.githubCancel();
     this.device = null;
@@ -318,6 +336,8 @@ export class SetupView {
         return this.general(el, v);
       case 'claude':
         return this.claudeSection(el, v);
+      case 'accounts':
+        return this.accountsSection(el, v);
       case 'github':
         return this.github(el, v);
       case 'workspace':
@@ -1075,6 +1095,203 @@ export class SetupView {
     return f;
   }
 
+  // ---------- accounts ----------
+
+  private accountsSection(el: HTMLElement, v: SettingsView): void {
+    const s = v.settings;
+    this.head(el, t('setup.accounts.title'), t('setup.accounts.lead'));
+    this.providers.mount(el);
+
+    // Where the master and the workers run unless a post or the user says otherwise: a provider each.
+    const grid = h('div', 'setup-grid');
+    grid.append(
+      this.providerSelect(t('setup.accounts.master'), t('setup.accounts.master.hint'), s.masterAccount, s, (id) => void this.save({ masterAccount: id })),
+      this.providerSelect(t('setup.accounts.workers'), t('setup.accounts.workers.hint'), s.workerAccount, s, (id) => void this.save({ workerAccount: id })),
+    );
+    el.append(grid);
+
+    // Accounts made by hand before the providers' blocks existed: still there, only to remove.
+    const legacy = s.accounts.filter((a) => providerOfAccount(a) === null);
+    if (legacy.length > 0) {
+      const list = h('div', 'team-list');
+      for (const a of legacy) list.append(this.legacyRow(a));
+      el.append(this.field(t('setup.accounts.legacy'), t('setup.accounts.legacy.hint')), list);
+    }
+    el.append(this.fallbackField(s), h('p', 'setup-fine', t('setup.accounts.fine')));
+  }
+
+  /** The chain of accounts a session goes on with when its own reaches a limit. */
+  private fallbackField(s: HubSettings): HTMLElement {
+    const f = this.field(t('setup.fallback'), t('setup.fallback.hint'));
+    const fb = s.fallback;
+    const change = (next: Partial<FallbackConfig>) => void this.save({ fallback: { ...fb, ...next } });
+    const on = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = fb.enabled;
+    box.disabled = this.busy;
+    box.addEventListener('change', () => change({ enabled: box.checked }));
+    const onText = h('span', 'setup-choice-text');
+    onText.append(h('span', 'setup-choice-title', t('setup.fallback.enabled')), h('span', 'setup-choice-hint', t('setup.fallback.enabled.hint')));
+    on.append(box, onText);
+    f.append(on);
+    if (!fb.enabled) return f;
+
+    const name = (id: string) => (id === DEFAULT_ACCOUNT ? t('account.default') : (s.accounts.find((a) => a.id === id)?.name ?? id));
+    const paidOf = (id: string) => (id === DEFAULT_ACCOUNT ? s.provider === 'api-key' : isPaid(s.accounts.find((a) => a.id === id)?.kind ?? 'claude'));
+    const list = h('div', 'team-list');
+    if (fb.chain.length === 0) list.append(h('div', 'setup-hint', t('setup.fallback.empty')));
+    fb.chain.forEach((step, i) => {
+      const row = h('div', 'team-row');
+      const text = h('div', 'team-row-text');
+      const select = h('select', 'setup-select');
+      select.setAttribute('aria-label', t('setup.fallback.account'));
+      const taken = new Set(fb.chain.map((x) => x.account));
+      for (const id of [DEFAULT_ACCOUNT, ...s.accounts.map((a) => a.id)]) if (id === step.account || !taken.has(id)) select.append(new Option(name(id), id));
+      select.value = step.account;
+      select.disabled = this.busy;
+      select.addEventListener('change', () => change({ chain: fb.chain.map((x, j) => (j === i ? { ...x, account: select.value } : x)) }));
+      const model = this.input(step.model, t('setup.fallback.model'));
+      model.disabled = this.busy;
+      model.addEventListener('change', () => change({ chain: fb.chain.map((x, j) => (j === i ? { ...x, model: model.value.trim() } : x)) }));
+      const own = this.catalog(step.account);
+      if (own) {
+        const id = `fallback-models-${i}`;
+        const dl = h('datalist');
+        dl.id = id;
+        dl.append(...own.map((m) => new Option(m.label, m.value)));
+        model.setAttribute('list', id);
+        text.append(dl);
+      }
+      const head = h('div', 'team-row-title');
+      head.append(h('b', '', `${i + 1}.`), select);
+      text.append(head, model);
+      const until = this.limitedUntil(step.account);
+      if (until) text.append(h('div', 'setup-hint', t('setup.accounts.limitedUntil', { time: new Date(until * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })));
+      if (paidOf(step.account)) {
+        const paid = h('label', 'setup-toggle');
+        const pbox = h('input');
+        pbox.type = 'checkbox';
+        pbox.checked = fb.paidOk.includes(step.account);
+        pbox.addEventListener('change', () => change({ paidOk: pbox.checked ? [...fb.paidOk, step.account] : fb.paidOk.filter((x) => x !== step.account) }));
+        paid.append(pbox, h('span', 'setup-choice-text', t('setup.fallback.paid')));
+        text.append(paid);
+      }
+      const actions = h('div', 'team-row-actions');
+      const move = (d: -1 | 1) => {
+        const chain = [...fb.chain];
+        [chain[i], chain[i + d]] = [chain[i + d], chain[i]];
+        change({ chain });
+      };
+      actions.append(
+        this.button('↑', 'btn ghost small', () => move(-1), i === 0 || this.busy),
+        this.button('↓', 'btn ghost small', () => move(1), i === fb.chain.length - 1 || this.busy),
+        this.button(t('setup.fallback.remove'), 'btn ghost small', () => change({ chain: fb.chain.filter((_, j) => j !== i) }), this.busy),
+      );
+      row.append(text, actions);
+      list.append(row);
+    });
+    f.append(list);
+    const free = [DEFAULT_ACCOUNT, ...s.accounts.map((a) => a.id)].find((id) => !fb.chain.some((x) => x.account === id));
+    f.append(this.button(t('setup.fallback.add'), 'btn ghost small', () => free && change({ chain: [...fb.chain, { account: free, model: '' }] }), !free || fb.chain.length >= CHAIN_MAX || this.busy));
+
+    const back = this.field(t('setup.fallback.back'), t('setup.fallback.back.hint'));
+    const sel = h('select', 'setup-select');
+    sel.setAttribute('aria-label', t('setup.fallback.back'));
+    sel.append(...FALLBACK_BACKS.map((b) => new Option(t(`setup.fallback.back.${b}`), b)));
+    sel.value = fb.back;
+    sel.disabled = this.busy;
+    sel.addEventListener('change', () => change({ back: sel.value as FallbackConfig['back'] }));
+    back.append(sel);
+    f.append(back);
+    return f;
+  }
+
+  /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
+  private providerSelect(label: string, hint: string, value: string, s: HubSettings, pick: (account: string) => void, inherit?: string): HTMLElement {
+    const f = this.field(label, hint);
+    const select = h('select', 'setup-select');
+    select.setAttribute('aria-label', label);
+    if (inherit !== undefined) select.append(new Option(inherit, ''));
+    const known = new Set<string>();
+    for (const p of this.providerList()) {
+      // A provider that is not connected cannot be picked (unless it is what is set now).
+      const off = !p.connected;
+      const id = p.accountId || `off:${p.id}`;
+      known.add(id);
+      const opt = new Option(off ? `${p.label} · ${t('provider.disconnected')}` : p.label, id);
+      opt.disabled = off && id !== value;
+      select.append(opt);
+    }
+    // An account that stands for no provider (an older, hand-made one) keeps its place while it is the one set.
+    if (value && !known.has(value)) select.append(new Option(s.accounts.find((a) => a.id === value)?.name ?? value, value));
+    select.value = value;
+    select.disabled = this.busy;
+    select.addEventListener('change', () => pick(select.value));
+    f.append(select);
+    return f;
+  }
+
+  /** An account made by hand before the providers' blocks: named, and removable. */
+  private legacyRow(a: Account): HTMLElement {
+    const row = h('div', 'team-row');
+    const text = h('div', 'team-row-text');
+    const title = h('div', 'team-row-title');
+    title.append(h('b', '', a.name), h('span', 'team-row-session', t(`account.kind.${a.kind}`)));
+    text.append(title);
+    const actions = h('div', 'team-row-actions');
+    if (this.confirmAccountDelete === a.id) {
+      actions.append(
+        h('span', 'setup-hint', t(a.kind === 'claude' ? 'setup.accounts.deleteAskClaude' : a.kind === 'codex' ? 'setup.accounts.deleteAskCodex' : 'setup.accounts.deleteAsk', { name: a.name })),
+        this.button(t('team.delete'), 'btn danger small', () => void this.deleteAccount(a)),
+        this.button(t('setup.cancel'), 'btn ghost small', () => {
+          this.confirmAccountDelete = '';
+          this.render();
+        }),
+      );
+    } else {
+      actions.append(
+        this.button(t('team.delete'), 'btn ghost small', () => {
+          this.confirmAccountDelete = a.id;
+          this.render();
+        }),
+      );
+    }
+    row.append(text, actions);
+    return row;
+  }
+
+  private async deleteAccount(a: Account): Promise<void> {
+    this.confirmAccountDelete = '';
+    const r = await this.run(() => this.hub.deleteAccount(a.id));
+    this.view = r;
+    this.flash(r.ok ? t('setup.accounts.deleted', { name: a.name }) : t('setup.accounts.deleteWorking', { name: a.name }), r.ok ? 'ok' : 'error');
+    this.render();
+  }
+
+  private accountErrorText(code: string): string {
+    const own: Record<string, Key> = {
+      'no-key': 'setup.accounts.err.noKey',
+      required: 'setup.accounts.err.noKey',
+      'no-claude': 'setup.claude.notFound',
+      'no-codex': 'setup.accounts.err.noCodex',
+      'no-gemini': 'setup.accounts.err.noGemini',
+      timeout: 'setup.claude.timeout',
+      'probe-failed': 'setup.claude.probeFailed',
+      'not-found': 'setup.accounts.err.notFound',
+      'http-404': 'setup.accounts.err.notFoundUrl',
+      unauthorized: 'setup.accounts.err.refused',
+      forbidden: 'setup.accounts.err.refused',
+      format: 'setup.accounts.err.format',
+      'no-model': 'setup.accounts.err.noModel',
+      'no-terminal': 'setup.accounts.noTerminal',
+      'rate-limited': 'setup.accounts.err.rateLimited',
+      network: 'setup.accounts.err.network',
+      working: 'setup.accounts.err.working',
+    };
+    return own[code] ? t(own[code]) : this.errorText(code, 'key');
+  }
+
   // ---------- team ----------
 
   /** The master changed the team: the list shows it (a post being edited stays as typed). */
@@ -1097,7 +1314,7 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     const full = team.length >= TEAM_MAX;
     const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
-    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', enabled: true }), full));
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', mode: '', account: '', enabled: true }), full));
     for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
     row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
     add.append(row);
@@ -1336,17 +1553,38 @@ export class SetupView {
 
     const grid = h('div', 'setup-grid');
     const runField = this.field(t('team.field.model'), t('team.model.hint'));
+    // One choice for the provider and the model: the models are listed by provider, and one that is not connected waits
+    // in Settings › Accounts. Auto leaves the provider to the workers' and the model to the master.
     const model = h('select', 'setup-select');
-    const known = [...new Set([...this.models().map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES, d.model].filter(Boolean))];
-    model.append(new Option(t('team.autoModelLong'), ''), ...known.map((m) => new Option(this.models().find((x) => x.value === m)?.label ?? m, m)));
-    model.value = d.model;
+    model.append(new Option(t('team.autoModelLong'), ''));
+    const effective = d.account || s.workerAccount;
+    const wanted = d.account ? `${d.account}|${d.model}` : d.model ? `${s.workerAccount}|${d.model}` : '';
+    const offered = new Set<string>();
+    for (const p of this.providerList()) {
+      if (!p.connected && p.accountId !== effective) continue;
+      const group = h('optgroup');
+      group.label = p.label;
+      const account = p.accountId || effective;
+      const own = p.id === 'anthropic' ? [...new Set([...p.models.map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES])] : p.models.map((m) => m.value);
+      const label = (value: string) => p.models.find((m) => m.value === value)?.label ?? value;
+      const rows: [string, string][] = [[`${account}|`, t('team.autoModelOf', { provider: p.label })], ...own.map((m): [string, string] => [`${account}|${m}`, label(m)])];
+      for (const [value, text] of rows) {
+        group.append(new Option(text, value));
+        offered.add(value);
+      }
+      model.append(group);
+    }
+    // What the post holds and nothing above offers (a model of an older list, a hand-made account): kept as it is.
+    if (wanted && !offered.has(wanted)) model.append(new Option(d.model || t('team.autoModelLong'), wanted));
+    model.value = wanted;
     model.setAttribute('aria-label', t('team.field.model'));
     const effort = h('select', 'setup-select');
     effort.append(new Option(t('team.autoEffortLong'), ''), ...EFFORTS.map((e) => new Option(effortLabel(e), e)));
     effort.value = d.effort;
     effort.setAttribute('aria-label', t('team.field.effort'));
     model.addEventListener('change', () => {
-      d.model = model.value;
+      const [account, name] = model.value === '' ? ['', ''] : (model.value.split('|') as [string, string]);
+      Object.assign(d, { account, model: name });
       changed();
     });
     effort.addEventListener('change', () => {
@@ -1357,7 +1595,9 @@ export class SetupView {
     runRow.append(model, effort);
     runField.append(runRow);
     mark('model', runField, model);
+    mark('account', runField, model);
     grid.append(runField);
+    if (this.providerList().some((p) => !p.connected)) runField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
 
     const modeField = this.field(t('team.field.mode'), this.modeHint(d.mode, s.permissionMode));
     const mode = h('select', 'setup-select');

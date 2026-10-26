@@ -1,30 +1,17 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
-import {
-  createSdkMcpServer,
-  getSessionInfo,
-  getSessionMessages,
-  query,
-  resolveSettings,
-  tool,
-  type ElicitationRequest,
-  type ElicitationResult,
-  type ModelInfo,
-  type Options,
-  type PermissionResult,
-  type PermissionUpdate,
-  type Query,
-  type SDKMessage,
-  type SDKUserMessage,
-  type SlashCommand,
-} from '@anthropic-ai/claude-agent-sdk';
-import { z } from 'zod';
-import { addUsage, sumUsage, totalsOf, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
+import { z, type ZodRawShape } from 'zod';
+import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
+import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
+import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
+import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
+import { buildHandoff } from '../shared/passation';
 import {
   capEffort,
   fromTemplate,
@@ -34,20 +21,23 @@ import {
   sessionNameOf,
   slugify,
   TEMPLATE_IDS,
-  WORKER_COMPACT_WINDOW,
   type ChoiceNote,
   type RoleError,
 } from '../shared/team';
 import {
   EFFORTS,
+  type AccountBadge,
+  type AccountKind,
   type ChatItem,
   type Effort,
+  type HarnessId,
   type HubEventKind,
   type HubSnapshot,
   type ImageInput,
   type Metrics,
   type Mode,
   type ModelOption,
+  type ProviderBadge,
   type PermissionDecision,
   type RateLimits,
   type Role,
@@ -72,6 +62,7 @@ import {
   rosterBlock,
   rosterKey,
   setMasterName,
+  setProviderLines,
   tags,
   workerPrompt,
   type InstanceInfo,
@@ -79,7 +70,6 @@ import {
 import { findRepos, realPath, repoOf, samePath } from './repos';
 import {
   assistantItems,
-  blocksOf,
   capturedLine,
   commandOutcome,
   resultText,
@@ -92,47 +82,53 @@ import {
 } from './transcript';
 import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlock, topicErrors, topicToolSpec } from './topics';
 import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
+import { adapterFor } from './providers';
+import { claudeLimit } from './providers/claude/events';
+import { Inbox } from './providers/inbox';
+import type { McpHub, McpLease } from './mcpHub';
+import type {
+  ProviderAdapter,
+  AgentCommand,
+  AgentEvent,
+  AgentInput,
+  AgentModel,
+  AgentProcess,
+  ElicitationAnswer,
+  ElicitationRequest,
+  HubTool,
+  LimitSignal,
+  PermissionAnswer,
+  PermissionRequest,
+} from './providers/types';
 
-/** Push-based prompt stream: keeps a query in streaming-input mode so it can receive messages and controls. */
-class Inbox implements AsyncIterable<SDKUserMessage> {
-  private queue: SDKUserMessage[] = [];
-  private waiting: ((r: IteratorResult<SDKUserMessage>) => void) | null = null;
-  private closed = false;
-
-  push(msg: SDKUserMessage): void {
-    if (this.waiting) {
-      this.waiting({ value: msg, done: false });
-      this.waiting = null;
-    } else {
-      this.queue.push(msg);
-    }
-  }
-
-  close(): void {
-    this.closed = true;
-    this.waiting?.({ value: undefined, done: true });
-    this.waiting = null;
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    return {
-      next: () => {
-        const msg = this.queue.shift();
-        if (msg) return Promise.resolve({ value: msg, done: false });
-        if (this.closed) return Promise.resolve({ value: undefined, done: true });
-        return new Promise((resolve) => (this.waiting = resolve));
-      },
-    };
-  }
-}
-
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom'> {
   sessionId: string;
+  /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
+  accountId: string;
+  /** Account its running process was started on; empty when closed. */
+  runAccount: string;
+  /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
+  switchPending: boolean;
+  pendingTo: string;
+  /** Gone on another account because its own reached a limit: the account pick it left (may be empty), else null. */
+  home: string | null;
+  /** When it left, how many items its conversation held then, and the model its fallback step names. */
+  fallbackAt: number;
+  fallbackMark: number;
+  fallbackModel: string;
+  /** The conversation of each account it ran on, to take up again when it goes back. */
+  convs: Record<string, string>;
+  /** A limit was hit during a turn: it goes on with this step once the turn is over. */
+  fallbackPending: { step: FallbackStep; signal: LimitSignal } | null;
+  /** What happened on the account it was away on, told with its next message once it is back. */
+  backNote: string;
+  /** The hub's tools served over HTTP to its running process (programs that cannot take them in-process), else null. */
+  mcpLease: McpLease | null;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
   items: Map<string, ChatItem>;
-  query: Query | null;
-  inbox: Inbox | null;
+  query: AgentProcess | null;
+  inbox: Inbox<AgentInput> | null;
   /** Approval cards waiting for the user; null = withdrawn by the CLI. */
   pending: Map<string, (decision: PermissionDecision | null) => void>;
   liveId: string | null;
@@ -198,7 +194,7 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   usageBase: Promise<Totals | null | 'unknown'>;
   usageSeen: Totals | null;
   /** Commands and skills its Claude Code process offers. */
-  commands: SlashCommand[];
+  commands: AgentCommand[];
 }
 
 type Persisted = {
@@ -230,6 +226,13 @@ type Persisted = {
   | 'instanceOf'
   | 'tree'
   | 'readOnly'
+  | 'accountId'
+  | 'userAccount'
+  | 'home'
+  | 'fallbackAt'
+  | 'fallbackMark'
+  | 'fallbackModel'
+  | 'convs'
 >;
 
 export interface ManagerOptions {
@@ -238,8 +241,14 @@ export interface ManagerOptions {
   dataDir: string;
   /** Claude Code executable to run; empty = the SDK's default. */
   executable(): string;
-  /** Variables added to (set) or removed from (unset) the environment of every session: Claude access, GitHub. */
-  sessionEnv(): { set: Record<string, string>; unset: string[] };
+  /** Codex executable to run; empty = none found. */
+  codexExecutable(): string;
+  /** Gemini CLI executable to run; empty = none found. */
+  geminiExecutable(): string;
+  /** Where the hub's tools are served to programs that reach them over HTTP. */
+  mcpHub: McpHub;
+  /** Variables added to (set) or removed from (unset) the environment of a session on this account: its access, GitHub. */
+  sessionEnv(account: string, model?: string): { set: Record<string, string>; unset: string[] };
   /** Writes the settings: the master's tools change the team. */
   persist(): void;
   /** Where each turn's cost goes. */
@@ -252,24 +261,8 @@ export type RoleSave = { role: TeamRole; before: TeamRole | null; notes: ChoiceN
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
-const HUB_TOOLS = [
-  'message_master',
-  'spawn_worker',
-  'message_worker',
-  'list_workers',
-  'list_repos',
-  'worker_report',
-  'close_worker',
-  'list_roles',
-  'create_role',
-  'update_role',
-  'delete_role',
-  'topic',
-];
 /** Effort of a worker when nobody fixed one: the user's own default (settings.json) is for their own sessions. */
 const WORKER_EFFORT: Effort = 'high';
-/** Connectors a worker never needs: their tool schemas would weigh on each of its turns. */
-const WORKER_DENIED_MCP = ['higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs'];
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
 const ITEMS_MAX = 1500;
@@ -354,13 +347,6 @@ const withTopics = (item: ChatItem, topics: string[] = []): ChatItem => {
   const [topic, ...also] = topics;
   return topic ? { ...item, topic, ...(also.length > 0 ? { also } : {}) } : item;
 };
-/** The text of a message's blocks: what a replayed prompt was sent as. */
-const textOf = (blocks: Record<string, unknown>[]) =>
-  blocks
-    .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
-    .filter(Boolean)
-    .join('\n');
-
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -392,11 +378,18 @@ const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
-  private modelInfos: ModelInfo[] = [];
+  private modelInfos: AgentModel[] = [];
+  /** The models of each Codex account, as Codex lists them. */
+  private readonly catalogs = new Map<string, AgentModel[]>();
   /** Commands of the last session that started: offered to one that has not run yet. */
-  private lastCommands: SlashCommand[] = [];
-  private rateLimits: RateLimits | null = null;
-  private usageCheckedAt = 0;
+  private lastCommands: AgentCommand[] = [];
+  /** Plan limits by account, and when each was last asked. */
+  private readonly rateLimits = new Map<string, RateLimits>();
+  private readonly usageCheckedAt = new Map<string, number>();
+  /** Which providers are connected, as the main process last checked them. */
+  private providerStates: Partial<Record<ProviderId, ProviderState>> = {};
+  /** Accounts that reached a limit, and until when. */
+  private readonly cooldowns = new Cooldowns();
   private reposCache: { at: number; text: string } | null = null;
   private readonly pendingItems = new Map<string, Map<string, ChatItem>>();
   private emitTimer: NodeJS.Timeout | null = null;
@@ -445,7 +438,10 @@ export class SessionManager extends EventEmitter {
         });
     }
     this.resumeOnStart.clear();
-    this.sweepTimer = setInterval(() => this.closeIdle(), 60_000);
+    this.sweepTimer = setInterval(() => {
+      this.closeIdle();
+      this.returnIdle();
+    }, 60_000);
     this.pruneAttachments();
     void this.retireLeftovers();
   }
@@ -596,6 +592,24 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** The models an account offers, once known (a Codex account's own list; Claude's for the others). */
+  setCatalog(account: string, models: AgentModel[]): void {
+    if (models.length === 0) return;
+    this.catalogs.set(account, models);
+    this.changed();
+  }
+
+  /** The plan limits of an account, as its program last told them. */
+  setLimits(account: string, limits: RateLimits): void {
+    this.rateLimits.set(this.canon(account), limits);
+    this.changed();
+  }
+
+  /** A session running on this account is in the middle of something. */
+  workingOn(account: string): boolean {
+    return [...this.sessions.values()].some((s) => s.query && s.runAccount === account && this.isWorking(s));
+  }
+
   /** Sessions whose work a close would cut: a turn in progress, or background tasks left running after one. */
   busySessions(): number {
     return [...this.sessions.values()].filter((s) => s.query && this.isWorking(s)).length;
@@ -610,7 +624,8 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userModel = true;
     s.fixedModel = model;
     s.model = model;
-    s.modelLabel = this.labelFor(model, model);
+    const own = s.runAccount && this.ownCatalog(s.runAccount) ? this.catalogOf(s.runAccount).find((m) => m.value === model) : undefined;
+    s.modelLabel = own?.displayName ?? this.labelFor(model, model);
     if (!s.fixedEffort) {
       // An inherited effort is per model (modelSettings): resolve it again for the new one.
       s.effort = null;
@@ -629,7 +644,7 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
-    s.query?.applyFlagSettings({ effortLevel: effort }).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
+    s.query?.setEffort(effort).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
     this.changed();
   }
 
@@ -640,12 +655,369 @@ export class SessionManager extends EventEmitter {
     const bypasses = (m: Mode | null) => m === 'bypassPermissions';
     if (bypasses(mode) !== bypasses(this.hubMode())) this.notice(s, t('notice.modeMismatch'), 'info');
     s.mode = mode;
-    s.query?.setPermissionMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
+    s.query?.setMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
     this.changed();
   }
 
   decide(id: string, requestId: string, decision: PermissionDecision): void {
     this.sessions.get(id)?.pending.get(requestId)?.(decision);
+  }
+
+  // ---------- accounts ----------
+
+  /**
+   * Moves a session to an account ("default", an account id; empty: back to its post's or the usual one). Picked by
+   * the user, the master's later choices leave it alone. It restarts on the new account with its conversation, now if
+   * it is idle, else once its turn is over. Returns what the master is told.
+   */
+  setAccount(id: string, account: string, byUser = true): string {
+    const s = this.sessions.get(id);
+    if (!s) return '';
+    if (account && !isBuiltinAccount(account) && !this.opts.cfg.accounts.some((a) => a.id === account)) return '';
+    s.accountId = account;
+    if (byUser) s.userAccount = account !== '';
+    // Moved by hand (or by the master): it is no longer "away" from anywhere.
+    Object.assign(s, { home: null, fallbackPending: null, fallbackModel: '', backNote: '' });
+    // A model the new account does not have (Claude's on Codex) is dropped; the account's own default applies.
+    if (s.fixedModel && !this.modelFits(this.accountOf(s), s.fixedModel)) Object.assign(s, { fixedModel: '', model: '', modelLabel: '', userModel: false });
+    return this.applyAccount(s);
+  }
+
+  // ---------- providers ----------
+
+  /** The providers' connection, as the main process checked it: the composer, the roster and the tools follow. */
+  setProviderStates(states: Partial<Record<ProviderId, ProviderState>>): void {
+    this.providerStates = states;
+    this.syncProviderLines();
+    this.changed();
+  }
+
+  /** The master reads which providers are connected and what models each has. */
+  private syncProviderLines(): void {
+    setProviderLines(
+      this.providerBadges().map((p) => ({
+        id: p.id,
+        label: p.label,
+        connected: p.connected,
+        models: p.id === 'anthropic' ? this.opts.cfg.workerModels : p.models.map((m) => m.value).filter((m) => m !== 'default'),
+      })),
+    );
+  }
+
+  private providerBadges(): ProviderBadge[] {
+    return PROVIDER_DEFS.map((def) => {
+      const r = resolveProvider(this.providerStates, def.id);
+      const account = 'account' in r ? r.account : '';
+      const models = account ? (isBuiltinAccount(account) ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
+      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models };
+    });
+  }
+
+  /** One choice of the composer: a provider and a model of it, applied together. */
+  setProviderModel(id: string, provider: string, model: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const r = resolveProvider(this.providerStates, provider);
+    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
+    if (r.account === (s.runAccount || this.accountOf(s))) return this.setModel(id, model);
+    // Another provider: the model goes first (the move keeps it if the new account has it), then the session moves.
+    Object.assign(s, { fixedModel: model, model, userModel: true });
+    this.setAccount(id, r.account);
+  }
+
+  /** The user picked a provider for a session (composer): it moves to the account behind it. */
+  setProvider(id: string, provider: string): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const r = resolveProvider(this.providerStates, provider);
+    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
+    this.setAccount(id, r.account);
+  }
+
+  /** A provider as the master writes it ("deepseek"): the account it runs on, else an error that says what to do. */
+  private providerRef(ref: string): string {
+    const r = resolveProvider(this.providerStates, ref);
+    if ('account' in r) return r.account;
+    const list = this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ');
+    throw new Error(t(r.error === 'unknown' ? 'provider.unknown' : 'provider.notConnected', { name: ref, list }));
+  }
+
+  /** The settings changed an account, a default or a post: each running session goes where it now belongs. */
+  accountsChanged(): void {
+    const { cfg } = this.opts;
+    for (const s of this.sessions.values()) {
+      if (s.accountId && !isBuiltinAccount(s.accountId) && !cfg.accounts.some((a) => a.id === s.accountId)) Object.assign(s, { accountId: '', userAccount: false });
+      if (s.query) this.applyAccount(s);
+    }
+    this.changed();
+  }
+
+  /** The account a session runs on: its own pick, else its post's (or the master's setting), else the workers'. */
+  private accountOf(s: Session, pick = s.accountId): string {
+    const { cfg } = this.opts;
+    return s.role === 'master'
+      ? firstAccount(cfg.accounts, pick, cfg.masterAccount)
+      : firstAccount(cfg.accounts, pick, this.postOf(s)?.account, cfg.workerAccount);
+  }
+
+  /** The account's sessions run one model of its own (an OpenAI account's, or a named one of an Anthropic-compatible server). */
+  private pinned(account: string): boolean {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    // An OpenAI account whose models are known lets each session pick its own.
+    return !!a && pinsModel(a) && !(a.kind === 'openai' && (this.catalogs.get(account)?.length ?? 0) > 0);
+  }
+
+  private kindOf(account: string): AccountKind | 'default' {
+    return this.opts.cfg.accounts.find((a) => a.id === account)?.kind ?? 'default';
+  }
+
+  /** The adapter of the program a session runs on (or will, once launched). */
+  private adapterOf(s: Session) {
+    return adapterFor(harnessOf(this.kindOf(s.runAccount || this.accountOf(s))));
+  }
+
+  /** A failed start that means the program is not there: for Claude, no executable was found either. */
+  private missingProgram(s: Session, failure: string): boolean {
+    const adapter = this.adapterOf(s);
+    return adapter.isMissingProgram(failure) || !this.executableOf(adapter.harness);
+  }
+
+  /** The account behind a name: "default" is whichever Anthropic account is active ("own" when it is the user's own). */
+  private canon(account: string): string {
+    return canonAccount(account, this.opts.cfg.anthropicActive);
+  }
+
+  private accountName(account: string): string {
+    const id = this.canon(account);
+    return this.opts.cfg.accounts.find((a) => a.id === id)?.name ?? t(id === OWN_ACCOUNT && this.opts.cfg.accounts.some((a) => a.kind === 'claude') ? 'account.own' : 'account.default');
+  }
+
+  private accountBadges(): AccountBadge[] {
+    const claudeAccounts = this.opts.cfg.accounts.some((a) => a.kind === 'claude');
+    return [{ id: DEFAULT_ACCOUNT, name: this.accountName(DEFAULT_ACCOUNT), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...(claudeAccounts ? [{ id: OWN_ACCOUNT, name: t('account.own'), kind: 'default' as const, provider: 'anthropic' as const, pinned: false, limitedUntil: this.limitedSeconds(OWN_ACCOUNT) }] : []), ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, provider: providerOfAccount(a) ?? ('' as const), pinned: this.pinned(a.id), limitedUntil: this.limitedSeconds(a.id) }))];
+  }
+
+  /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
+  private accountRef(ref: string): string {
+    const found = findAccount(this.opts.cfg.accounts, ref);
+    if (!found) throw new Error(t('account.notFound', { name: ref, list: this.accountBadges().map((a) => a.name).join(', ') }));
+    return typeof found === 'string' ? found : found.id;
+  }
+
+  private applyAccount(s: Session): string {
+    const want = this.accountOf(s);
+    const name = this.accountName(want);
+    if (!s.query || s.runAccount === want) {
+      s.switchPending = false;
+      this.changed();
+      return t(s.query ? 'account.already' : 'account.next', { name: s.name, account: name });
+    }
+    if (!this.settled(s)) {
+      // Said once per switch: the settings call this again at each save.
+      if (!s.switchPending || s.pendingTo !== want) this.notice(s, t('notice.accountAfterTurn', { account: name }), 'info');
+      s.switchPending = true;
+      s.pendingTo = want;
+      this.changed();
+      return t('account.afterTurn', { name: s.name, account: name });
+    }
+    this.relaunch(s);
+    return t('account.now', { name: s.name, account: name });
+  }
+
+  /** A new process on the same conversation. Unlike stop(), its worktree stays as it is: the work goes on. */
+  private relaunch(s: Session): void {
+    const q = s.query;
+    s.inbox?.close();
+    this.teardown(s);
+    q?.close();
+    this.notice(s, t('notice.accountSwitched', { account: this.accountName(this.accountOf(s)) }), 'info');
+    void this.launch(s, s.started);
+    this.changed();
+  }
+
+  /** The turn that held a switch is over (with its background tasks): the session restarts on its new account. */
+  private switchIfDone(s: Session, q: AgentProcess): void {
+    if (s.query !== q || !s.switchPending) return;
+    if (!this.settled(s) || Date.now() - s.activeAt < SILENCE_MS) {
+      setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
+      return;
+    }
+    if (s.runAccount === this.accountOf(s)) s.switchPending = false;
+    else this.relaunch(s);
+    this.changed();
+  }
+
+  // ---------- fallback ----------
+
+  private limitedSeconds(account: string): number | null {
+    const at = this.cooldowns.limitedUntil(this.canon(account), Date.now());
+    return at ? Math.ceil(at / 1000) : null;
+  }
+
+  /** An account the chain may send a session to: it exists, its program is there, and a paid one has the user's word. */
+  private usableFallback(account: string): boolean {
+    const { cfg } = this.opts;
+    if (!isBuiltinAccount(account) && !cfg.accounts.some((a) => a.id === account)) return false;
+    const paid = isBuiltinAccount(account) ? cfg.provider === 'api-key' : isPaid(this.kindOf(account));
+    if (paid && !cfg.fallback.paidOk.includes(account)) return false;
+    return !!this.executableOf(harnessOf(this.kindOf(account)));
+  }
+
+  private nextStep(from: string): FallbackStep | null {
+    const { fallback } = this.opts.cfg;
+    if (!fallback.enabled) return null;
+    return pickTarget({ chain: fallback.chain, from, limited: (a) => this.limitedSeconds(a) !== null, usable: (a) => this.usableFallback(a) });
+  }
+
+  /** An account reached a limit: it rests until it opens again, and a session of it goes on with the chain's next account. */
+  private onLimit(s: Session, q: AgentProcess, signal: LimitSignal): void {
+    const account = s.runAccount || this.accountOf(s);
+    this.cooldowns.set(this.canon(account), signal, Date.now());
+    this.save();
+    this.changed();
+    if (s.fallbackPending || !this.opts.cfg.fallback.enabled) return;
+    const step = this.nextStep(account);
+    if (!step) {
+      this.notice(s, t('notice.fallbackNone', { from: this.accountName(account) }), 'error');
+      return;
+    }
+    s.fallbackPending = { step, signal };
+    // Stuck on a request the account refuses: the turn is cut, and the session moves once it ends.
+    if (this.settled(s)) void this.runFallback(s, q);
+    else q.interrupt().catch(() => undefined);
+  }
+
+  private fallbackIfDone(s: Session, q: AgentProcess): void {
+    if (s.query !== q || !s.fallbackPending) return;
+    if (!this.settled(s)) {
+      setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
+      return;
+    }
+    void this.runFallback(s, q);
+  }
+
+  /** `git status` and the size of the changes in its folder, for the summary; empty when it is no repository. */
+  private gitState(cwd: string): Promise<string> {
+    const run = (args: string[]) => new Promise<string>((resolve) => execFile('git', args, { cwd, timeout: 5000, windowsHide: true, maxBuffer: 1 << 20 }, (err, out) => resolve(err ? '' : out)));
+    return Promise.all([run(['status', '--short']), run(['diff', '--stat'])]).then(([status, stat]) => [status.trim(), stat.trim()].filter(Boolean).join('\n'));
+  }
+
+  private async handoffNote(s: Session, kind: 'away' | 'back', from: string, to: string, reason: 'rate' | 'quota' | 'auth' | 'ready'): Promise<string> {
+    const items = [...s.items.values()];
+    const opens = this.cooldowns.limitedUntil(this.canon(from), Date.now());
+    return buildHandoff({
+      lang: lang(),
+      kind,
+      fromName: this.accountName(from),
+      toName: this.accountName(to),
+      reason,
+      opensAt: kind === 'away' ? opens : null,
+      mission: s.mission,
+      items: kind === 'back' ? items.slice(s.fallbackMark) : items,
+      git: await this.gitState(s.cwd),
+      now: Date.now(),
+    });
+  }
+
+  /** The session leaves the account that is limited, for the step's: a new conversation there, with a summary. */
+  private async runFallback(s: Session, q: AgentProcess): Promise<void> {
+    const pending = s.fallbackPending;
+    if (!pending || s.query !== q) return;
+    s.fallbackPending = null;
+    const from = s.runAccount || this.accountOf(s);
+    // The target may have been limited itself while the turn ended.
+    const step = this.limitedSeconds(pending.step.account) === null ? pending.step : this.nextStep(from);
+    if (!step) return this.notice(s, t('notice.fallbackNone', { from: this.accountName(from) }), 'error');
+    const reason = pending.signal.kind === 'overloaded' ? 'rate' : pending.signal.kind;
+    const note = await this.handoffNote(s, 'away', from, step.account, reason);
+    if (s.query !== q) return; // Closed while the summary was written.
+    this.moveAway(s, step, reason, { text: note, images: [], from: 'hub', shown: t('fallback.shown', { from: this.accountName(from), to: this.accountName(step.account) }) });
+  }
+
+  /** A new process on another account, in a new conversation (away) or the old one (back). */
+  private switchProcess(s: Session, to: string, conversation: string | null, prompt?: Prompt): void {
+    const q = s.query;
+    const from = s.runAccount || this.accountOf(s);
+    if (s.started) s.convs[from] = s.sessionId;
+    s.inbox?.close();
+    if (q) this.teardown(s);
+    q?.close();
+    s.accountId = to;
+    s.sessionId = conversation ?? randomUUID();
+    s.started = conversation !== null;
+    this.changed();
+    void this.launch(s, conversation !== null, prompt);
+  }
+
+  private moveAway(s: Session, step: FallbackStep, reason: string, prompt: Prompt): void {
+    const from = s.runAccount || this.accountOf(s);
+    if (s.home === null) Object.assign(s, { home: s.accountId, fallbackAt: Date.now(), fallbackMark: s.items.size });
+    s.fallbackModel = step.model;
+    const opens = this.cooldowns.limitedUntil(this.canon(from), Date.now());
+    const when = opens ? ` ${t('fallback.until', { time: new Date(opens).toLocaleTimeString(lang(), { hour: '2-digit', minute: '2-digit' }) })}` : '';
+    this.notice(s, t('notice.fallbackAway', { from: this.accountName(from), to: this.accountName(step.account), when }), 'info');
+    if (s.role === 'worker') this.notifyMaster(t('hub.fallback', { name: displayName(s), from: this.accountName(from), to: this.accountName(step.account) }), t('hub.fallback.note', { reason }), s);
+    // The account it was asked for is kept in `home`; while away, the step's account is the pick.
+    this.switchProcess(s, step.account, null, prompt);
+  }
+
+  /** On its own account again: its old conversation, and what happened meanwhile. */
+  private async goHome(s: Session, prompt?: Prompt): Promise<void> {
+    if (s.home === null) return;
+    const home = s.home;
+    const target = this.accountOf(s, home);
+    const current = s.runAccount || this.accountOf(s);
+    const note = await this.handoffNote(s, 'back', current, target, 'ready');
+    const conversation = s.convs[target] ?? null;
+    Object.assign(s, { home: null, fallbackAt: 0, fallbackModel: '', fallbackPending: null });
+    this.notice(s, t('notice.fallbackBack', { to: this.accountName(target) }), 'info');
+    if (s.role === 'worker') this.notifyMaster(t('hub.fallbackBack', { name: displayName(s), to: this.accountName(target) }), t('hub.fallbackBack.note'), s);
+    if (prompt) prompt = { ...prompt, text: `${note}\n\n${prompt.text}` };
+    else s.backNote = note;
+    // The pick it had before it left (maybe empty: its post's or the usual one) applies again.
+    this.switchProcess(s, home, conversation, prompt);
+  }
+
+  /** Whether a message goes through the fallback first: back home, or away from an account limited right now. */
+  private fallbackRoute(s: Session, prompt: Prompt): boolean {
+    const { cfg } = this.opts;
+    if (s.home !== null && !s.fallbackPending) {
+      const homeAccount = this.accountOf(s, s.home);
+      const due = returnDue({ back: cfg.fallback.back, homeLimited: this.limitedSeconds(homeAccount) !== null, settled: !s.query || this.settled(s), message: true });
+      if (due === 'now') {
+        void this.goHome(s, prompt);
+        return true;
+      }
+    }
+    if (!s.inbox && cfg.fallback.enabled) {
+      const account = this.accountOf(s);
+      if (this.limitedSeconds(account) !== null) {
+        const step = this.nextStep(account);
+        // Away, and the chain now leads home: that is a return, not a second departure.
+        if (step && s.home !== null && step.account === this.accountOf(s, s.home)) {
+          void this.goHome(s, prompt);
+          return true;
+        }
+        if (step) {
+          void this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(this.canon(account)) === 'quota' ? 'quota' : 'rate').then((note) => {
+            this.moveAway(s, step, 'rate', { ...prompt, text: `${note}\n\n${prompt.text}` });
+          });
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** `idle` policy: a session away, with nothing to do, goes home as soon as its account is open. */
+  private returnIdle(): void {
+    const { cfg } = this.opts;
+    if (cfg.fallback.back !== 'idle') return;
+    for (const s of this.sessions.values()) {
+      if (s.home === null || s.fallbackPending || !s.query) continue;
+      const due = returnDue({ back: 'idle', homeLimited: this.limitedSeconds(this.accountOf(s, s.home)) !== null, settled: this.settled(s), message: false });
+      if (due === 'now') void this.goHome(s);
+    }
   }
 
   // ---------- slash commands (composer) ----------
@@ -777,8 +1149,17 @@ export class SessionManager extends EventEmitter {
         compacting: s.compacting,
         retrying: s.retrying,
         error: s.error,
+        account: s.runAccount || this.accountOf(s),
+        fallbackFrom: s.home === null ? '' : this.accountOf(s, s.home),
+        accountPending: s.switchPending,
+        userAccount: s.userAccount,
       }));
-    return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits, topics: this.topics.list() };
+    // The status bar shows the limits of the master's account.
+    const master = this.sessions.get(MASTER_ID);
+    const limits = this.rateLimits.get(this.canon(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT)) ?? null;
+    const catalogs: Record<string, ModelOption[]> = {};
+    for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
+    return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -841,7 +1222,7 @@ export class SessionManager extends EventEmitter {
       // Claude Code could not be started (missing executable, broken install): nothing else would report it.
       if (s.query) return; // Started: consume() reports what happens next.
       this.teardown(s);
-      this.failed(s, errorText(err));
+      this.failed(s, errorText(err), this.missingProgram(s, errorText(err)), this.adapterOf(s).harness);
       this.changed();
     }
   }
@@ -849,7 +1230,7 @@ export class SessionManager extends EventEmitter {
   private async start(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
     const { cfg } = this.opts;
     // Claimed synchronously: a send() or resume() during the awaits below queues into this inbox instead of launching twice.
-    const inbox = new Inbox();
+    const inbox = new Inbox<AgentInput>();
     s.inbox = inbox;
     s.status = 'starting';
     s.liveId = null;
@@ -870,8 +1251,12 @@ export class SessionManager extends EventEmitter {
     }
     if (s.tree?.state === 'kept') Object.assign(s.tree, { state: 'active', kept: [] });
 
+    const account = this.accountOf(s);
+    const harness = harnessOf(this.kindOf(account));
+    const adapter = adapterFor(harness);
+    const executable = this.executableOf(harness);
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
-    if (resume && !(await getSessionInfo(s.sessionId, { dir: s.cwd }).then(Boolean, () => true))) {
+    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account) }))) {
       resume = false;
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
@@ -884,86 +1269,82 @@ export class SessionManager extends EventEmitter {
     const isMaster = s.role === 'master';
     const post = this.postOf(s);
     // Every launch starts in the configured mode (a composer change lasts as long as the process). None configured:
-    // Claude Code picks its own default, which system/init reports.
+    // the program picks its own default, which its first event reports.
     const mode = this.modeOf(s);
-    s.mode = mode ?? (await this.settingsMode(s.cwd));
+    s.mode = mode ?? (await adapter.defaultMode(s.cwd));
     if (this.quitting || s.inbox !== inbox) return;
-    const executable = this.opts.executable();
+    // The account is fixed for the life of the process: a switch starts another one on the same conversation.
+    s.runAccount = account;
+    s.switchPending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
-    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
-    const options: Options = {
-      cwd: s.cwd,
-      ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
-      // No model = the CLI resolves it from settings.json, exactly like a normal session; the master's effort too.
-      ...(s.fixedModel ? { model: s.fixedModel } : {}),
-      // A worker never inherits the user's own effort from settings.json: unset, it runs at the hub's default.
-      ...(s.fixedEffort || !isMaster ? { effort: s.fixedEffort ?? this.workerEffort() } : {}),
-      ...(mode ? { permissionMode: mode } : {}),
-      // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
-      allowDangerouslySkipPermissions: true,
-      ...(executable ? { pathToClaudeCodeExecutable: executable } : {}),
-      systemPrompt: { type: 'preset', preset: 'claude_code', append, ...(isMaster || post ? { snapshot: false } : {}) },
-      // Workers talk to the master and to each other through native cross-session messaging (SendMessage). The master
-      // writes to workers through the hub (message_worker), which delivers its words as a user turn: a peer message
-      // carries no user authority, so a "go" sent that way would not unblock a commit or a push.
-      // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
-      extraArgs: { name: s.name, 'replay-user-messages': null },
-      includePartialMessages: true,
-      // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups.
-      disallowedTools: isMaster
-        ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage']
-        : s.readOnly
-          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'Workflow', 'ScheduleWakeup']
-          : ['AskUserQuestion', 'Workflow', 'ScheduleWakeup'],
-      // Flag-level settings, over the user's own: a worker compacts early and loads none of the unneeded connectors.
-      ...(isMaster
-        ? {}
-        : { settings: { autoCompactWindow: WORKER_COMPACT_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) } }),
-      mcpServers: { hub: this.hubServer(s) },
-      // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
-      allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
-      canUseTool: (name, input, o) => this.askPermission(s, name, input, o),
-      onElicitation: (req, o) => this.answerElicitation(s, req, o.signal),
-      env: this.environment(),
-      ...(resume ? { resume: s.sessionId } : { sessionId: s.sessionId }),
-    };
+    const base = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
+    // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
+    const append = harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message');
+    // What the session asked for, if its account has it (a fallback step's own model first).
+    const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
+    const tools = this.hubTools(s, harness);
+    s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
-    // Shown (and queued) before Claude Code starts: a start that fails still leaves the message visible.
+    // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
     if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
-    const q = query({ prompt: inbox, options });
+    const q = adapter.start({
+      role: s.role,
+      name: s.name,
+      cwd: s.cwd,
+      extraDirs: post && post.folders.length > 1 ? post.folders.slice(1) : [],
+      readOnly: s.readOnly,
+      // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
+      // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
+      model: this.launchModel(account, picked),
+      // A worker never inherits the user's own effort from settings.json: unset, it runs at the hub's default.
+      effort: s.fixedEffort ?? (isMaster ? null : this.workerEffort()),
+      mode,
+      instructions: append,
+      stableInstructions: isMaster || !!post,
+      tools,
+      mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
+      executable,
+      env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
+      conversation: { id: s.sessionId, resume },
+      input: inbox,
+      onPermission: (req) => this.askPermission(s, req),
+      onElicitation: (req, signal) => this.answerElicitation(s, req, signal),
+    });
     s.query = q;
     s.usageSeen = null;
     // A resumed conversation's results carry the totals it saved: its turns count from there. A new one starts at zero.
     s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
     void this.onReady(s, q);
-    s.exit = this.consume(s, q);
+    s.exit = this.consume(s, q, (f) => adapter.isMissingProgram(f) || !executable, adapter);
     await s.exit;
   }
 
-  private async consume(s: Session, q: Query): Promise<void> {
+  private async consume(s: Session, q: AgentProcess, isMissing: (failure: string) => boolean, adapter: ProviderAdapter): Promise<void> {
     let failure = '';
     try {
-      for await (const msg of q) this.onMessage(s, q, msg);
+      for await (const ev of q.events) this.onEvent(s, q, ev);
     } catch (err) {
       failure = errorText(err);
     }
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
-    if (failure && !this.quitting) this.failed(s, failure);
+    if (failure && !this.quitting) this.failed(s, failure, isMissing(failure), adapter.harness);
     this.changed();
   }
 
   /** A session that stopped on an error: its card and conversation say why; the master hears about a worker. */
-  private failed(s: Session, failure: string): void {
+  private failed(s: Session, failure: string, noProgram: boolean, harness: HarnessId): void {
     if (this.quitting) return;
-    // The executable the SDK expects is missing: the fix is in the settings, not in the conversation.
-    const noClaude = !this.opts.executable() || /Native CLI binary|pathToClaudeCodeExecutable|spawn \S*claude\S* ENOENT/i.test(failure);
-    s.error = noClaude ? t('error.noClaude') : humanError(failure);
+    // The program is missing: the fix is in the settings, not in the conversation.
+    const noClaude = noProgram && harness === 'claude';
+    const noOther = noProgram && harness !== 'claude';
+    s.error = noClaude ? t('error.noClaude') : noOther ? t(harness === 'gemini' ? 'error.noGemini' : 'error.noCodex') : humanError(failure);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
+    else if (noOther) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(harness === 'gemini' ? 'notice.noGemini' : 'notice.noCodex'), tone: 'error', action: 'accounts-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);
   }
@@ -973,8 +1354,12 @@ export class SessionManager extends EventEmitter {
     if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
+    s.mcpLease?.dispose();
+    s.mcpLease = null;
     s.liveId = null;
     s.queued = 0;
+    s.runAccount = '';
+    s.switchPending = false;
     // Withdrawn, not refused: nobody answered them.
     for (const finish of [...s.pending.values()]) finish(null);
     s.status = 'exited';
@@ -1010,63 +1395,59 @@ export class SessionManager extends EventEmitter {
     this.trackAgent(s, taskId, false);
   }
 
-  private onMessage(s: Session, q: Query, msg: SDKMessage): void {
+  private onEvent(s: Session, q: AgentProcess, ev: AgentEvent): void {
     s.activeAt = Date.now();
-    switch (msg.type) {
-      case 'system':
-        if (msg.subtype === 'init') {
-          s.started = true;
-          // The note is in this conversation now: its later prompts never carry it again.
-          if (s.noteSending) Object.assign(s, { noteSentTo: msg.session_id, noteSending: false });
-          // Another conversation in the same process: its totals start again from zero.
-          if (s.usageSeen && msg.session_id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
-          s.sessionId = msg.session_id;
-          s.mode = msg.permissionMode;
-          if (msg.effort) s.effort = msg.effort;
-          this.applyModel(s, msg.model);
-        } else if (msg.subtype === 'compact_boundary') {
-          s.compacting = false;
-          this.compacted(s, msg.compact_metadata.pre_tokens, msg.compact_metadata.post_tokens);
-        } else if (msg.subtype === 'commands_changed') {
-          s.commands = this.lastCommands = msg.commands;
-        } else if (msg.subtype === 'status') {
-          const compacting = msg.status === 'compacting';
-          if (compacting && !s.compacting) this.event(s, 'compacting');
-          s.compacting = compacting;
-        } else if (msg.subtype === 'api_retry') {
-          s.retrying = true;
-          this.event(s, 'retry');
-        } else if (msg.subtype === 'background_tasks_changed') {
-          // Level signal with replace semantics; ambient tasks (watchers) are not activity.
-          s.background = msg.tasks.filter((t) => !t.ambient).map((t) => t.description);
-          if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
-        } else if (msg.subtype === 'task_started') {
-          if (msg.task_type === 'local_agent' && !msg.ambient) this.trackAgent(s, msg.task_id, true);
-        } else if (msg.subtype === 'task_updated') {
-          const { status } = msg.patch;
-          if (status === 'completed' || status === 'failed' || status === 'killed') this.endAgent(s, msg.task_id, status === 'failed');
-        } else if (msg.subtype === 'task_notification') {
-          this.endAgent(s, msg.task_id, msg.status === 'failed');
-        }
+    switch (ev.type) {
+      case 'conversation':
+        s.started = true;
+        // The note is in this conversation now: its later prompts never carry it again.
+        if (s.noteSending) Object.assign(s, { noteSentTo: ev.id, noteSending: false });
+        // Another conversation in the same process: its totals start again from zero.
+        if (s.usageSeen && ev.id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
+        s.sessionId = ev.id;
+        s.mode = ev.mode;
+        if (ev.effort) s.effort = ev.effort;
+        this.applyModel(s, ev.model);
         break;
-      case 'rate_limit_event':
-        // Refused by a plan limit: the CLI waits or gives up; either way the session is stuck until the next frame.
-        if (msg.rate_limit_info.status === 'rejected') {
-          s.retrying = true;
-          this.event(s, 'retry');
-        }
+      case 'compacted':
+        s.compacting = false;
+        this.compacted(s, ev.before, ev.after);
         break;
-      case 'stream_event': {
-        if (msg.parent_tool_use_id) return;
+      case 'commands':
+        s.commands = this.lastCommands = ev.commands;
+        break;
+      case 'compacting':
+        if (ev.on && !s.compacting) this.event(s, 'compacting');
+        s.compacting = ev.on;
+        break;
+      case 'retry':
+        s.retrying = true;
+        this.event(s, 'retry');
+        break;
+      case 'background':
+        s.background = ev.tasks;
+        if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        break;
+      case 'agentTask':
+        if (ev.state === 'start') this.trackAgent(s, ev.id, true);
+        else this.endAgent(s, ev.id, ev.state === 'failed');
+        break;
+      case 'limit':
+        // Refused by a plan limit: the program waits or gives up; either way the session is stuck until the next frame.
+        s.retrying = true;
+        this.event(s, 'retry');
+        this.onLimit(s, q, ev.signal);
+        break;
+      case 'stream': {
         const before = s.status;
         const retried = s.retrying;
         s.retrying = false; // A frame came through: the retry worked.
         this.markBusy(s);
-        if (msg.event.type === 'content_block_start' && msg.event.content_block.type === 'text') {
+        if (ev.textStart) {
           s.liveId = `live-${randomUUID()}`;
           s.liveText = '';
-        } else if (msg.event.type === 'content_block_delta' && msg.event.delta.type === 'text_delta' && s.liveId) {
-          s.liveText += msg.event.delta.text;
+        } else if (ev.delta && s.liveId) {
+          s.liveText += ev.delta;
           this.upsert(s, { kind: 'assistant', id: s.liveId, text: s.liveText, live: true });
         }
         // Deltas travel on the items channel; the snapshot only needs a refresh when the status flips.
@@ -1074,21 +1455,20 @@ export class SessionManager extends EventEmitter {
         return;
       }
       case 'assistant': {
-        if (msg.parent_tool_use_id) break;
         s.retrying = false;
         this.markBusy(s);
-        // A frame carrying an error has Claude Code's own wording as its text ("Invalid API key · Fix external API
+        // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
-        const all = blocksOf(msg.message).filter((b) => !msg.error || b.type !== 'text');
+        const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
         const master = s.id === MASTER_ID;
         // The master's topic calls are the hub's filing, not a step worth reading.
         const blocks = master ? all.filter((b) => b.name !== TOPIC_TOOL) : all;
         const hasText = blocks.some((b) => b.type === 'text');
-        if (msg.error && s.liveId) {
+        if (ev.error && s.liveId) {
           this.drop(s, s.liveId);
           s.liveId = null;
         }
-        const items = assistantItems(blocks, msg.uuid, hasText ? (s.liveId ?? undefined) : undefined);
+        const items = assistantItems(blocks, ev.id, hasText ? (s.liveId ?? undefined) : undefined);
         const filed = master ? this.fileFrame(all, items) : null;
         for (const item of items) this.upsert(s, withTopics(item, filed?.get(item.id)));
         if (hasText) s.liveId = null;
@@ -1096,36 +1476,30 @@ export class SessionManager extends EventEmitter {
           s.owesReport = false;
         }
         if (blocks.some((b) => b.type === 'tool_use' && OUTGOING.test(String(b.name)))) this.event(s, 'message_out');
-        if (msg.error) this.notice(s, assistantError(msg.error), 'error', msg.error);
-        const u = msg.message.usage;
-        const tokens = (u?.input_tokens ?? 0) + (u?.cache_creation_input_tokens ?? 0) + (u?.cache_read_input_tokens ?? 0);
-        if (tokens > 0) this.setContext(s, tokens, s.metrics?.contextSize ?? 0);
+        if (ev.error) this.notice(s, assistantError(ev.error), 'error', ev.error);
+        // Claude Code says its limits by the error of a reply; Codex's come as limit events of their own.
+        const limit = ev.error && this.adapterOf(s).harness === 'claude' ? claudeLimit(ev.error) : null;
+        if (limit) this.onLimit(s, q, limit);
+        if (ev.contextTokens > 0) this.setContext(s, ev.contextTokens, s.metrics?.contextSize ?? 0);
         break;
       }
-      case 'user': {
-        if (msg.parent_tool_use_id) break;
-        const blocks = blocksOf(msg.message);
-        if ('isReplay' in msg && msg.isReplay && msg.origin?.kind !== 'peer') {
-          // One of our prompts reached the model: it is no longer waiting in the queue.
-          s.queued = Math.max(0, s.queued - 1);
-          if (s.id === MASTER_ID) this.topics.taken(textOf(blocks));
-          this.markBusy(s);
-          break;
-        }
-        if (msg.origin?.kind === 'peer') {
-          // `body` (the sender's raw text) is sent by the CLI but not yet in the SDK typings.
-          const origin = msg.origin as typeof msg.origin & { body?: string };
-          const text = origin.body ?? userTextItem(blocks, '')?.text ?? '';
-          const id = `peer-${msg.uuid ?? randomUUID()}`;
-          const from = origin.name || origin.from;
-          // A worker writing to the master directly: filed under its topic, part of the turn it starts.
-          const topic = s.id === MASTER_ID ? this.topics.shown(id, { worker: workerName(from) || null }, false) : null;
-          this.upsert(s, { kind: 'peer', id, from, text, ...(topic ? { topic } : {}) });
-          this.event(s, 'message_in');
-          break;
-        }
-        for (const b of blocks) {
-          if (b.type !== 'tool_result') continue;
+      case 'promptTaken':
+        // One of our prompts reached the model: it is no longer waiting in the queue.
+        s.queued = Math.max(0, s.queued - 1);
+        if (s.id === MASTER_ID) this.topics.taken(ev.text);
+        this.markBusy(s);
+        break;
+      case 'peer': {
+        const text = ev.body ?? userTextItem(ev.blocks, '')?.text ?? '';
+        const id = `peer-${ev.id ?? randomUUID()}`;
+        // A worker writing to the master directly: filed under its topic, part of the turn it starts.
+        const topic = s.id === MASTER_ID ? this.topics.shown(id, { worker: workerName(ev.from) || null }, false) : null;
+        this.upsert(s, { kind: 'peer', id, from: ev.from, text, ...(topic ? { topic } : {}) });
+        this.event(s, 'message_in');
+        break;
+      }
+      case 'toolResults':
+        for (const b of ev.blocks) {
           const item = s.items.get(String(b.tool_use_id));
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
@@ -1136,11 +1510,10 @@ export class SessionManager extends EventEmitter {
           else if (isError) this.event(s, 'tool_error');
         }
         break;
-      }
-      case 'result': {
+      case 'turn': {
         s.liveId = null;
-        // A local command (/context, /usage…) is never replayed: the CLI's own count says what still waits.
-        if (typeof msg.queued_turn_count === 'number') s.queued = Math.min(s.queued, msg.queued_turn_count);
+        // A local command (/context, /usage…) is never replayed: the program's own count says what still waits.
+        if (ev.queued !== null) s.queued = Math.min(s.queued, ev.queued);
         if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
         s.compacting = false;
@@ -1153,33 +1526,36 @@ export class SessionManager extends EventEmitter {
         // turn: then the result answers that work, and goes where any result goes.
         const handoff = s.handoff && !s.handoffStale;
         s.handoff = false;
+        // A turn that ended on an error carries the program's error text, not a note.
+        const ok = ev.subtype === 'success' && !ev.isError;
         if (handoff) {
-          // A turn that ended on an error carries Claude Code's error text, not a note.
-          const ok = msg.subtype === 'success' && !msg.is_error;
-          const note = ok ? msg.result.trim().slice(0, NOTE_MAX) : '';
+          const note = ok ? ev.result.trim().slice(0, NOTE_MAX) : '';
           if (note) Object.assign(s, { note, noteFresh: true });
           // Not written: the worker keeps its conversation as it is, and a note is asked again at its next sleep after work.
-          else this.notice(s, t('notice.noteFailed'), 'info', ok ? '' : msg.subtype === 'success' ? msg.result.trim() : msg.subtype);
-        } else if (msg.subtype === 'success') {
-          // A turn that ended on an error carries Claude Code's wording as its result: the notice already said it, and
+          else this.notice(s, t('notice.noteFailed'), 'info', ok ? '' : ev.subtype === 'success' ? ev.result.trim() : ev.subtype);
+        } else if (ev.subtype === 'success') {
+          // A turn that ended on an error carries the program's wording as its result: the notice already said it, and
           // the previous turn's text would pass for this one's.
-          if (msg.is_error) s.lastMessage = '';
-          else if (msg.result.trim()) s.lastMessage = msg.result;
+          if (ev.isError) s.lastMessage = '';
+          else if (ev.result.trim()) s.lastMessage = ev.result;
           this.event(s, 'turn_done');
         } else {
           this.notice(s, t('notice.interrupted'), 'info');
           this.event(s, 'interrupted');
         }
-        const windows = Object.values(msg.modelUsage ?? {}).map((m) => m.contextWindow);
-        const size = Math.max(s.metrics?.contextSize ?? 0, ...windows);
+        const size = Math.max(s.metrics?.contextSize ?? 0, ...ev.contextWindows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, size);
-        this.countTurn(s, totalsOf(msg.total_cost_usd, msg.modelUsage));
+        this.countTurn(s, ev.usage);
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        if (s.switchPending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
+        if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
-        void this.refreshUsage(q);
+        void this.refreshUsage(s, q);
         break;
       }
+      case 'activity':
+        break;
     }
     this.changed();
   }
@@ -1191,19 +1567,6 @@ export class SessionManager extends EventEmitter {
   /** A post's own mode (for its worker and its instances), else the hub's. */
   private modeOf(s: Session): Mode | null {
     return this.postOf(s)?.mode || this.hubMode();
-  }
-
-  /**
-   * Mode shown before the first turn of a session that leaves it to Claude Code (system/init reports the real one):
-   * the settings' `permissions.defaultMode`, else null.
-   */
-  private async settingsMode(cwd: string): Promise<Mode | null> {
-    try {
-      const { effective } = await resolveSettings({ cwd });
-      return (effective.permissions?.defaultMode as Mode | undefined) ?? null;
-    } catch {
-      return null;
-    }
   }
 
   private markBusy(s: Session): void {
@@ -1222,10 +1585,12 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The CLI answers `initialize` at spawn, before any turn: the session is usable from then on. */
-  private async onReady(s: Session, q: Query): Promise<void> {
+  private async onReady(s: Session, q: AgentProcess): Promise<void> {
     try {
-      const init = await q.initializationResult();
-      if (init.models.length > 0) this.modelInfos = init.models;
+      const init = await q.ready();
+      // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
+      if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount)) && !this.pinned(s.runAccount)) this.modelInfos = init.models;
+      else if (init.models.length > 0 && harnessOf(this.kindOf(s.runAccount)) !== 'claude') this.setCatalog(s.runAccount, init.models);
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
       return; // The session failed to start: consume() reports it.
@@ -1237,14 +1602,14 @@ export class SessionManager extends EventEmitter {
       s.idleAt = Date.now();
     }
     await this.refreshContext(s, q);
-    void this.refreshUsage(q);
+    void this.refreshUsage(s, q);
     this.changed();
   }
 
-  private async refreshContext(s: Session, q: Query): Promise<void> {
+  private async refreshContext(s: Session, q: AgentProcess): Promise<void> {
     try {
-      const usage = await q.getContextUsage({ detail: 'summary' });
-      this.setContext(s, usage.totalTokens, usage.maxTokens);
+      const usage = await q.context();
+      this.setContext(s, usage.tokens, usage.size);
       // Before the first turn this is the only source of the inherited model.
       this.applyModel(s, usage.model);
       await this.inheritEffort(s, usage.model);
@@ -1263,14 +1628,11 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The running totals a resumed conversation starts from, read before its first turn ends. */
-  private usageTotals(q: Query): Promise<Totals | 'unknown'> {
-    return q
-      .initializationResult()
-      .then(() => q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }))
-      .then(
-        (u) => totalsOf(u.session.total_cost_usd, u.session.model_usage),
-        () => 'unknown' as const, // API unavailable: the first result only sets the base, later turns count.
-      );
+  private usageTotals(q: AgentProcess): Promise<Totals | 'unknown'> {
+    return q.totals().then(
+      (totals) => totals,
+      () => 'unknown' as const, // API unavailable: the first result only sets the base, later turns count.
+    );
   }
 
   private costRole(s: Session): CostRole {
@@ -1306,51 +1668,39 @@ export class SessionManager extends EventEmitter {
     this.notice(s, t('notice.compactedTo', { before: tokens(before), after: tokens(after), pct: Math.max(1, Math.round((after / size) * 100)) }), 'info');
   }
 
-  /** Plan limits (5 h / 7 days) from the SDK's experimental /usage API, at most once a minute. */
-  private async refreshUsage(q: Query): Promise<void> {
-    if (Date.now() - this.usageCheckedAt < 60_000) return;
-    this.usageCheckedAt = Date.now();
+  /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
+  private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
+    const account = this.canon(s.runAccount || DEFAULT_ACCOUNT);
+    if (this.kindOf(account) === 'openai' || this.kindOf(account) === 'anthropic-compatible' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
+    this.usageCheckedAt.set(account, Date.now());
     try {
-      const limits = (await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })).rate_limits;
+      const limits = await q.rateLimits();
       if (!limits) return;
-      const epoch = (iso: string | null | undefined) => (iso ? Date.parse(iso) / 1000 : null);
-      this.rateLimits = {
-        fiveHourPct: limits.five_hour?.utilization ?? null,
-        fiveHourResetsAt: epoch(limits.five_hour?.resets_at),
-        sevenDayPct: limits.seven_day?.utilization ?? null,
-        sevenDayResetsAt: epoch(limits.seven_day?.resets_at),
-      };
+      this.rateLimits.set(account, limits);
       this.changed();
     } catch {
       // Experimental API unavailable in this CLI version: the status bar simply omits plan limits.
     }
   }
 
-  private askPermission(
-    s: Session,
-    toolName: string,
-    input: Record<string, unknown>,
-    opts: { signal: AbortSignal; suggestions?: PermissionUpdate[]; decisionReason?: string },
-  ): Promise<PermissionResult> {
-    if (opts.signal.aborted) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
+  private askPermission(s: Session, req: PermissionRequest): Promise<PermissionAnswer> {
+    if (req.signal.aborted) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,
-      tool: toolLabel(toolName),
-      summary: toolSummary(toolName, input),
-      ...toolDetail(toolName, input),
+      tool: toolLabel(req.tool),
+      summary: toolSummary(req.tool, req.input),
+      ...toolDetail(req.tool, req.input),
       // A command or an edit stays in view (it is what is being allowed); any other input is raw data.
-      showDetail: SHOWN_INPUT.test(toolName),
-      reason: opts.decisionReason ?? '',
-      // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
-      canAlways: (opts.suggestions?.length ?? 0) > 0,
+      showDetail: SHOWN_INPUT.test(req.tool),
+      reason: req.reason,
+      canAlways: req.canAlways,
       state: 'pending',
     };
-    return this.ask(s, item, opts.signal).then((d): PermissionResult => {
+    return this.ask(s, item, req.signal).then((d): PermissionAnswer => {
       if (!d) return { behavior: 'deny', message: t('perm.cancelled') };
       if (d.behavior === 'deny') return { behavior: 'deny', message: d.message?.trim() || t('perm.denied') };
-      const always = d.behavior === 'always' && opts.suggestions ? { updatedPermissions: opts.suggestions } : {};
-      return { behavior: 'allow', updatedInput: input, ...always };
+      return { behavior: 'allow', always: d.behavior === 'always' };
     });
   }
 
@@ -1378,7 +1728,7 @@ export class SessionManager extends EventEmitter {
    * validation, so they are accepted; in any other mode the user answers them like a permission. A form that needs
    * real input, or a browser sign-in, is declined and shown.
    */
-  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationResult> {
+  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationAnswer> {
     const content = req.mode === 'url' ? null : confirmationAnswers(req.requestedSchema);
     const message = oneLine(req.message, 300);
     if (!content) {
@@ -1400,11 +1750,18 @@ export class SessionManager extends EventEmitter {
       canAlways: false,
       state: 'pending',
     };
-    return this.ask(s, item, signal).then((d): ElicitationResult => (d && d.behavior !== 'deny' ? { action: 'accept', content } : { action: 'decline' }));
+    return this.ask(s, item, signal).then((d): ElicitationAnswer => (d && d.behavior !== 'deny' ? { action: 'accept', content } : { action: 'decline' }));
   }
 
   /** Into the running session, or resumes a closed one with its conversation. */
   private deliver(s: Session, prompt: Prompt): void {
+    // Away on another account: back on its own as soon as it is open again and the policy says so. Or its account is
+    // limited at this very moment: it goes on elsewhere, with a summary.
+    if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
+    if (s.backNote && s.inbox) {
+      prompt = { ...prompt, text: `${s.backNote}\n\n${prompt.text}` };
+      s.backNote = '';
+    }
     prompt = this.withNote(s, prompt);
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
@@ -1459,7 +1816,7 @@ export class SessionManager extends EventEmitter {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
       this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...tag });
     }
-    s.inbox?.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: s.sessionId });
+    s.inbox?.push({ content });
     s.queued++;
     s.activeAt = Date.now();
     this.markBusy(s);
@@ -1506,23 +1863,23 @@ export class SessionManager extends EventEmitter {
     // The master's conversation is filed by topic again, from its own calls (shared/topics.ts).
     const steps: ReplayStep[] = [];
     try {
-      const messages = (await getSessionMessages(s.sessionId, { dir: s.cwd })).slice(-HISTORY_MAX);
+      const account = s.runAccount || this.accountOf(s);
+      const harness = harnessOf(this.kindOf(account));
+      const ctx = { executable: this.executableOf(harness), env: this.environment(account) };
+      const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd, ctx)).slice(-HISTORY_MAX);
       for (const m of messages) {
-        if (m.parent_tool_use_id) continue;
-        // Claude Code stores an API error as a "<synthetic>" reply with its own wording: not shown again on reload.
-        const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';
-        const blocks = blocksOf(m.message).filter((b) => !synthetic || b.type !== 'text');
-        if (m.type === 'assistant') {
-          const items = assistantItems(master ? blocks.filter((b) => b.name !== TOPIC_TOOL) : blocks, m.uuid);
+        const { blocks } = m;
+        if (m.role === 'assistant') {
+          const items = assistantItems(master ? blocks.filter((b) => b.name !== TOPIC_TOOL) : blocks, m.id);
           for (const item of items) history.set(item.id, item);
           if (master) steps.push(...frameSteps(blocks, items.filter((i) => i.kind !== 'tool')));
-        } else if (m.type === 'user') {
+        } else {
           for (const b of blocks) {
             if (b.type !== 'tool_result') continue;
             const item = history.get(String(b.tool_use_id));
             if (item?.kind === 'tool') history.set(item.id, { ...item, result: resultText(b.content), isError: b.is_error === true });
           }
-          const text = userTextItem(blocks, m.uuid);
+          const text = userTextItem(blocks, m.id);
           if (!text) continue;
           history.set(text.id, text);
           if (master) {
@@ -1638,7 +1995,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A worker the master wrote to ended its turn without answering: the master hears it from the hub. */
-  private chaseSilence(s: Session, q: Query): void {
+  private chaseSilence(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.owesReport || !this.settled(s)) return;
     if (Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.chaseSilence(s, q), SILENCE_MS); // Something moved meanwhile: look again once it is quiet.
@@ -1652,7 +2009,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** End of the turn (and of its background tasks) of a worker the master closed while it was finishing. */
-  private closeIfDone(s: Session, q: Query): void {
+  private closeIfDone(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.closeWhenDone || !this.settled(s)) return;
     if (Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
@@ -1786,10 +2143,11 @@ export class SessionManager extends EventEmitter {
    * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
    * hub's own channel always reaches this hub's master.
    */
-  private hubServer(s: Session) {
+  private hubTools(s: Session, harness: HarnessId = 'claude'): HubTool[] {
     const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
+    const tool = (name: string, description: string, shape: ZodRawShape, handler: HubTool['handler']): HubTool => ({ name, description, shape, handler });
     const run = async (fn: () => string | Promise<string>) => {
       try {
         return text(await fn());
@@ -1804,7 +2162,14 @@ export class SessionManager extends EventEmitter {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
         run(() => this.messageMaster(s, message)),
       );
-      return createSdkMcpServer({ name: 'hub', version: '0.6.0', tools: [listWorkers, listRepos, toMaster] });
+      // A program without Claude Code's SendMessage gets the hub's own tool for the same job.
+      const sendMessage = tool(
+        'send_message',
+        t('tool.sendMessage'),
+        { to: z.string().describe(t('tool.sendMessage.to')), message: z.string().describe(t('tool.sendMessage.message')) },
+        ({ to, message }) => run(() => this.sendPeer(s, String(to), String(message))),
+      );
+      return [listWorkers, listRepos, toMaster, ...(harness === 'claude' ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -1815,6 +2180,8 @@ export class SessionManager extends EventEmitter {
       .enum(EFFORTS as [Effort, ...Effort[]])
       .nullish()
       .describe(t('tool.effort'));
+    const account = z.string().nullish().describe(t('tool.account', { list: this.accountBadges().map((a) => a.name).join(', ') }));
+    const provider = z.string().nullish().describe(t('tool.provider', { list: this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ') }));
     const byPost = z.string().describe(t('tool.role.byName'));
     const topicSpec = topicToolSpec();
     const postFields = {
@@ -1828,10 +2195,7 @@ export class SessionManager extends EventEmitter {
         .describe(t('tool.role.effort')),
       enabled: z.boolean().nullish().describe(t('tool.role.enabled')),
     };
-    return createSdkMcpServer({
-      name: 'hub',
-      version: '0.6.0',
-      tools: [
+    return [
         tool(
           'spawn_worker',
           t('tool.spawn'),
@@ -1844,6 +2208,8 @@ export class SessionManager extends EventEmitter {
             read_only: z.boolean().nullish().describe(t('tool.spawn.readOnly')),
             model,
             effort,
+            provider,
+            account,
           },
           (args, extra) =>
             run(async () => {
@@ -1865,6 +2231,8 @@ export class SessionManager extends EventEmitter {
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
             model,
             effort,
+            provider,
+            account,
           },
           (args) => run(() => this.messageWorker(args)),
         ),
@@ -1926,8 +2294,7 @@ export class SessionManager extends EventEmitter {
           },
           (args) => run(() => this.declareTopic(args)),
         ),
-      ],
-    });
+    ];
   }
 
   /**
@@ -1975,17 +2342,21 @@ export class SessionManager extends EventEmitter {
     read_only?: boolean | null;
     model?: string | null;
     effort?: Effort | null;
+    account?: string | null;
+    provider?: string | null;
   }): Promise<string> {
     const { cfg } = this.opts;
     const mission = args.mission.trim();
     if (!mission) throw new Error(t('spawn.empty'));
+    // A provider is how the master names where a worker runs; an account name still works.
+    const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : '';
     const post = args.role?.trim() ? this.findRole(args.role) : null;
     if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
     const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
     if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
     const over = this.overCap(post?.id ?? null);
     if (over) throw new Error(over);
-    const choice = this.choose(null, args, post);
+    const choice = this.choose(null, args, post, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
     const model = choice.model ?? (post?.model || cfg.worker.model);
     const effort = choice.effort ?? (post?.effort || cfg.worker.effort || null);
     const readOnly = !!args.read_only;
@@ -2012,7 +2383,7 @@ export class SessionManager extends EventEmitter {
     }
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
-    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true });
+    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true, accountId });
     this.topics.alias(spawnedName(args), s.name);
     const plan = s.tree ? installPlan(s.tree) : null;
     // Only where nothing waits for an approval: an install runs the packages' own scripts.
@@ -2037,6 +2408,7 @@ export class SessionManager extends EventEmitter {
     const others = post ? this.instances(post.id).filter((w) => w !== s && w.inbox).map((w) => w.name) : [];
     return [
       t('spawn.started', { name: s.name, model: model || t('spawn.usualModel'), effort: effort ?? t('spawn.usualEffort'), cwd }),
+      ...(cfg.accounts.length > 0 ? [t('spawn.account', { account: this.accountName(this.accountOf(s)) })] : []),
       ...(post ? [t('instance.started', { post: post.name, main: sessionNameOf(post), others: others.join(', ') || t('report.none') })] : []),
       ...(made ? [t('tree.made', { branch: made.tree.branch, base: made.tree.baseRef || 'HEAD', sha: made.tree.base.slice(0, 8) }), ...(made.stale ? [t('tree.stale')] : [])] : []),
       ...(plan ? [t(byHub ? 'install.byHub' : 'install.byWorker', { command: planText(plan) })] : []),
@@ -2061,10 +2433,19 @@ export class SessionManager extends EventEmitter {
     return { name: s.name, main: sessionNameOf(post), others: others.map((w) => w.name), readOnly: s.readOnly };
   }
 
-  private async messageWorker(args: { name: string; message: string; interrupt?: boolean | null; model?: string | null; effort?: Effort | null }): Promise<string> {
+  private async messageWorker(args: {
+    name: string;
+    message: string;
+    interrupt?: boolean | null;
+    model?: string | null;
+    effort?: Effort | null;
+    account?: string | null;
+    provider?: string | null;
+  }): Promise<string> {
     const s = this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
+    const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : null;
     if (s.retiring) await s.retiring;
     if (this.ended(s)) throw new Error(t('instance.ended', { name: s.name }));
     if (!s.inbox && this.orphan(s)) throw new Error(t('instance.orphan', { name: s.name }));
@@ -2072,7 +2453,7 @@ export class SessionManager extends EventEmitter {
       const over = this.overCap(s.instanceOf);
       if (over) throw new Error(over);
     }
-    const choice = this.choose(s, args);
+    const choice = this.choose(s, args, undefined, accountId ?? undefined);
     const wasClosed = !s.inbox;
     const wasWorking = !wasClosed && this.isWorking(s);
     // A permanent worker handed work while it had none starts a new mission: its card and list_workers show it, and
@@ -2082,6 +2463,13 @@ export class SessionManager extends EventEmitter {
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
     if (args.interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
+    // Before the message: an idle worker restarts on the new account right away, and the message goes to that process.
+    const accountNote =
+      accountId === null || accountId === this.accountOf(s)
+        ? ''
+        : s.userAccount
+          ? t('account.locked', { name: s.name, account: this.accountName(this.accountOf(s)) })
+          : this.setAccount(s.id, accountId, false);
     s.owesReport = true;
     s.closeWhenDone = false;
     this.deliver(s, { text: `${newMission ? tags().mission(s.name) : tags().master}\n${message}`, images: [], from: masterName() });
@@ -2091,7 +2479,7 @@ export class SessionManager extends EventEmitter {
         ? t('message.interrupted', { name: s.name })
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
-    return [state, ...runs, ...this.choiceNotes(choice.notes)].join('\n');
+    return [state, ...runs, ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
@@ -2107,16 +2495,26 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
-  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null) {
+  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
     const { cfg } = this.opts;
+    // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
+    const own = this.ownCatalog(account);
+    const listed = this.catalogOf(account).map((m) => m.value);
+    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && requested.model ? [requested.model.trim()] : []) : cfg.workerModels;
+    // The master may say "pro" or "flash" for DeepSeek's models.
+    if (own && requested.model && !allowed.some((m) => m.toLowerCase() === requested.model?.trim().toLowerCase())) {
+      const short = requested.model.trim().toLowerCase();
+      const hit = allowed.find((m) => m.toLowerCase().endsWith(`-${short}`));
+      if (hit) requested = { ...requested, model: hit };
+    }
     const choice = resolveChoice({
       requested,
       post: post ? { model: post.model, effort: post.effort } : null,
       locked: { model: !!s?.userModel, effort: !!s?.userEffort },
-      allowed: cfg.workerModels,
+      allowed,
       maxEffort: cfg.workerMaxEffort,
     });
-    if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: cfg.workerModels.join(', ') }));
+    if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: allowed.join(', ') }));
     return choice;
   }
 
@@ -2179,6 +2577,11 @@ export class SessionManager extends EventEmitter {
     const { cfg } = this.opts;
     cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
     const notes = s && before ? this.applyRun(s, before, role, by) : [];
+    if (before && before.account !== role.account) {
+      // Changed by the user, the post's account replaces one picked by hand on its workers.
+      if (by === 'user') for (const w of [s, ...this.instances(role.id)]) if (w) Object.assign(w, { accountId: '', userAccount: false });
+      this.accountsChanged();
+    }
     this.teamChanged();
     return { role, before, notes };
   }
@@ -2543,6 +2946,19 @@ export class SessionManager extends EventEmitter {
     return t('master.delivered');
   }
 
+  /** A worker writes to another session (the master, or a worker) through the hub, as Claude Code's SendMessage does. */
+  private sendPeer(from: Session, to: string, message: string): string {
+    const text = message.trim();
+    if (!text) throw new Error(t('message.empty'));
+    const wanted = to.trim().toLowerCase().replace(/\s*\[[0-9a-f]{4,}\]$/i, '');
+    if (wanted === masterName().toLowerCase() || wanted === MASTER_ID) return this.messageMaster(from, text);
+    const peer = this.findWorker(wanted);
+    if (peer === from) throw new Error(t('worker.notFound', { name: to }));
+    if (this.ended(peer)) throw new Error(t('instance.ended', { name: peer.name }));
+    this.deliver(peer, { text: `${tags().worker(from.name)}\n${text}`, images: [], from: from.name, shown: text });
+    return t('message.delivered', { name: peer.name });
+  }
+
   /** The master changed the team itself: it knows, unless the user had changed it too since it last heard. */
   private masterSaw(known: string): void {
     const master = this.sessions.get(MASTER_ID);
@@ -2583,7 +2999,8 @@ export class SessionManager extends EventEmitter {
     const mine = [s.userModel ? t('workers.userModel') : '', s.userEffort ? t('workers.userEffort') : ''].filter(Boolean);
     const since = s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '';
     const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`);
-    return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''} · ${ctx} · ${cost} · ${s.cwd}`;
+    const account = this.opts.cfg.accounts.length > 0 ? ` · ${t('workers.account', { name: this.accountName(s.runAccount || this.accountOf(s)) })}${s.userAccount ? ` (${t('workers.byUser', { what: t('workers.userAccount') })})` : ''}` : '';
+    return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''}${account} · ${ctx} · ${cost} · ${s.cwd}`;
   }
 
   /** Its worktree as the master reads it: branch, and what was kept at the last close. */
@@ -2597,7 +3014,9 @@ export class SessionManager extends EventEmitter {
 
   private listWorkers(): string {
     const workers = this.visible().filter((s) => s.role === 'worker');
-    if (workers.length === 0) return t('workers.none');
+    const { cfg } = this.opts;
+    const accounts = cfg.accounts.length > 0 ? t('workers.accounts', { list: this.accountBadges().map((a) => a.name).join(', '), usual: this.accountName(firstAccount(cfg.accounts, cfg.workerAccount)) }) : '';
+    if (workers.length === 0) return [t('workers.none'), accounts].filter(Boolean).join('\n');
     const block = (s: Session) => {
       const post = this.roleOf(s);
       const lines = [`${s.instanceOf ? '  ↳ ' : '- '}${this.workerLine(s)}`];
@@ -2610,13 +3029,14 @@ export class SessionManager extends EventEmitter {
       if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
       return lines.join('\n');
     };
-    const { team } = this.opts.cfg;
+    const { team } = cfg;
     const order = (s: Session) => team.findIndex((r) => r.id === s.roleId);
     const posts = workers.filter((s) => s.roleId).sort((a, b) => order(a) - order(b));
     // An instance goes under its post; one whose post is gone, with the ad-hoc workers.
     const under = (p: Session) => workers.filter((w) => w.instanceOf === p.roleId);
     const adhoc = workers.filter((s) => !s.roleId && !(s.instanceOf && posts.some((p) => p.roleId === s.instanceOf)));
     return [
+      accounts,
       posts.length > 0 ? `${t('workers.team')}\n${posts.flatMap((p) => [p, ...under(p)]).map(block).join('\n')}` : '',
       adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
     ]
@@ -2679,17 +3099,58 @@ export class SessionManager extends EventEmitter {
   // ---------- models ----------
 
   private modelOptions(): ModelOption[] {
-    return this.modelInfos.map((m) => ({
+    return this.optionsOf(this.modelInfos);
+  }
+
+  private optionsOf(models: AgentModel[]): ModelOption[] {
+    return models.map((m) => ({
       value: m.value,
       label: modelLabel(m.value, m.displayName),
-      description: modelHint(m.value, m.displayName),
-      efforts: m.supportsEffort ? (m.supportedEffortLevels ?? []) : [],
+      description: m.description && !this.modelInfos.includes(m) ? m.description : modelHint(m.value, m.displayName),
+      efforts: m.efforts,
+      ...(m.noEffort ? { noEffort: true } : {}),
     }));
   }
 
   /** Effort of a worker nobody fixed one for (master, post or user), within the highest one allowed. */
   private workerEffort(): Effort {
     return capEffort(WORKER_EFFORT, this.opts.cfg.workerMaxEffort);
+  }
+
+  /** The program an account's sessions run (its path, empty when it was not found). */
+  private executableOf(harness: HarnessId): string {
+    return harness === 'claude' ? this.opts.executable() : harness === 'codex' ? this.opts.codexExecutable() : this.opts.geminiExecutable();
+  }
+
+  /** The account offers models of its own (Codex, Gemini, OpenAI's API, DeepSeek) rather than Claude's. */
+  private ownCatalog(account: string): boolean {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    return !!a && (a.kind === 'codex' || a.kind === 'gemini' || a.kind === 'gemini-key' || a.kind === 'openai' || providerOfAccount(a) === 'deepseek');
+  }
+
+  private catalogOf(account: string): AgentModel[] {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    if (a && providerOfAccount(a) === 'deepseek') return DEEPSEEK_MODELS.map((m) => ({ value: m.value, displayName: m.label, description: m.description, efforts: [] }));
+    return this.ownCatalog(account) ? (this.catalogs.get(account) ?? []) : this.modelInfos;
+  }
+
+  /** What the program is asked for: OpenAI's models go by the environment, DeepSeek's by the names its endpoint maps. */
+  private launchModel(account: string, picked: string): string {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    if (!a || !picked || a.kind === 'openai') return a?.kind === 'openai' ? '' : picked;
+    return providerOfAccount(a) === 'deepseek' ? deepseekAlias(picked) : picked;
+  }
+
+  /** A model the program of this account can take (Claude's names are not Codex's): else the account's own choice stands. */
+  private modelFits(account: string, model: string): boolean {
+    if (!model) return false;
+    const kind = this.kindOf(account);
+    if (this.pinned(account)) return false;
+    if (this.ownCatalog(account)) {
+      const catalog = this.catalogOf(account);
+      return catalog.length === 0 ? kind === 'codex' && !/^(default|opus|sonnet|haiku|fable|claude-)/i.test(model) : catalog.some((m) => m.value === model);
+    }
+    return /^(default|best|opusplan|opus|sonnet|haiku|fable|claude-)/i.test(model) || this.modelInfos.some((m) => m.value === model || m.resolvedModel === model);
   }
 
   /**
@@ -2703,19 +3164,33 @@ export class SessionManager extends EventEmitter {
       s.effort = this.workerEffort();
       return;
     }
-    try {
-      const { effective } = await resolveSettings({ cwd: s.cwd });
-      if (s.fixedEffort) return; // Chosen in the composer meanwhile.
-      const perModel = effective.modelSettings;
-      s.effort = perModel?.[modelId]?.effortLevel ?? perModel?.[s.model]?.effortLevel ?? effective.effortLevel ?? null;
-    } catch {
-      // Display only: the session keeps running with the CLI's own resolution.
-    }
+    const effort = await this.adapterOf(s).inheritedEffort(s.cwd, [modelId, s.model]);
+    if (s.fixedEffort || effort === undefined) return; // Chosen in the composer meanwhile, or unreadable.
+    s.effort = effort;
   }
 
   /** Display model: the explicit choice, else what settings.json resolved to (as a picker alias when one matches). */
   private applyModel(s: Session, modelId: string): void {
     if (!modelId) return;
+    // On a bridged account the model is the account's: shown as it is, the Claude choice kept for the next account.
+    if (s.runAccount && this.pinned(s.runAccount)) {
+      s.modelLabel = modelId;
+      return;
+    }
+    if (s.runAccount && harnessOf(this.kindOf(s.runAccount)) !== 'claude' && this.ownCatalog(s.runAccount)) {
+      s.model = modelId;
+      s.modelLabel = this.catalogOf(s.runAccount).find((m) => m.value === modelId)?.displayName ?? modelId;
+      return;
+    }
+    if (s.runAccount && this.ownCatalog(s.runAccount)) {
+      // OpenAI's API or DeepSeek: the session's pick if the account has it, else what runs; DeepSeek says only its own name.
+      const catalog = this.catalogOf(s.runAccount);
+      const picked = catalog.find((m) => m.value === s.fixedModel);
+      const deepseek = providerOfAccount(this.opts.cfg.accounts.find((x) => x.id === s.runAccount) ?? { kind: 'claude', baseUrl: '' }) === 'deepseek';
+      s.model = picked?.value ?? (deepseek ? '' : modelId);
+      s.modelLabel = picked?.displayName ?? (deepseek ? 'DeepSeek' : modelId);
+      return;
+    }
     const alias = this.modelInfos.find((m) => m.resolvedModel === modelId && m.value !== 'default')?.value;
     s.model = s.fixedModel || alias || modelId;
     s.modelLabel = this.labelFor(s.model, modelId);
@@ -2789,19 +3264,32 @@ export class SessionManager extends EventEmitter {
       usageBase: Promise.resolve(null),
       usageSeen: null,
       commands: [],
+      accountId: '',
+      runAccount: '',
+      switchPending: false,
+      pendingTo: '',
+      mcpLease: null,
+      home: null,
+      fallbackAt: 0,
+      fallbackMark: 0,
+      fallbackModel: '',
+      convs: {},
+      fallbackPending: null,
+      backNote: '',
+      userAccount: false,
     };
     this.sessions.set(id, s);
     return s;
   }
 
-  /** Environment of a Claude Code process started by the hub: the hub's own, without a parent session's variables. */
-  environment(): Record<string, string> {
-    return { ...this.toolEnv(), ...this.opts.sessionEnv().set };
+  /** Environment of a Claude Code process started by the hub on an account: the hub's own, without a parent session's variables. */
+  environment(account = DEFAULT_ACCOUNT, model?: string): Record<string, string> {
+    const { set, unset } = this.opts.sessionEnv(account, model);
+    return { ...this.toolEnv(unset), ...set };
   }
 
   /** Environment of the hub's own tools (an install, a sign-in terminal): the same, without the Claude access and GitHub sign-in added. */
-  toolEnv(): Record<string, string> {
-    const { unset } = this.opts.sessionEnv();
+  toolEnv(unset = this.opts.sessionEnv(DEFAULT_ACCOUNT).unset): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined && !PARENT_SESSION_VARS.test(key) && !unset.includes(key)) env[key] = value;
@@ -2812,7 +3300,8 @@ export class SessionManager extends EventEmitter {
   private restore(): void {
     if (!existsSync(this.stateFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown };
+      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown; cooldowns?: unknown };
+      this.cooldowns.restore(saved.cooldowns, Date.now());
       for (const { resume, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
@@ -2870,6 +3359,13 @@ export class SessionManager extends EventEmitter {
       instanceOf: s.instanceOf,
       tree: s.tree,
       readOnly: s.readOnly,
+      accountId: s.accountId,
+      userAccount: s.userAccount,
+      home: s.home,
+      fallbackAt: s.fallbackAt,
+      fallbackMark: s.fallbackMark,
+      fallbackModel: s.fallbackModel,
+      convs: s.convs,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),
@@ -2878,7 +3374,7 @@ export class SessionManager extends EventEmitter {
     const tmp = `${this.stateFile}.tmp`;
     const master = this.sessions.get(MASTER_ID);
     const topics = master ? this.topics.state(master.sessionId) : undefined;
-    writeFileSync(tmp, JSON.stringify({ sessions, topics }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ sessions, topics, cooldowns: this.cooldowns.state() }, null, 2));
     renameSync(tmp, this.stateFile);
   }
 }

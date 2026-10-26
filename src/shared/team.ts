@@ -1,3 +1,4 @@
+import { isAccountRef } from './accounts';
 import type { Lang } from './i18n';
 import { EFFORTS, type Effort, type Metrics, type Mode, type TeamRole } from './types';
 
@@ -46,11 +47,12 @@ export function normalizeRole(raw: unknown): TeamRole {
     model: str(o.model).trim(),
     effort: EFFORTS.includes(o.effort as Effort) ? (o.effort as Effort) : '',
     mode: ROLE_MODES.includes(o.mode as Mode) ? (o.mode as Mode) : '',
+    account: str(o.account).trim(),
     enabled: o.enabled !== false,
   };
 }
 
-export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'enabled' | 'team';
+export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'account' | 'enabled' | 'team';
 /** `locked`: the master may not move a post that has a permission mode of its own. */
 export type RoleProblem = 'required' | 'tooLong' | 'format' | 'reserved' | 'taken' | 'tooMany' | 'duplicate' | 'locked';
 export interface RoleError {
@@ -74,6 +76,7 @@ export function checkRole(role: TeamRole, others: TeamRole[]): RoleError | null 
   if (role.folders.some((f) => !ABSOLUTE.test(f) || f.length > 1000 || f.includes('\0'))) return fail('folders', 'format');
   if (new Set(role.folders.map((f) => f.replace(/[\\/]+$/, '').toLowerCase())).size < role.folders.length) return fail('folders', 'duplicate');
   if (role.model && !MODEL.test(role.model)) return fail('model', 'format');
+  if (role.account && !isAccountRef(role.account)) return fail('account', 'format');
   return null;
 }
 
@@ -178,7 +181,7 @@ const TEMPLATES: Record<Lang, Record<TemplateId, Template>> = {
 /** A new post from a template, model and effort left to the master. */
 export function fromTemplate(id: TemplateId, lang: Lang, folder: string): TeamRole {
   const t = TEMPLATES[lang][id];
-  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', mode: '', enabled: true };
+  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', mode: '', account: '', enabled: true };
 }
 
 // ---------- model and effort of a mission ----------
@@ -331,6 +334,7 @@ export function agentToRole(file: { fields: Record<string, string>; body: string
       model: model && model !== 'inherit' && MODEL.test(model) ? model : '',
       effort: EFFORTS.includes(f.effort as Effort) ? (f.effort as Effort) : '',
       mode: keptMode,
+      account: '',
       enabled: true,
     },
     ignored,

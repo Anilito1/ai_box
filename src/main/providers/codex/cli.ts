@@ -1,0 +1,89 @@
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type { AccountStatus } from '../../../shared/types';
+import { errorCode } from '../../errors';
+import { CodexClient } from './client';
+import { modelsOf, rateLimitsOf } from './adapter';
+import type { RateLimits } from '../../../shared/types';
+import type { AgentModel } from '../types';
+
+type Json = Record<string, unknown>;
+const obj = (v: unknown): Json => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : {});
+
+const EXE = process.platform === 'win32' ? 'codex.exe' : 'codex';
+
+/** Codex as the user installed it: the configured path, else the PATH, else the usual folders. */
+export function codexExecutable(configured = ''): Promise<string> {
+  if (configured && existsSync(configured)) return Promise.resolve(configured);
+  const usual = [join(homedir(), '.local', 'bin', EXE), `/opt/homebrew/bin/${EXE}`, `/usr/local/bin/${EXE}`];
+  return new Promise((resolve) => {
+    execFile(process.platform === 'win32' ? 'where' : 'which', ['codex'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
+      const lines = err ? [] : stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      resolve([...lines, ...usual].find((p) => existsSync(p)) ?? '');
+    });
+  });
+}
+
+/** "codex-cli 0.163.0" → "0.163.0"; empty when it cannot be told. */
+export function codexVersion(executable: string, env: Record<string, string>): Promise<string> {
+  return new Promise((resolve) => {
+    if (!executable) return resolve('');
+    execFile(executable, ['--version'], { env, timeout: 10_000, windowsHide: true }, (err, stdout) => resolve(err ? '' : (/\d+\.\d+\.\d+\S*/.exec(stdout)?.[0] ?? '')));
+  });
+}
+
+/** Oldest Codex whose app-server the hub has been written against. */
+export const CODEX_MIN_VERSION = '0.163.0';
+export function versionAtLeast(version: string, min: string): boolean {
+  const a = version.split(/[.-]/).map((n) => parseInt(n, 10) || 0);
+  const b = min.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  return true;
+}
+
+export interface CodexCheck {
+  status: AccountStatus;
+  limits: RateLimits | null;
+  models: AgentModel[];
+}
+
+/**
+ * Asks Codex which account it is signed in with and which models and limits it has: a short-lived app-server, no
+ * model call. The sign-in itself stays inside Codex; the hub only reads this summary.
+ */
+export async function checkCodex(executable: string, env: Record<string, string>): Promise<CodexCheck> {
+  const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
+  if (!executable) return { status: { ...none, error: 'no-codex' }, limits: null, models: [] };
+  const client = new CodexClient({ executable, env, version: '0.2' });
+  const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 30_000).unref());
+  try {
+    const run = async (): Promise<CodexCheck> => {
+      await client.start();
+      const account = obj(obj(await client.request('account/read', {})).account);
+      if (!account.type) return { status: none, limits: null, models: [] };
+      const [models, limits] = await Promise.all([
+        client.request('model/list', {}).catch(() => ({})),
+        client.request('account/rateLimits/read', {}).catch(() => ({})),
+      ]);
+      const detail = [account.type === 'chatgpt' ? String(account.email ?? '') : 'API key', String(account.planType ?? '')].filter(Boolean).join(' · ');
+      const listed = modelsOf(obj(models));
+      return { status: { ready: true, detail, error: '', models: listed.map((m) => m.value) }, limits: rateLimitsOf(obj(obj(limits).rateLimits)), models: listed };
+    };
+    return await Promise.race([run(), timeout]);
+  } catch (err) {
+    const message = errorCode(err);
+    return { status: { ...none, error: message === 'timeout' ? 'timeout' : 'probe-failed' }, limits: null, models: [] };
+  } finally {
+    client.close();
+  }
+}
+
+/** Codex's own sign-out for an account's folder, quietly: the folder goes right after. */
+export function codexLogout(executable: string, env: Record<string, string>): Promise<void> {
+  return new Promise((resolve) => {
+    if (!executable) return resolve();
+    execFile(executable, ['logout'], { env, timeout: 20_000, windowsHide: true }, () => resolve());
+  });
+}

@@ -4,9 +4,9 @@ import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import type { ClaudeStatus } from '../shared/types';
-import type { HubConfig } from './config';
-import { errorCode, httpCode } from './errors';
+import type { ClaudeStatus } from '../../../shared/types';
+import type { HubConfig } from '../../config';
+import { errorCode, httpCode } from '../../errors';
 
 const require = createRequire(import.meta.url);
 const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';

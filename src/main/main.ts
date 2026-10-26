@@ -1,4 +1,5 @@
 import './shellPath';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,9 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
+import { ACCOUNTS_MAX, canonAccount, checkAccount, isAccountRef, isLocalUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
 import { APP_ID } from '../shared/brand';
+import { DEEPSEEK_URL, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
 import {
   APP_NAME,
@@ -23,7 +26,13 @@ import {
   base64Bytes,
   EFFORTS,
   IMAGE_TYPES,
+  type Account,
+  type AccountStatus,
   type ChatItem,
+  type CodexCli,
+  type MethodView,
+  type ProviderAccountView,
+  type ProviderView,
   type Effort,
   type FoundRepo,
   type HubEventKind,
@@ -37,9 +46,14 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
+import { accountDir, accountEnv, checkAnthropicCompatible, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } from './accounts';
 import { agentFiles } from './agents';
-import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
-import { applyPatch, isDir, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
+import { Bridge, type BridgeAccount } from './bridge';
+import { McpHub } from './mcpHub';
+import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
+import { checkCodex, CODEX_MIN_VERSION, codexExecutable, codexLogout, codexVersion, versionAtLeast } from './providers/codex/cli';
+import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './providers/claude/cli';
+import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
 import { errorCode } from './errors';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
@@ -69,6 +83,8 @@ app.setPath(
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
 let updater: Updater | undefined;
+let bridge: Bridge | undefined;
+let mcpHubRef: McpHub | undefined;
 /** A restart from the settings: an update left for the close waits, the new hub starts right away. */
 let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
@@ -215,6 +231,13 @@ const handle = <T>(channel: string, fn: (...args: unknown[]) => T | Promise<T>) 
   });
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
 const systemLang = (): Lang => ((app.getPreferredSystemLanguages()[0] ?? app.getLocale()).toLowerCase().startsWith('fr') ? 'fr' : 'en');
 
 class Hub {
@@ -224,8 +247,16 @@ class Hub {
   readonly costLog = new CostLog(this.dataDir);
   readonly mgr: SessionManager;
   readonly updater: Updater;
+  /** Where the sessions of OpenAI accounts send Claude Code's requests. */
+  readonly bridge = new Bridge((id) => this.bridgeAccount(id));
+  /** The hub's tools for sessions of programs that reach them over HTTP (Codex). */
+  readonly mcpHub = new McpHub();
   private readonly device = new DeviceFlow();
   private executable = '';
+  private codex = '';
+  private gemini = '';
+  /** The Google sign-ins in progress (a browser is open), by account: the way to cancel each. */
+  private readonly googleLogins = new Map<string, () => void>();
   private gh = '';
   private masterStarted = false;
 
@@ -236,7 +267,10 @@ class Hub {
       cfg: this.cfg,
       dataDir: this.dataDir,
       executable: () => this.executable,
-      sessionEnv: () => this.sessionEnv(),
+      codexExecutable: () => this.codex,
+      geminiExecutable: () => this.gemini,
+      mcpHub: this.mcpHub,
+      sessionEnv: (account, model) => this.sessionEnv(account, model),
       persist: () => this.save(),
       costLog: this.costLog,
     });
@@ -259,24 +293,388 @@ class Hub {
 
   async init(): Promise<void> {
     setGitSignIn(() => githubSignIn(this.cfg, this.secrets.get('githubToken'), this.gh));
-    [this.executable, this.gh] = await Promise.all([
+    [this.executable, this.codex, this.gemini, this.gh] = await Promise.all([
       claudeExecutable(this.cfg),
+      codexExecutable(this.cfg.codexPath),
+      geminiExecutable(),
       this.cfg.github.source === 'gh' ? ghPath() : '',
       this.secrets.load(),
+      this.bridge.start(),
+      this.mcpHub.start(),
     ]);
   }
 
-  /** Claude access chosen in the settings, plus the GitHub sign-in when the user shares it with the sessions. */
-  sessionEnv(): { set: Record<string, string>; unset: string[] } {
-    const claude = claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
+  private bridgeAccount(id: string): BridgeAccount | null {
+    const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'openai');
+    return a ? { baseUrl: a.baseUrl, key: this.secrets.get(`account:${a.id}`), model: a.model, smallModel: a.smallModel } : null;
+  }
+
+  /**
+   * The access of a session's account (the Claude access chosen in the settings for "default"), plus the GitHub
+   * sign-in when the user shares it with the sessions.
+   */
+  sessionEnv(account: string, model?: string): { set: Record<string, string>; unset: string[] } {
     const github = this.cfg.github.shareWithSessions ? githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh) : {};
-    return { set: { ...claude.set, ...github }, unset: claude.unset };
+    // "default" is the active Anthropic account; "own" is the user's own sign-in, whichever is active.
+    const id = canonAccount(account, this.cfg.anthropicActive);
+    const extra = this.cfg.accounts.find((a) => a.id === id);
+    const access = extra
+      ? accountEnv(extra, { dataDir: this.dataDir, key: this.secrets.get(`account:${extra.id}`), bridge: { url: this.bridge.url(extra.id), token: this.bridge.token() }, model })
+      : claudeEnv(this.cfg, this.secrets.get('anthropicApiKey'));
+    return { set: { ...access.set, ...github }, unset: access.unset };
+  }
+
+  /** Which providers are connected, with their models and limits: asked once in the background, then now and then. */
+  warmProviders(): void {
+    void this.providerViews().catch(() => undefined);
+    setInterval(() => void this.providerViews().catch(() => undefined), 10 * 60_000).unref();
+  }
+
+  /** The account the hub made for a provider's way of connecting, if there is one. */
+  private managed(provider: ProviderId, method: ProviderMethod): Account | undefined {
+    const accounts = this.cfg.accounts;
+    if (provider === 'openai') return method === 'chatgpt' ? accounts.find((a) => a.kind === 'codex') : accounts.find((a) => a.kind === 'openai' && providerOfAccount(a) === 'openai');
+    if (provider === 'gemini') return accounts.find((a) => a.kind === (method === 'google' ? 'gemini' : 'gemini-key'));
+    if (provider === 'deepseek') return accounts.find((a) => a.kind === 'anthropic-compatible' && providerOfAccount(a) === 'deepseek');
+    return undefined;
+  }
+
+  /**
+   * The state of every provider's block, checked now (the programs are asked who is signed in, the servers whether
+   * the key works), and handed to the session manager: the composer, the roster and the master's tools follow it.
+   */
+  async providerViews(): Promise<ProviderView[]> {
+    const method = async (account: Account | undefined, keyDetail = false): Promise<MethodView> => {
+      if (!account) return { connected: false, detail: '', error: '' };
+      const st = await this.checkAccount(account.id);
+      const noSignIn = (account.kind === 'codex' || account.kind === 'gemini') && !st.ready && !st.error;
+      return { connected: st.ready, detail: keyDetail && st.ready ? '' : st.detail, error: noSignIn ? '' : st.error };
+    };
+    this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+    this.gemini = (await geminiExecutable()) || this.gemini;
+    const claudeAccounts = this.cfg.accounts.filter((a) => a.kind === 'claude');
+    const [claude, codexVersionText, chatgpt, apikey, deepseek, geminiVersionText, google, geminiKey, others] = await Promise.all([
+      claudeStatus(this.cfg, this.mgr.environment(OWN_ACCOUNT)),
+      codexVersion(this.codex, this.mgr.toolEnv()),
+      method(this.managed('openai', 'chatgpt')),
+      method(this.managed('openai', 'apikey'), true),
+      method(this.managed('deepseek', 'apikey'), true),
+      geminiVersion(this.gemini, this.mgr.toolEnv()),
+      method(this.managed('gemini', 'google')),
+      method(this.managed('gemini', 'apikey'), true),
+      Promise.all(claudeAccounts.map((a) => claudeStatus(this.cfg, this.mgr.environment(a.id)))),
+    ]);
+    this.executable = claude.executable || this.executable;
+    const viewOf = (r: { executable: string; status: { account: { ready: boolean; provider: string; email: string; plan: string; source: string } | null; error: string } }): MethodView => {
+      const who = r.status.account;
+      return {
+        connected: !!who?.ready,
+        detail: who ? (who.provider === 'cloud' ? 'Cloud' : [who.email, who.plan].filter(Boolean).join(' · ') || who.source) : '',
+        error: !r.executable ? 'no-claude' : who ? '' : r.status.error === 'timeout' ? 'timeout' : r.status.error ? 'probe-failed' : '',
+      };
+    };
+    // Anthropic's accounts: the user's own sign-in, and the ones added beside it. The active one is what "Anthropic" is.
+    const own = viewOf(claude);
+    const active = this.cfg.anthropicActive;
+    const accounts: ProviderAccountView[] = [
+      { id: OWN_ACCOUNT, name: t('account.own'), ...own, active: active === '', removable: false },
+      ...claudeAccounts.map((a, i) => ({ id: a.id, name: a.name, ...viewOf(others[i]), active: active === a.id, removable: true })),
+    ];
+    const anthropic: MethodView = accounts.find((a) => a.active) ?? own;
+    const views: ProviderView[] = [
+      { id: 'anthropic', label: providerDef('anthropic').label, connected: anthropic.connected, method: anthropic.connected ? 'cli' : '', methods: { cli: anthropic }, accounts, cli: { found: claude.executable !== '', version: '', outdated: false } },
+      {
+        id: 'openai',
+        label: providerDef('openai').label,
+        connected: chatgpt.connected || apikey.connected,
+        method: chatgpt.connected ? 'chatgpt' : apikey.connected ? 'apikey' : '',
+        methods: { chatgpt, apikey },
+        cli: { found: this.codex !== '', version: codexVersionText, outdated: codexVersionText !== '' && !versionAtLeast(codexVersionText, CODEX_MIN_VERSION) },
+      },
+      { id: 'deepseek', label: providerDef('deepseek').label, connected: deepseek.connected, method: deepseek.connected ? 'apikey' : '', methods: { apikey: deepseek }, cli: null },
+      {
+        id: 'gemini',
+        label: providerDef('gemini').label,
+        connected: google.connected || geminiKey.connected,
+        method: google.connected ? 'google' : geminiKey.connected ? 'apikey' : '',
+        methods: { google, apikey: geminiKey },
+        cli: { found: this.gemini !== '', version: geminiVersionText, outdated: geminiVersionText !== '' && !versionAtLeast(geminiVersionText, GEMINI_MIN_VERSION) },
+      },
+    ];
+    const states: Partial<Record<ProviderId, ProviderState>> = {
+      anthropic: { connected: anthropic.connected, accountId: 'default', method: anthropic.connected ? 'cli' : '' },
+      openai: chatgpt.connected
+        ? { connected: true, accountId: this.managed('openai', 'chatgpt')?.id ?? '', method: 'chatgpt' }
+        : apikey.connected
+          ? { connected: true, accountId: this.managed('openai', 'apikey')?.id ?? '', method: 'apikey' }
+          : { connected: false, accountId: '', method: '' },
+      deepseek: deepseek.connected ? { connected: true, accountId: this.managed('deepseek', 'apikey')?.id ?? '', method: 'apikey' } : { connected: false, accountId: '', method: '' },
+      gemini: google.connected
+        ? { connected: true, accountId: this.managed('gemini', 'google')?.id ?? '', method: 'google' }
+        : geminiKey.connected
+          ? { connected: true, accountId: this.managed('gemini', 'apikey')?.id ?? '', method: 'apikey' }
+          : { connected: false, accountId: '', method: '' },
+    };
+    this.mgr.setProviderStates(states);
+    return views;
+  }
+
+  /** Connects a provider with an API key: the key is checked with its service, then kept in the keychain. */
+  async connectProvider(provider: ProviderId, method: ProviderMethod, key: unknown) {
+    const out = async (r: { ok: boolean; error: string; field: string }) => ({ ...r, views: await this.providerViews() });
+    const typed = isStr(key) ? key.trim() : '';
+    if (method !== 'apikey' || (provider !== 'deepseek' && provider !== 'openai' && provider !== 'gemini')) return out({ ok: false, error: 'unsupported', field: '' });
+    if (!typed) return out({ ok: false, error: 'required', field: 'key' });
+    if (!isOpenAIKey(typed)) return out({ ok: false, error: 'format', field: 'key' });
+    if (provider === 'deepseek') {
+      // The Anthropic-style address has no model list: the key is checked against DeepSeek's own.
+      const st = await checkOpenAI('https://api.deepseek.com', typed);
+      if (!st.ready) return out({ ok: false, error: st.error, field: 'key' });
+      const existing = this.managed('deepseek', 'apikey');
+      const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'anthropic-compatible', name: MANAGED_NAMES.deepseek, baseUrl: DEEPSEEK_URL, model: '', smallModel: '', isolated: false }, typed);
+      return out({ ok: r.ok, error: r.error, field: r.field === 'baseUrl' ? 'key' : r.field });
+    }
+    if (provider === 'gemini') {
+      const refused = await checkGeminiKey(typed);
+      if (refused) return out({ ok: false, error: refused, field: 'key' });
+      const existing = this.managed('gemini', 'apikey');
+      const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'gemini-key', name: MANAGED_NAMES.geminiKey, baseUrl: '', model: '', smallModel: '', isolated: true }, typed);
+      return out({ ok: r.ok, error: r.error, field: r.field });
+    }
+    const st = await checkOpenAI(OPENAI_URL, typed);
+    if (!st.ready) return out({ ok: false, error: st.error, field: 'key' });
+    const model = pickOpenAIModel(st.models);
+    if (!model) return out({ ok: false, error: 'no-model', field: 'key' });
+    const existing = this.managed('openai', 'apikey');
+    const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'openai', name: MANAGED_NAMES.openaiKey, baseUrl: OPENAI_URL, model: existing?.model || model, smallModel: '', isolated: false }, typed);
+    return out({ ok: r.ok, error: r.error, field: r.field === 'baseUrl' || r.field === 'model' ? 'key' : r.field });
+  }
+
+  /** Anthropic's accounts: the user's own sign-in and the ones added beside it; one is active (what "Anthropic" runs on). */
+  async anthropicAccount(action: 'use' | 'add' | 'login' | 'remove', id: string) {
+    const out = async (r: { ok: boolean; error: string; opened?: boolean }) => ({ ok: r.ok, error: r.error, field: '', opened: !!r.opened, views: await this.providerViews() });
+    const account = this.cfg.accounts.find((a) => a.id === id && a.kind === 'claude');
+    if (action === 'add') {
+      if (this.cfg.accounts.length >= ACCOUNTS_MAX) return out({ ok: false, error: 'tooMany' });
+      const taken = new Set(this.cfg.accounts.map((a) => a.name.toLowerCase()));
+      let n = this.cfg.accounts.filter((a) => a.kind === 'claude').length + 2;
+      while (taken.has(`claude ${n}`)) n++;
+      // A folder of Claude Code's own for it (its sign-in), the rest shared with the user's: conversations resume across accounts.
+      const r = await this.saveAccount({ id: '', kind: 'claude', name: `Claude ${n}`, baseUrl: '', model: '', smallModel: '', isolated: false }, null);
+      if (!r.ok) return out({ ok: false, error: r.error });
+      return out({ ok: true, error: '', opened: await this.loginAccount(r.id) });
+    }
+    if (id !== OWN_ACCOUNT && !account) return out({ ok: false, error: 'not-found' });
+    if (action === 'login') return out({ ok: true, error: '', opened: id === OWN_ACCOUNT ? await this.loginProvider('anthropic', 'cli') : await this.loginAccount(id) });
+    if (action === 'use') {
+      this.cfg.anthropicActive = id === OWN_ACCOUNT ? '' : id;
+      this.save();
+      // Sessions at work keep the account they run on; the next launch of each, and the new ones, use this one.
+      this.mgr.accountsChanged();
+      return out({ ok: true, error: '' });
+    }
+    if (action === 'remove') {
+      if (!account) return out({ ok: false, error: 'not-found' });
+      const r = await this.deleteAccount(id);
+      return out({ ok: r.ok, error: r.error });
+    }
+    return out({ ok: false, error: 'unsupported' });
+  }
+
+  /** Opens the program's own sign-in in a terminal window (Claude Code, Codex): the user signs in there, never here. */
+  async loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean> {
+    if (provider === 'anthropic') {
+      const exe = await claudeExecutable(this.cfg);
+      return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, this.mgr.toolEnv());
+    }
+    if (provider === 'openai' && method === 'chatgpt') {
+      let account = this.managed('openai', 'chatgpt');
+      if (!account) {
+        // The account the hub keeps for it, in a Codex folder of its own (no MCP servers of the user's, its own sign-in).
+        const r = await this.saveAccount({ id: '', kind: 'codex', name: MANAGED_NAMES.chatgpt, baseUrl: '', model: '', smallModel: '', isolated: true }, null);
+        account = this.cfg.accounts.find((a) => a.id === r.id);
+      }
+      return account ? this.loginAccount(account.id) : false;
+    }
+    if (provider === 'gemini' && method === 'google') {
+      let account = this.managed('gemini', 'google');
+      if (!account) {
+        const r = await this.saveAccount({ id: '', kind: 'gemini', name: MANAGED_NAMES.google, baseUrl: '', model: '', smallModel: '', isolated: true }, null);
+        account = this.cfg.accounts.find((a) => a.id === r.id);
+      }
+      return account ? this.loginAccount(account.id) : false;
+    }
+    return false;
+  }
+
+  /** Signs a provider out and forgets what the hub kept for it. Claude Code's own sign-out ends it for the terminal too. */
+  async disconnectProvider(provider: ProviderId, method: ProviderMethod) {
+    const out = async (r: { ok: boolean; error: string }) => ({ ...r, field: '', views: await this.providerViews() });
+    if (provider === 'anthropic') {
+      await claudeLogout(await claudeExecutable(this.cfg), this.mgr.environment());
+      return out({ ok: true, error: '' });
+    }
+    const account = this.managed(provider, method);
+    if (!account) return out({ ok: true, error: '' });
+    const r = await this.deleteAccount(account.id);
+    return out({ ok: r.ok, error: r.error });
+  }
+
+  /** The sign-in of an account that has one (Codex, a Claude account), in a terminal window. */
+  private async loginAccount(id: string): Promise<boolean> {
+    const c = this.cfg.accounts.find((x) => x.id === id && x.kind === 'codex');
+    if (c) {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      if (!this.codex) return false;
+      const set = this.mgr.environment(c.id);
+      if (c.isolated) prepareCodexDir(accountDir(this.dataDir, c.id));
+      // Codex's own sign-in (a browser opens): the user signs in there, through OpenAI's own flow.
+      return openTerminal({ title: `Codex · ${c.name}`, file: this.codex, args: ['login'], ...(c.isolated ? { env: { CODEX_HOME: accountDir(this.dataDir, c.id) } } : {}) }, set);
+    }
+    const g = this.cfg.accounts.find((x) => x.id === id && x.kind === 'gemini');
+    if (g) {
+      this.gemini = (await geminiExecutable()) || this.gemini;
+      if (!this.gemini) return false;
+      this.googleLogins.get(g.id)?.();
+      prepareGeminiDir(accountDir(this.dataDir, g.id));
+      // The CLI runs its own Google sign-in (it opens the browser and keeps the result in the account's folder): the hub waits.
+      this.googleLogins.set(
+        g.id,
+        startGoogleLogin(this.gemini, this.mgr.environment(g.id), () => {
+          this.googleLogins.delete(g.id);
+          void this.providerViews().catch(() => undefined);
+        }),
+      );
+      return true;
+    }
+    const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'claude');
+    const exe = a ? await claudeExecutable(this.cfg) : '';
+    if (!a || !exe) return false;
+    const dir = accountDir(this.dataDir, a.id);
+    prepareClaudeDir(dir);
+    return openTerminal({ title: `Claude Code · ${a.name}`, file: exe, args: ['auth', 'login'], env: { CLAUDE_CONFIG_DIR: dir } }, this.mgr.environment(a.id));
+  }
+
+  /** An account checked now: signed in or not, with what. */
+  async checkAccount(id: string): Promise<AccountStatus> {
+    const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
+    const a = this.cfg.accounts.find((x) => x.id === id);
+    if (!a) return { ...none, error: 'not-found' };
+    const key = this.secrets.get(`account:${a.id}`);
+    if (a.kind === 'claude') {
+      const { executable, status } = await claudeStatus(this.cfg, this.mgr.environment(a.id));
+      if (!executable) return { ...none, error: 'no-claude' };
+      const who = status.account;
+      if (!who) return { ...none, error: status.error === 'timeout' ? 'timeout' : 'probe-failed' };
+      return { ...none, ready: who.ready, detail: [who.email, who.plan].filter(Boolean).join(' · ') };
+    }
+    if (a.kind === 'codex') {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      const { status, limits, models } = await checkCodex(this.codex, this.mgr.environment(a.id));
+      if (limits) this.mgr.setLimits(a.id, limits);
+      this.mgr.setCatalog(a.id, models);
+      return status;
+    }
+    if (a.kind === 'gemini' || a.kind === 'gemini-key') {
+      this.gemini = (await geminiExecutable()) || this.gemini;
+      if (!this.gemini) return { ...none, error: 'no-gemini' };
+      this.mgr.setCatalog(a.id, await geminiCatalog(this.gemini));
+      if (a.kind === 'gemini-key') {
+        if (!key) return { ...none, error: 'no-key' };
+        const refused = await checkGeminiKey(key);
+        return refused ? { ...none, error: refused } : { ...none, ready: true, detail: 'API key' };
+      }
+      const who = googleSignIn(accountDir(this.dataDir, a.id));
+      return who.signedIn ? { ...none, ready: true, detail: who.email } : none;
+    }
+    if (a.kind === 'anthropic-key') {
+      if (!key) return { ...none, error: 'no-key' };
+      const refused = await checkApiKey(key);
+      return refused ? { ...none, error: refused } : { ...none, ready: true, detail: `sk-ant-…${key.slice(-4)}` };
+    }
+    // DeepSeek's Anthropic-style address has no model list: its key is asked against DeepSeek's own.
+    const deepseek = providerOfAccount(a) === 'deepseek';
+    const status = deepseek ? await checkOpenAI('https://api.deepseek.com', key) : a.kind === 'anthropic-compatible' ? await checkAnthropicCompatible(a.baseUrl, key) : await checkOpenAI(a.baseUrl, key);
+    // OpenAI's own list: each session picks among its chat models.
+    if (a.kind === 'openai' && status.ready) this.mgr.setCatalog(a.id, chatModels(status.models).map((value) => ({ value, displayName: value, description: '', efforts: [] })));
+    return { ...status, detail: [hostOf(a.baseUrl), a.model, status.detail === 'unchecked' ? 'unchecked' : ''].filter(Boolean).join(' · ') };
+  }
+
+  /**
+   * Creates or changes an account, its key checked with its service before anything is stored. A Claude account
+   * gets its folder; its sign-in is the user's, in Claude Code (accounts:login).
+   */
+  async saveAccount(raw: unknown, key: unknown) {
+    const fail = (error: string, field = '') => ({ ...this.view(), ok: false, error, field, id: '', status: null as AccountStatus | null });
+    const account = normalizeAccount(raw);
+    const before = this.cfg.accounts.find((a) => a.id === account.id) ?? null;
+    if (!before) account.id = '';
+    else account.kind = before.kind; // A kind never changes: another kind is another account.
+    const bad = checkAccount(account, this.cfg.accounts);
+    if (bad) return fail(bad.problem, bad.field);
+    const typed = isStr(key) ? key.trim() : null;
+    let status: AccountStatus | null = null;
+    if (account.kind === 'anthropic-key') {
+      if (!typed && !(before && typed === null)) return fail('required', 'key');
+      if (typed) {
+        if (!API_KEY.test(typed)) return fail('format', 'key');
+        const refused = await checkApiKey(typed);
+        if (refused) return fail(refused, 'key');
+      }
+    } else if (account.kind === 'openai' || account.kind === 'anthropic-compatible') {
+      if (typed && !isOpenAIKey(typed)) return fail('format', 'key');
+      const k = typed ?? (before ? this.secrets.get(`account:${before.id}`) : '');
+      if (!k && !isLocalUrl(account.baseUrl)) return fail('required', 'key');
+      status = account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
+      if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
+    }
+    const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai' || account.kind === 'anthropic-compatible' || account.kind === 'gemini-key') && typed !== null;
+    if (storesKey && typed && !this.secrets.available()) return fail('no-keychain', 'key');
+    if (!account.id) account.id = `a-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
+    if (storesKey) await this.secrets.set(`account:${account.id}`, typed || null);
+    this.cfg.accounts = before ? this.cfg.accounts.map((a) => (a.id === account.id ? account : a)) : [...this.cfg.accounts, account];
+    if (account.kind === 'claude') prepareClaudeDir(accountDir(this.dataDir, account.id));
+    if (account.kind === 'codex' && account.isolated) prepareCodexDir(accountDir(this.dataDir, account.id));
+    if (account.kind === 'gemini' || account.kind === 'gemini-key') prepareGeminiDir(accountDir(this.dataDir, account.id));
+    this.save();
+    this.mgr.accountsChanged();
+    return { ...this.view(), ok: true, error: '', field: '', id: account.id, status };
+  }
+
+  /** Forgets an account: a Claude one is signed out of Claude Code first. Not while one of its sessions works. */
+  async deleteAccount(id: string) {
+    const a = this.cfg.accounts.find((x) => x.id === id);
+    if (!a) return { ...this.view(), ok: true, error: '' };
+    if (this.mgr.workingOn(a.id)) return { ...this.view(), ok: false, error: 'working' };
+    const env = this.mgr.environment(a.id);
+    this.cfg.accounts = this.cfg.accounts.filter((x) => x.id !== a.id);
+    knownAccounts(this.cfg);
+    this.save();
+    // Its sessions move to their usual account first: none runs on it when it goes.
+    this.mgr.accountsChanged();
+    if (a.kind === 'claude') {
+      await claudeLogout(await claudeExecutable(this.cfg), env);
+      removeClaudeDir(this.dataDir, a.id);
+    }
+    // A Codex account that has a folder of the hub's is signed out and its folder removed; the user's own Codex is never touched.
+    if (a.kind === 'codex' && a.isolated) {
+      await codexLogout(this.codex, env);
+      removeCodexDir(this.dataDir, a.id);
+    }
+    // A Gemini account's folder holds its sign-in: removing it signs it out.
+    if (a.kind === 'gemini' || a.kind === 'gemini-key') {
+      this.googleLogins.get(a.id)?.();
+      removeGeminiDir(this.dataDir, a.id);
+    }
+    if (this.secrets.has(`account:${a.id}`)) await this.secrets.set(`account:${a.id}`, null);
+    return { ...this.view(), ok: true, error: '' };
   }
 
   view(): SettingsView {
     return {
       settings: structuredClone(this.cfg),
       apiKeySet: this.secrets.has('anthropicApiKey'),
+      accountKeys: this.cfg.accounts.filter((a) => this.secrets.has(`account:${a.id}`)).map((a) => a.id),
       githubTokenSet: this.secrets.has('githubToken'),
       secureStorage: this.secrets.available(),
       defaultClientId: DEFAULT_CLIENT_ID !== '',
@@ -341,6 +739,7 @@ class Hub {
     on('session:model', (id, model) => isStr(id) && isStr(model) && MODEL.test(model) && mgr.setModel(id, model));
     on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
     on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
+    on('session:account', (id, account) => isStr(id) && (account === '' || isAccountRef(account)) && mgr.setAccount(id, account as string));
     on('session:decide', (id, requestId, decision) => {
       const d = decision as PermissionDecision | null;
       if (isStr(id) && isStr(requestId) && d && DECISIONS.includes(d.behavior) && (d.message === undefined || isStr(d.message))) {
@@ -392,6 +791,8 @@ class Hub {
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
       if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
+      // The master's or the workers' account may have changed.
+      mgr.accountsChanged();
       // The page is built in one language: it is reloaded in the new one.
       if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
       return { ...this.view(), ok: true, error: '' };
@@ -441,6 +842,36 @@ class Hub {
       const exe = await claudeExecutable(this.cfg);
       return exe !== '' && openTerminal({ title: 'Claude Code', file: exe, args: ['auth', 'login'] }, mgr.toolEnv());
     });
+    handle('accounts:save', (account, key) => this.saveAccount(account, key));
+    handle('accounts:delete', (id) => (isStr(id) ? this.deleteAccount(id) : this.view()));
+    handle('accounts:check', (id) => (isStr(id) ? this.checkAccount(id) : { ready: false, detail: '', error: 'not-found', models: [] }));
+    // Claude Code's own sign-in, in that account's folder: the user signs in there, through Anthropic's own flow.
+    handle('codex:check', async (): Promise<CodexCli> => {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      const version = await codexVersion(this.codex, mgr.toolEnv());
+      return { found: this.codex !== '', version, outdated: version !== '' && !versionAtLeast(version, CODEX_MIN_VERSION) };
+    });
+    handle('accounts:login', (id) => (isStr(id) ? this.loginAccount(id) : false));
+    // The providers' blocks in Settings › Accounts.
+    const methodOf = (v: unknown): ProviderMethod | null => (v === 'cli' || v === 'chatgpt' || v === 'apikey' ? v : null);
+    handle('providers:state', () => this.providerViews());
+    handle('providers:connect', (provider, method, key) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.connectProvider(provider, m, key) : { ok: false, error: 'unsupported', field: '', views: [] };
+    });
+    handle('providers:login', (provider, method) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.loginProvider(provider, m) : false;
+    });
+    handle('providers:disconnect', (provider, method) => {
+      const m = methodOf(method);
+      return isProviderId(provider) && m ? this.disconnectProvider(provider, m) : { ok: false, error: 'unsupported', field: '', views: [] };
+    });
+    handle('providers:anthropicAccount', (action, id) =>
+      (action === 'use' || action === 'add' || action === 'login' || action === 'remove') && isStr(id) ? this.anthropicAccount(action, id) : { ok: false, error: 'unsupported', field: '', opened: false, views: [] },
+    );
+    on('session:provider', (id, provider) => isStr(id) && isProviderId(provider) && mgr.setProvider(id, provider));
+    on('session:providerModel', (id, provider, model) => isStr(id) && isProviderId(provider) && isStr(model) && MODEL.test(model) && mgr.setProviderModel(id, provider, model));
     handle('github:gh-status', async () => {
       const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
       return { installed: gh !== '', login };
@@ -591,8 +1022,11 @@ async function start(): Promise<void> {
   }
   const hub = new Hub();
   await hub.init();
+  hub.warmProviders();
   const mgr = hub.mgr;
   manager = mgr;
+  bridge = hub.bridge;
+  mcpHubRef = hub.mcpHub;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
@@ -642,6 +1076,8 @@ if (!app.requestSingleInstanceLock()) {
     updater?.stop();
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
+    bridge?.stop();
+    mcpHubRef?.stop();
   });
   app
     .whenReady()

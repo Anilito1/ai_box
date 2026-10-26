@@ -10,7 +10,7 @@ import { t } from './i18n';
  * types in: their own sign-in flow, which the hub never sees. `file` is an absolute path found by the hub, the
  * arguments are the hub's own constant words. The PowerShell or sh line of an installer is a constant too.
  */
-export type TerminalCommand = { title: string; file: string; args: string[] } | { title: string; installer: 'claude' };
+export type TerminalCommand = { title: string; file: string; args: string[]; env?: Record<string, string> } | { title: string; installer: 'claude' };
 
 const INSTALLER = {
   win32: 'irm https://claude.ai/install.ps1 | iex',
@@ -67,8 +67,10 @@ function windows(cmd: TerminalCommand, env: Record<string, string>): boolean {
 function scriptFile(cmd: TerminalCommand): string {
   const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
   const command = 'installer' in cmd ? INSTALLER.other : [cmd.file, ...cmd.args].map(quote).join(' ');
+  // Terminal starts the script in a shell of its own, not with the hub's environment: what the command needs is set here.
+  const exports = 'installer' in cmd ? [] : Object.entries(cmd.env ?? {}).filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k)).map(([k, v]) => `export ${k}=${quote(v)}`);
   const path = join(tmpdir(), `claude-hub-${randomBytes(6).toString('hex')}.command`);
-  const lines = ['#!/bin/bash', 'cd ~', `printf '\\033]0;%s\\007' ${quote(cmd.title)}`, command, 'echo', `printf '%s' ${quote(t('terminal.close'))}`, 'read -r _'];
+  const lines = ['#!/bin/bash', 'cd ~', ...exports, `printf '\\033]0;%s\\007' ${quote(cmd.title)}`, command, 'echo', `printf '%s' ${quote(t('terminal.close'))}`, 'read -r _'];
   // A new file of its own (never one already there, in a /tmp shared with other accounts), readable by the user alone.
   writeFileSync(path, `${lines.join('\n')}\n`, { mode: 0o700, flag: 'wx' });
   setTimeout(() => rmSync(path, { force: true }), 10 * 60_000).unref();

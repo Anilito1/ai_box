@@ -68,6 +68,7 @@ export const ICONS = {
   edit: 'M10.5 3l2.5 2.5l-7 7H3.5V10z',
   moon: 'M12.5 9.6A5 5 0 0 1 6.4 3.5a5 5 0 1 0 6.1 6.1z',
   info: 'M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 7.5v3.5M8 5.2h.01',
+  user: 'M8 2.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4',
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */

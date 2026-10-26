@@ -5,11 +5,13 @@ import {
   base64Bytes,
   EFFORTS,
   MENU_MODES,
+  type AccountBadge,
   type ChatItem,
   type Effort,
   type Mode,
   type HubApi,
   type ModelOption,
+  type ProviderBadge,
   type SessionView,
 } from '../shared/types';
 import { toAttachment, type Attachment } from './attachments';
@@ -122,6 +124,12 @@ export class ChatView {
   private session: SessionView | null = null;
   private items: Items | undefined;
   private models: ModelOption[] = [];
+  /** The models of the accounts that list their own (Codex), by account id. */
+  private catalogs: Record<string, ModelOption[]> = {};
+  /** The providers, connected or not: what the provider button offers. */
+  private providers: ProviderBadge[] = [];
+  /** Accounts a worker can be moved to; the menu only shows with more than the usual one. */
+  private accounts: AccountBadge[] = [];
   /** The master's topic shown (its items only) and written in; null: everything. */
   private topic: { id: string; title: string } | null = null;
 
@@ -181,7 +189,7 @@ export class ChatView {
     this.input.rows = 1;
     this.slash = new SlashMenu(this.input, hub, {
       session: () => this.session,
-      models: () => this.models,
+      models: () => (this.session ? this.modelsFor(this.session) : this.models),
       openModelMenu: () => this.openModelMenu(),
       openModeMenu: (bypass) => this.openModeMenu(bypass),
       note: (text) => this.attachError(text),
@@ -331,8 +339,11 @@ export class ChatView {
   }
 
   /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
-  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
+  show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[], accounts: AccountBadge[] = [], catalogs: Record<string, ModelOption[]> = {}, providers: ProviderBadge[] = []): void {
     this.models = models;
+    this.providers = providers;
+    this.catalogs = catalogs;
+    this.accounts = accounts;
     const switched = (session?.id ?? null) !== this.sessionId;
     const previous = this.session;
     if (switched && previous) this.drafts.set(previous.id, { text: this.input.value, attachments: this.attachments });
@@ -443,8 +454,19 @@ export class ChatView {
     this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? modeLabel(s.mode) : t('chat.modeDefault')));
     this.modeBtn.classList.toggle('danger', s.mode === 'bypassPermissions');
     this.modeBtn.title = s.mode ? modeHint(s.mode) : t('chat.modeTitle');
-    this.modelBtn.replaceChildren(h('span', '', s.modelLabel), h('span', 'cbtn-muted', s.effort ? effortLabel(s.effort) : ''), icon(ICONS.chevron, 'ico small'));
+    // One button for the provider and the model: "DeepSeek · V4 Pro", the effort beside it.
+    const badge = this.accounts.find((a) => a.id === s.account);
+    const provider = this.providers.find((p) => p.id === badge?.provider)?.label ?? badge?.name ?? '';
+    const shown = provider && s.modelLabel.startsWith(provider) ? s.modelLabel.slice(provider.length).trim() || s.modelLabel : s.modelLabel;
+    const note = s.fallbackFrom ? t('chat.fallbackFrom', { name: this.accounts.find((a) => a.id === s.fallbackFrom)?.name ?? s.fallbackFrom }) : s.accountPending ? t('chat.accountPending') : '';
+    this.modelBtn.replaceChildren(
+      ...(provider ? [h('span', 'cbtn-provider', provider)] : []),
+      h('span', '', shown),
+      h('span', 'cbtn-muted', [s.effort ? effortLabel(s.effort) : '', note].filter(Boolean).join(' · ')),
+      icon(ICONS.chevron, 'ico small'),
+    );
     this.modelBtn.title = t('chat.modelTitle');
+    this.modelBtn.classList.toggle('warn', s.fallbackFrom !== '');
 
     const m = s.metrics;
     const pct = m?.contextPct ?? null;
@@ -607,33 +629,86 @@ export class ChatView {
     check.focus();
   }
 
+  /** The models a session can pick: its account's own list (Codex), else Claude's. */
+  private modelsFor(s: SessionView): ModelOption[] {
+    return this.catalogs[s.account] ?? this.models;
+  }
+
   private openModelMenu(): void {
     const s = this.session;
     if (!s) return;
+    const badge = this.accounts.find((a) => a.id === s.account);
+    // A session on an older, hand-made account that pins its model: only its effort is picked here.
+    const pinned = !!badge?.pinned;
+    const current = badge?.provider ?? '';
+    let tab: string = current || this.providers.find((p) => p.connected)?.id || '';
+    const openSettings = (close: () => void) => {
+      close();
+      window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
+    };
     openMenu(this.modelBtn, (menu, close) => {
-      menu.append(h('div', 'menu-label', t('chat.model')));
-      if (this.models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
-      for (const model of this.models) {
-        const row = this.menuRow(model.label, model.description, model.value === s.model);
-        row.addEventListener('click', () => {
-          this.hub.setModel(s.id, model.value);
-          close();
-        });
-        menu.append(row);
-      }
-      const current = this.models.find((m) => m.value === s.model);
-      const efforts: Effort[] = current?.efforts.length ? current.efforts : EFFORTS;
-      menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
-      const seg = h('div', 'segmented');
-      for (const effort of efforts) {
-        const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
-        b.addEventListener('click', () => {
-          this.hub.setEffort(s.id, effort);
-          close();
-        });
-        seg.append(b);
-      }
-      menu.append(seg);
+      const draw = () => {
+        menu.replaceChildren();
+        // The provider first: the models below are its models. One that is not connected is greyed, and leads to Settings.
+        const tabs = h('div', 'segmented provider-tabs');
+        for (const p of this.providers) {
+          const b = h('button', p.id === tab ? 'seg active' : 'seg', p.label);
+          b.classList.toggle('off', !p.connected);
+          b.title = p.connected ? '' : t('chat.providerOff');
+          b.addEventListener('click', () => {
+            if (!p.connected) return openSettings(close);
+            tab = p.id;
+            draw();
+          });
+          tabs.append(b);
+        }
+        menu.append(tabs);
+        const models = tab === current ? this.modelsFor(s) : (this.providers.find((p) => p.id === tab)?.models ?? []);
+        menu.append(h('div', 'menu-label', t('chat.model')));
+        if (pinned && tab === current) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
+        else if (models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
+        for (const model of pinned && tab === current ? [] : models) {
+          const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model);
+          row.addEventListener('click', () => {
+            // Provider and model in one go: the session moves to the provider if it is not there already.
+            if (tab === current) this.hub.setModel(s.id, model.value);
+            else this.hub.setProviderModel(s.id, tab, model.value);
+            close();
+          });
+          menu.append(row);
+        }
+        // The effort belongs to the model the session runs: shown with its provider's tab.
+        const now = models.find((m) => m.value === s.model);
+        if (tab === current && !now?.noEffort) {
+          const efforts: Effort[] = now?.efforts.length ? now.efforts : EFFORTS;
+          menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
+          const seg = h('div', 'segmented');
+          for (const effort of efforts) {
+            const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
+            b.addEventListener('click', () => {
+              this.hub.setEffort(s.id, effort);
+              close();
+            });
+            seg.append(b);
+          }
+          menu.append(seg);
+        }
+        if (s.userAccount) {
+          const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
+          back.addEventListener('click', () => {
+            this.hub.setAccount(s.id, '');
+            close();
+          });
+          menu.append(h('div', 'menu-sep'), back);
+        }
+        if (this.providers.some((p) => !p.connected)) {
+          const add = this.menuRow(t('chat.providerConnect'), t('chat.providerConnect.hint'), false);
+          add.addEventListener('click', () => openSettings(close));
+          menu.append(h('div', 'menu-sep'), add);
+        }
+        menu.append(h('div', 'menu-note', t('chat.accountNote')));
+      };
+      draw();
     });
   }
 
@@ -758,6 +833,11 @@ export class ChatView {
         if (item.action === 'claude-settings') {
           const open = h('button', 'btn small notice-action', t('notice.openClaudeSettings'));
           open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'claude' })));
+          el.append(open);
+        }
+        if (item.action === 'accounts-settings') {
+          const open = h('button', 'btn small notice-action', t('notice.openAccountsSettings'));
+          open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' })));
           el.append(open);
         }
         if (item.detail) el.append(techDetails(item.detail));

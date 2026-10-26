@@ -10,7 +10,13 @@ export { APP_NAME } from './brand';
 
 export type Role = 'master' | 'worker';
 export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
+/** The program that runs an agent: Claude Code (also for Anthropic-compatible and bridged accounts) or Codex. */
+export type HarnessId = 'claude' | 'codex' | 'gemini';
+/** Every harness there is: a Record, so adding one to HarnessId fails to compile until it is listed here (and tested). */
+export const HARNESSES: Record<HarnessId, true> = { claude: true, codex: true, gemini: true };
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+import type { FallbackConfig } from './fallback';
+import type { ProviderId, ProviderMethod } from './providers';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk';
 
 /** Image formats the Messages API accepts. */
@@ -33,6 +39,8 @@ export interface ModelOption {
   label: string;
   description: string;
   efforts: Effort[];
+  /** The model takes no effort setting (Gemini's): the menu shows none. */
+  noEffort?: boolean;
 }
 
 export interface Metrics {
@@ -69,7 +77,59 @@ export interface TeamRole {
   effort: Effort | '';
   /** Empty = the mode of the other sessions. */
   mode: Mode | '';
+  /** Account its worker runs on (an account id, or "default"); empty = the workers' account. */
+  account: string;
   enabled: boolean;
+}
+
+/**
+ * An account sessions can run on, besides the Claude access of Settings › Claude ("default"). `claude`: a Claude
+ * account signed in through Claude Code's own sign-in, in a Claude Code folder of its own; `anthropic-key`: an
+ * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge;
+ * `anthropic-compatible`: any server that speaks Anthropic's Messages API (DeepSeek…), reached by Claude Code directly;
+ * `codex`: a ChatGPT account signed in through Codex's own sign-in, driven by the Codex program (its own harness);
+ * `gemini`: a Google account signed in through the Gemini CLI's own sign-in, `gemini-key`: a Gemini API key, both driven
+ * by the Gemini CLI over its Agent Client Protocol (a harness of its own).
+ */
+export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'anthropic-compatible' | 'codex' | 'gemini' | 'gemini-key';
+export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'anthropic-compatible', 'codex', 'gemini', 'gemini-key'];
+
+export interface Account {
+  /** "a-" + 8 characters, made by the main process. */
+  id: string;
+  kind: AccountKind;
+  /** What the user calls it ("Perso", "Work"): unique, shown in the menus and given to the master. */
+  name: string;
+  /** openai and anthropic-compatible: the server's base URL (".../v1"), the model the work runs on, and the one for small background calls. */
+  baseUrl: string;
+  model: string;
+  smallModel: string;
+  /** codex only: signed in in a Codex folder of the hub's own (true), or the one the user's Codex already uses (false). */
+  isolated: boolean;
+}
+
+/** What the composer and the sidebar show of an account. */
+export interface AccountBadge {
+  id: string;
+  name: string;
+  kind: AccountKind | 'default';
+  /** The provider block it belongs to, empty for an older account none of them stands for. */
+  provider: ProviderId | '';
+  /** Epoch seconds when the account's limit ends, while it is limited. */
+  limitedUntil: number | null;
+  /** Its sessions run the account's own model: the model menu has nothing to pick. */
+  pinned: boolean;
+}
+
+/** An account checked on demand: signed in or not, with what (an email and a plan, a model…). */
+export interface AccountStatus {
+  ready: boolean;
+  /** Who or what it runs as, for the user's eyes. */
+  detail: string;
+  /** An error code (see the settings' errorText), empty when ready or merely signed out. */
+  error: string;
+  /** openai: the models the server lists, for the model fields. */
+  models: string[];
 }
 
 /** What the sidebar shows of a permanent worker's post. */
@@ -130,6 +190,14 @@ export interface SessionView {
   retrying: boolean;
   /** Why its last start or run failed; empty once it runs again. */
   error: string;
+  /** Account it runs on (while running) or will run on at its next launch. */
+  account: string;
+  /** Gone on another account because its own reached a limit: the account it left, else empty. */
+  fallbackFrom: string;
+  /** A switch to another account waits for the turn in progress to end. */
+  accountPending: boolean;
+  /** The user picked its account by hand: the master's choices leave it alone. */
+  userAccount: boolean;
 }
 
 /** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
@@ -320,8 +388,69 @@ export interface HubSnapshot {
   sessions: SessionView[];
   models: ModelOption[];
   rateLimits: RateLimits | null;
+  /** The models of each account that has a list of its own (Codex), by account id. */
+  catalogs: Record<string, ModelOption[]>;
   /** Topics of the master's conversation, most recent activity first. */
   topics: Topic[];
+  /** The accounts a session can be switched to, "default" first. */
+  accounts: AccountBadge[];
+  /** The providers, connected or not, with the models of each. */
+  providers: ProviderBadge[];
+}
+
+/** What the composer and the post editor show of a provider. */
+export interface ProviderBadge {
+  id: ProviderId;
+  label: string;
+  connected: boolean;
+  /** The account its sessions run on ("default" for Anthropic), empty when not connected. */
+  accountId: string;
+  models: ModelOption[];
+}
+
+/** An Anthropic account in its block: who it is, whether it is signed in, whether it is the one in use. */
+export interface ProviderAccountView {
+  /** An account id, or "own" for the user's own Claude Code sign-in. */
+  id: string;
+  name: string;
+  /** Email and plan, once signed in. */
+  detail: string;
+  connected: boolean;
+  error: string;
+  active: boolean;
+  /** An account the hub made: it can be removed. The user's own sign-in cannot. */
+  removable: boolean;
+}
+
+/** One way of connecting a provider, as its block in Settings › Accounts shows it. */
+export interface MethodView {
+  connected: boolean;
+  /** Who it is signed in as, or what the key is. */
+  detail: string;
+  /** An error code (see the settings' errorText), empty when fine. */
+  error: string;
+}
+
+/** What a provider action answers: done or why not, and the blocks as they are now. */
+export interface ProviderResult {
+  ok: boolean;
+  error: string;
+  field: string;
+  views: ProviderView[];
+}
+
+/** A provider's block in Settings › Accounts. */
+export interface ProviderView {
+  id: ProviderId;
+  label: string;
+  connected: boolean;
+  /** The method that is connected (the first when several are), else empty. */
+  method: ProviderMethod | '';
+  /** Anthropic only: the accounts there are, the active one marked. */
+  accounts?: ProviderAccountView[];
+  methods: Partial<Record<ProviderMethod, MethodView>>;
+  /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
+  cli: { found: boolean; version: string; outdated: boolean } | null;
 }
 
 /**
@@ -358,7 +487,7 @@ export type ChatItem = (
       text: string;
       tone: 'info' | 'error';
       /** A button that opens Settings › Claude. */
-      action?: 'claude-settings';
+      action?: 'claude-settings' | 'accounts-settings';
       /** The raw message behind an error, shown folded under "Details". */
       detail?: string;
     }
@@ -381,6 +510,8 @@ export interface HubSettings {
   onboarded: boolean;
   /** Claude Code executable; empty = the binary bundled with the Agent SDK, else `claude` found on the PATH. */
   claudePath: string;
+  /** Codex program to run; empty = the one found on the PATH. */
+  codexPath: string;
   provider: Provider;
   /** Folders scanned by `list_repos`; the master runs in the first one. */
   workspaces: string[];
@@ -395,6 +526,15 @@ export interface HubSettings {
   workerMaxEffort: Effort;
   /** Permanent workers, in the order the settings show them. */
   team: TeamRole[];
+  /** Accounts besides the Claude access above ("default"); changed through their own calls, never a patch. */
+  accounts: Account[];
+  /** Account the master runs on, and the one workers run on unless their post or the user picks another. */
+  masterAccount: string;
+  workerAccount: string;
+  /** The Anthropic account "default" stands for: an account id, or empty for the user's own Claude Code sign-in. */
+  anthropicActive: string;
+  /** Automatic fallback to another account when one reaches a limit. */
+  fallback: FallbackConfig;
   /** Instances of one post at the same time (its own worker included), and workers running at the same time. */
   parallel: { perPost: number; maxWorkers: number };
   /** Permission mode of every session at launch; empty = Claude Code's own default (settings, else auto or manual). */
@@ -417,6 +557,8 @@ export interface HubSettings {
 export interface SettingsView {
   settings: HubSettings;
   apiKeySet: boolean;
+  /** Accounts whose key is stored (an API key, an OpenAI key), by id. */
+  accountKeys: string[];
   githubTokenSet: boolean;
   /** The OS keychain can encrypt secrets (safeStorage); without it no secret is stored. */
   secureStorage: boolean;
@@ -427,7 +569,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'team'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts' | 'anthropicActive'>> & {
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -439,6 +581,14 @@ export interface AgentFile {
   role: Omit<TeamRole, 'id'>;
   /** Subagent settings a post does not carry (its tools, a bypass mode…), named so the user knows. */
   ignored: AgentDrop[];
+}
+
+/** The Codex program, as the accounts section reports it. */
+export interface CodexCli {
+  found: boolean;
+  version: string;
+  /** Older than the first version the hub was written against. */
+  outdated: boolean;
 }
 
 export interface ClaudeStatus {
@@ -508,6 +658,12 @@ export interface HubApi {
   setModel(id: string, model: string): void;
   setEffort(id: string, effort: Effort): void;
   setMode(id: string, mode: Mode): void;
+  /** Moves a session to another account (an id, "default"); it restarts on it with its conversation. */
+  setAccount(id: string, account: string): void;
+  /** Puts a session on a provider (anthropic, openai, deepseek): it moves to the account behind it, if connected. */
+  setProvider(id: string, provider: string): void;
+  /** One choice: a provider and a model of it, applied together. */
+  setProviderModel(id: string, provider: string, model: string): void;
   decide(id: string, requestId: string, decision: PermissionDecision): void;
   stop(id: string): void;
   resume(id: string): void;
@@ -518,6 +674,27 @@ export interface HubApi {
   /** Stores (or with null, deletes) the Anthropic API key after checking it with the API. */
   setApiKey(key: string | null): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;
+  /** The Codex program on this computer: found or not, its version, and whether the hub knows that version. */
+  checkCodex(): Promise<CodexCli>;
+  /** The providers' blocks in Settings › Accounts, checked now. */
+  providers(): Promise<ProviderView[]>;
+  /** Connects a provider with an API key (checked with its service, kept in the keychain). */
+  connectProvider(provider: ProviderId, method: ProviderMethod, key: string): Promise<ProviderResult>;
+  /** Opens the program's own sign-in in a terminal window; false when none could open. */
+  loginProvider(provider: ProviderId, method: ProviderMethod): Promise<boolean>;
+  disconnectProvider(provider: ProviderId, method: ProviderMethod): Promise<ProviderResult>;
+  /** Anthropic's accounts: use one (make it the active one), add one, sign one in again, remove one. */
+  anthropicAccount(action: 'use' | 'add' | 'login' | 'remove', id: string): Promise<ProviderResult & { opened: boolean }>;
+  /**
+   * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
+   * '' to remove it. A key is checked with its service first; `field` names the field refused.
+   */
+  saveAccount(account: Account, key: string | null): Promise<SettingsView & Result & { id: string; field: string; status: AccountStatus | null }>;
+  /** Signs it out (a Claude account) and forgets it; its sessions move to their usual account. */
+  deleteAccount(id: string): Promise<SettingsView & Result>;
+  checkAccount(id: string): Promise<AccountStatus>;
+  /** Opens a terminal window with Claude Code's own sign-in, for that Claude account's folder; false when none could open. */
+  accountLogin(id: string): Promise<boolean>;
   /** Opens a terminal window with Claude Code's own sign-in, or Anthropic's installer; false when none could open. */
   claudeTerminal(action: 'login' | 'install'): Promise<boolean>;
   /** The GitHub CLI on this machine: installed or not, and the login it is signed in with (else empty). */
