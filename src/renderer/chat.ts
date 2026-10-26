@@ -261,7 +261,7 @@ export class ChatView {
 
     this.modeBtn = h('button', 'cbtn');
     this.modeBtn.addEventListener('click', () => this.openModeMenu());
-    this.modelBtn = h('button', 'cbtn');
+    this.modelBtn = h('button', 'cbtn cbtn-model');
     this.modelBtn.addEventListener('click', () => this.openModelMenu());
     // The same "/" menu as typing it, for those who look for the commands rather than know them.
     const slashBtn = h('button', 'cbtn cbtn-icon cbtn-slash', '/');

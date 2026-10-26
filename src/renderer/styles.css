@@ -1764,25 +1764,31 @@ kbd,
   container-type: inline-size;
 }
 /* A narrow panel (small window, worker opened beside the master): tighter margins, and the composer keeps its send
-   button in view by dropping the secondary labels (their buttons keep a tooltip). */
+   button in view: the model button gives way first (see .cbtn-model), then the secondary labels go (their buttons
+   keep a tooltip). The selectors start with .pane to outweigh the composer's own rules, which come later. */
 @container (max-width: 560px) {
   .chat-inner {
     padding-inline: var(--sp-4);
   }
-  .composer {
+  .pane .composer {
     padding: 0 var(--sp-3) var(--sp-3);
   }
   .cbtn-muted {
     display: none;
   }
 }
+@container (max-width: 540px) {
+  .composer-bar .cbtn-provider,
+  .composer-bar .cost {
+    display: none;
+  }
+}
 @container (max-width: 440px) {
   .composer-bar .cbtn > .ico:first-child + span,
-  .composer-bar .cost,
   .working-hint {
     display: none;
   }
-  .composer-box {
+  .pane .composer-box {
     padding: var(--sp-2) var(--sp-2) 6px var(--sp-3);
   }
   .composer-bar .cbtn {
@@ -1795,6 +1801,11 @@ kbd,
 @container (max-width: 360px) {
   .composer-bar .ctx > span,
   .composer-bar .cbtn .ico.small {
+    display: none;
+  }
+}
+@container (max-width: 300px) {
+  .composer-bar .cbtn-slash {
     display: none;
   }
 }
@@ -2478,21 +2489,32 @@ kbd,
   field-sizing: content;
 }
 .composer-input::placeholder {
-  overflow: hidden;
   color: var(--text-3);
+}
+/* Empty, the field keeps its placeholder on one line; a textarea draws no ellipsis, so a long one fades out at the edge
+   rather than being cut mid-letter. */
+.composer-input:placeholder-shown {
+  overflow: hidden;
   white-space: nowrap;
-  text-overflow: ellipsis;
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
 }
 .composer-bar {
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
   margin-top: var(--sp-2);
   cursor: default;
   user-select: none;
 }
 .spacer {
   flex: 1;
+  min-width: 0;
+}
+/* The send button is never squeezed out: it stays at the right whatever the bar holds. */
+.composer-bar > .send {
+  flex: none;
+  margin-left: auto;
 }
 .cbtn {
   display: flex;
@@ -2522,6 +2544,26 @@ kbd,
 }
 .cbtn-muted {
   color: var(--text-3);
+}
+/* The model button is the one that gives way: its name shrinks to an ellipsis before anything leaves the bubble. */
+.cbtn-model,
+.cbtn:not(.cbtn-icon, .cbtn-model) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.cbtn-model > span,
+.cbtn > .ico {
+  flex: none;
+}
+/* Labels cut with an ellipsis; the permissions' one gives way before the model's name. */
+.cbtn > span:not([class]) {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cbtn-model > span:not([class]) {
+  flex: 0 1 auto;
 }
 .cbtn-icon {
   padding: 0 7px;
