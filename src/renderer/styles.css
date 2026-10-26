@@ -297,12 +297,20 @@ kbd,
   flex-direction: column;
   min-height: 0;
   background: var(--panel);
-  border-right: 1px solid var(--line);
+  /* Its edge is painted under its content: the master's card can reach over it to the topics' column. */
+  box-shadow: inset -1px 0 0 var(--line);
   user-select: none;
   contain: layout paint;
 }
 .side-section {
   padding: var(--sp-3) var(--sp-2) var(--sp-1);
+}
+/* The master's card starts level with the bottom line of the master's header (40px): the topics' column hangs there. */
+.side-section:first-child {
+  padding-top: 17px;
+}
+.side-section:first-child > .side-label {
+  line-height: 16px;
 }
 /* The git panel below never squeezes the workers under this height (repo.ts reads it). */
 .side-workers {
@@ -1433,6 +1441,189 @@ kbd,
 .card-actions:focus-within {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* ---------- topics of the master's conversation: the master's card opens into a column beside it ----------
+   The card loses its right edge, a bridge carries its tint over the sidebar's edge, and the column continues it
+   down the left of the master's conversation, under its header's line. */
+.sidebar,
+.pane-master {
+  --topics-w: 184px;
+  --topics-tint: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+.topics-open .card.master {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  background: linear-gradient(100deg, var(--accent-soft), var(--topics-tint));
+  box-shadow:
+    inset 1px 0 0 var(--line),
+    inset 0 1px 0 var(--line),
+    inset 0 -1px 0 var(--line);
+}
+.topics-open .card.master:hover {
+  background-color: var(--hover);
+}
+.topics-open .card.master::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: var(--sp-2);
+  background: linear-gradient(var(--topics-tint), var(--topics-tint)), var(--panel);
+  box-shadow:
+    inset 0 1px 0 var(--line),
+    inset 0 -1px 0 var(--line);
+}
+.topics {
+  position: absolute;
+  top: 40px;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: var(--topics-w);
+  padding: 6px 6px var(--sp-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: linear-gradient(var(--topics-tint), transparent 280px), var(--panel);
+  box-shadow: inset -1px 0 0 var(--line);
+  user-select: none;
+}
+.topics[hidden] {
+  display: none;
+}
+.pane-master.has-topics > .chat,
+.pane-master.has-topics > .composer {
+  margin-left: var(--topics-w);
+}
+.topic {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--ctl-md);
+  padding: 5px 6px 5px var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    color var(--dur-2);
+}
+.topic:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.topic[aria-current='true'] {
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+.topic:focus-visible {
+  outline-offset: -2px;
+}
+/* A hairline between two topics, inset like a macOS list; none against a highlighted row (it has its own edge). */
+.topic + .topic::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  right: var(--sp-2);
+  left: var(--sp-2);
+  height: 1px;
+  background: var(--line);
+  transition: opacity var(--dur-2);
+}
+.topic[aria-current='true']::before,
+.topic[aria-current='true'] + .topic::before,
+.topic:hover::before,
+.topic:hover + .topic::before {
+  opacity: 0;
+}
+.topic-title {
+  display: -webkit-box;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+/* What waits for the user: white on red, 4.9:1 (dark) and 5.2:1 (light). */
+.topic-badge {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--danger-fill);
+  color: var(--text-on-accent);
+  font: 600 var(--fs-xs) / 18px var(--font-ui);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.topics-sep {
+  flex: none;
+  height: 1px;
+  margin: 4px var(--sp-2);
+  background: var(--line);
+}
+/* Folded (narrow conversation): the topic shown, in the header, opens the list. */
+.topics-pick {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  height: var(--ctl-sm);
+  padding: 0 6px 0 var(--sp-2);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--r-sm);
+  background: linear-gradient(100deg, var(--accent-soft), transparent), var(--btn);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    color var(--dur-2);
+}
+.topics-pick[hidden] {
+  display: none;
+}
+.topics-pick:hover {
+  background-color: var(--btn-hover);
+  color: var(--text);
+}
+.topics-pick-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topics-pick .topic-badge {
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+}
+.topics-menu-row {
+  align-items: center;
+}
+.topics-menu-row .menu-text {
+  flex: 1;
+}
+.menu.below {
+  transform-origin: 16px 0;
 }
 
 /* ---------- status dot & meter (no endless pulse: the mascot shows the activity) ---------- */

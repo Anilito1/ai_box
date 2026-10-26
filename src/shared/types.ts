@@ -3,6 +3,7 @@ import type { Lang } from './i18n';
 import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
+import type { Topic } from './topics';
 import type { UpdateChoice, UpdateMode, UpdateState } from './update';
 
 export { APP_NAME } from './brand';
@@ -319,9 +320,15 @@ export interface HubSnapshot {
   sessions: SessionView[];
   models: ModelOption[];
   rateLimits: RateLimits | null;
+  /** Topics of the master's conversation, most recent activity first. */
+  topics: Topic[];
 }
 
-export type ChatItem =
+/**
+ * In the master's conversation: `topic`, the topic the item is filed under (none: only in "All"); `also`, further
+ * topics of a request about several jobs.
+ */
+export type ChatItem = (
   | { kind: 'user'; id: string; text: string; images: string[] }
   | { kind: 'peer'; id: string; from: string; text: string }
   | { kind: 'assistant'; id: string; text: string; live: boolean }
@@ -354,7 +361,8 @@ export type ChatItem =
       action?: 'claude-settings';
       /** The raw message behind an error, shown folded under "Details". */
       detail?: string;
-    };
+    }
+) & { topic?: string; also?: string[] };
 
 export interface PermissionDecision {
   behavior: 'allow' | 'always' | 'deny';
@@ -492,7 +500,8 @@ export interface HubApi {
   costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number }>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
-  send(id: string, text: string, images: ImageInput[]): void;
+  /** `topic`: the master's topic the message is written in, else null. */
+  send(id: string, text: string, images: ImageInput[], topic: string | null): void;
   interrupt(id: string): void;
   setModel(id: string, model: string): void;
   setEffort(id: string, effort: Effort): void;

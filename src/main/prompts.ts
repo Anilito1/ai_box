@@ -4,6 +4,7 @@ import { modelGrid, sessionNameOf, type Tier } from '../shared/team';
 import type { TeamRole } from '../shared/types';
 import { masterCwd, type HubConfig } from './config';
 import { lang } from './i18n';
+import { topicsSection } from './topics';
 
 /** A worker idle this long (no turn, no background task) is closed; a message resumes it with its conversation. */
 export const IDLE_CLOSE_MIN = 15;
@@ -39,7 +40,7 @@ export function tags(l: Lang = lang()) {
 const list = (items: string[], and: string) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} ${and} ${items.at(-1)}`);
 const flat = (text: string) => text.replace(/\s+/g, ' ').trim();
 /** Text the user, the master or a worker wrote, put between the hub's tags: none of it can close them. */
-export const inside = (text: string) => text.replace(/<\/(post-instructions|handoff-note|hub-post|hub-roster|hub-handoff|hub-note)>/gi, '<\\/$1>');
+export const inside = (text: string) => text.replace(/<\/(post-instructions|handoff-note|hub-post|hub-roster|hub-handoff|hub-note|hub-topic)>/gi, '<\\/$1>');
 
 /** One line per enabled post, as the master reads it. */
 export function teamText(cfg: HubConfig, l: Lang = lang()): string {
@@ -245,6 +246,8 @@ ${parallelSection(cfg, 'fr')}
 
 ${modelsSection(cfg, 'fr')}
 
+${topicsSection('fr')}
+
 ## Avec l'utilisateur
 - Rapport final d'un worker → résume en 2 à 4 lignes (fait / reste / point d'attention), jamais en copie intégrale.
 - Français, direct, concis, sans préambule. Tableau court quand tu fais le point sur plusieurs workers.${
@@ -297,6 +300,8 @@ ${parallelSection(cfg, 'en')}
 - Images: the local path of each image the user attaches is in their message. Put that path in the brief: the worker opens it with Read.
 
 ${modelsSection(cfg, 'en')}
+
+${topicsSection('en')}
 
 ## With the user
 - A worker's final report → summarize it in 2 to 4 lines (done / left / watch out), never a full copy.

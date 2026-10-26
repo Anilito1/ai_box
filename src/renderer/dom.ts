@@ -145,8 +145,8 @@ export function ago(at: number): string {
   return t('ago.d', { n: Math.floor(s / 86_400) });
 }
 
-/** Popover anchored above a button; closes on outside click, Escape or window blur. */
-export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: () => void) => void): void {
+/** Popover anchored above a button (`below`: under it); closes on outside click, Escape or window blur. */
+export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: () => void) => void, below = false): void {
   const menu = document.getElementById('menu') as HTMLDivElement;
   const close = () => {
     menu.hidden = true;
@@ -170,9 +170,11 @@ export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: 
   const r = anchor.getBoundingClientRect();
   const left = Math.min(r.left, window.innerWidth - menu.offsetWidth - 12);
   menu.style.left = `${Math.max(12, left)}px`;
-  menu.style.bottom = `${window.innerHeight - r.top + 6}px`;
-  // Never taller than the room above its anchor: long contents scroll inside.
-  menu.style.maxHeight = `${Math.max(160, r.top - 18)}px`;
+  // Never taller than the room on its side of the anchor: long contents scroll inside.
+  menu.style.top = below ? `${r.bottom + 6}px` : '';
+  menu.style.bottom = below ? '' : `${window.innerHeight - r.top + 6}px`;
+  menu.style.maxHeight = `${Math.max(160, below ? window.innerHeight - r.bottom - 18 : r.top - 18)}px`;
+  menu.classList.toggle('below', below);
   document.addEventListener('mousedown', onDown, true);
   document.addEventListener('keydown', onKey, true);
   window.addEventListener('blur', close);

@@ -7,6 +7,7 @@ import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
 import { RepoPanel } from './repo';
 import { SetupView } from './setup';
+import { TopicsView } from './topics';
 import './tooltip';
 import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
@@ -40,6 +41,7 @@ settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, settingsButton);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 const setup = new SetupView(hub, () => snapshot.models);
+const topicsView = new TopicsView($('pane-master'), masterView);
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 
 interface Card {
@@ -60,7 +62,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null };
+let snapshot: HubSnapshot = { sessions: [], models: [], rateLimits: null, topics: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 
@@ -324,6 +326,7 @@ function render(): void {
   workspace.classList.toggle('expanded', opened !== null);
   const master = sessions.find((s) => s.role === 'master');
   masterView.show(master, master && store.get(master.id), models);
+  topicsView.update(snapshot.topics, master && store.get(master.id));
   const worker = sessions.find((s) => s.id === opened);
   workerView.show(worker, worker && store.get(worker.id), models);
   renderStatusbar(snapshot.rateLimits);
@@ -429,6 +432,8 @@ hub.onItems((id, items, reset) => {
   else view?.upsert(items);
   // The card's activity line follows the latest step.
   const s = snapshot.sessions.find((x) => x.id === id);
+  // An approval asked in the master's conversation adds to the badge of its topic.
+  if (s?.role === 'master' && (fresh || items.some((i) => i.kind === 'permission'))) topicsView.update(snapshot.topics, map);
   if (s) renderCard(s);
 });
 hub.onEvent((id, kind) => clawdEvent(id, kind));

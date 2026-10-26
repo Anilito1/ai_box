@@ -35,6 +35,7 @@ import {
   type SettingsView,
   type TeamRole,
 } from '../shared/types';
+import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
 import { agentFiles } from './agents';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './claude';
@@ -328,10 +329,10 @@ class Hub {
       for (const repo of repoWatchers) sender.send('hub:repo', repo.status);
       rendererReady = true;
     });
-    on('session:send', (id, text, images) => {
+    on('session:send', (id, text, images, topic) => {
       if (!isStr(id) || !isStr(text)) return;
       const parsed = parseImages(images);
-      if (parsed) mgr.send(id, text, parsed);
+      if (parsed) mgr.send(id, text, parsed, isTopicId(topic) ? topic : null);
       else mgr.refuse(id, text, t('images.invalid'));
     });
     on('session:interrupt', (id) => isStr(id) && mgr.interrupt(id));

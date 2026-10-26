@@ -122,11 +122,13 @@ export class ChatView {
   private session: SessionView | null = null;
   private items: Items | undefined;
   private models: ModelOption[] = [];
+  /** The master's topic shown (its items only) and written in; null: everything. */
+  private topic: { id: string; title: string } | null = null;
 
   constructor(
     pane: HTMLElement,
     private readonly hub: HubApi,
-    emptyText: string,
+    private readonly emptyText: string,
     /** Given for a panel that can be hidden: adds a close button to its header. */
     onClose?: () => void,
     mascot = false,
@@ -306,6 +308,25 @@ export class ChatView {
     this.input.focus();
   }
 
+  /** Adds a control to the header, after the status. */
+  insertHead(el: HTMLElement): void {
+    this.head.status.after(el);
+  }
+
+  /** Shows only the items of one of the master's topics (null: all of them); what is sent then is written in it. */
+  setTopic(topic: { id: string; title: string } | null): void {
+    const changed = topic?.id !== this.topic?.id;
+    this.topic = topic;
+    this.renderChrome();
+    if (!changed) return;
+    this.empty.textContent = topic ? t('topics.empty', { title: topic.title }) : this.emptyText;
+    this.reset(this.items);
+  }
+
+  private shows(item: ChatItem): boolean {
+    return !this.topic || item.topic === this.topic.id || !!item.also?.includes(this.topic.id);
+  }
+
   /** Shows a session; switching to another one rebuilds the stream and restores its draft. */
   show(session: SessionView | undefined, items: Items | undefined, models: ModelOption[]): void {
     this.models = models;
@@ -335,7 +356,7 @@ export class ChatView {
     this.nodes.clear();
     this.live = null;
     window.clearTimeout(this.pendingTimer);
-    const all = [...(items?.values() ?? [])];
+    const all = [...(items?.values() ?? [])].filter((item) => this.shows(item));
     const first = all.slice(-FIRST_BATCH);
     this.pending = all.slice(0, all.length - first.length).map((item) => item.id);
     this.pendingSet = new Set(this.pending);
@@ -355,7 +376,8 @@ export class ChatView {
     for (let i = batch.length - 1; i >= 0; i--) {
       this.pendingSet.delete(batch[i]);
       const item = this.items?.get(batch[i]);
-      if (!item) continue;
+      // Filed under another topic since the view opened: out of it.
+      if (!item || !this.shows(item)) continue;
       const node = this.render(item);
       this.stream.insertBefore(node, before);
       this.nodes.set(item.id, node);
@@ -410,7 +432,9 @@ export class ChatView {
       s.status === 'exited'
         ? t(s.post ? 'chat.asleepPlaceholder' : 'chat.closedPlaceholder')
         : s.role === 'master'
-          ? t('chat.masterPlaceholder')
+          ? this.topic
+            ? t('topics.placeholder', { title: this.topic.title })
+            : t('chat.masterPlaceholder')
           : t('chat.workerPlaceholder');
 
     this.modeBtn.replaceChildren(icon(ICONS.shield), h('span', '', s.mode ? modeLabel(s.mode) : t('chat.modeDefault')));
@@ -448,6 +472,7 @@ export class ChatView {
     const id = this.session.id;
     const text = this.input.value;
     const attachments = [...this.attachments];
+    const topic = this.topic?.id ?? null;
     // Claude Code's commands may still be loading: one submit at a time.
     this.submitting = true;
     void this.slash
@@ -459,6 +484,7 @@ export class ChatView {
           id,
           r.text,
           attachments.map((a) => a.image),
+          topic,
         );
         // Only what was sent leaves the composer: text typed or images added meanwhile stay.
         if (this.input.value === text) this.input.value = '';
@@ -621,6 +647,13 @@ export class ChatView {
 
   private place(item: ChatItem): void {
     if (this.pendingSet.has(item.id)) return; // Drawn with its latest state when its batch comes.
+    if (!this.shows(item)) {
+      // Filed under another topic (or not yet): out of this view.
+      this.nodes.get(item.id)?.remove();
+      this.nodes.delete(item.id);
+      if (this.live?.id === item.id) this.live = null;
+      return;
+    }
     if (item.kind === 'assistant' && item.live && this.live?.id === item.id) return this.streamLive(item.text);
     const old = this.nodes.get(item.id);
     const node = this.render(item);
@@ -628,9 +661,21 @@ export class ChatView {
     if (old) old.replaceWith(node);
     else {
       if (!this.resetting) node.classList.add('enter');
-      this.stream.insertBefore(node, this.working.root);
+      // In a topic's view, an earlier message filed into it late takes its place in the conversation.
+      this.stream.insertBefore(node, this.topic && !this.resetting ? this.nodeAfter(item.id) : this.working.root);
     }
     this.nodes.set(item.id, node);
+  }
+
+  /** The drawn node of the first item after this one, else the end of the stream. */
+  private nodeAfter(id: string): Node {
+    let after = false;
+    for (const key of this.items?.keys() ?? []) {
+      const node = after ? this.nodes.get(key) : undefined;
+      if (node) return node;
+      if (key === id) after = true;
+    }
+    return this.working.root;
   }
 
   private render(item: ChatItem): HTMLElement {

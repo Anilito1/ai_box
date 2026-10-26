@@ -54,6 +54,7 @@ const LABELS: Record<string, Parameters<typeof t>[0]> = {
   mcp__hub__create_role: 'label.createRole',
   mcp__hub__update_role: 'label.updateRole',
   mcp__hub__delete_role: 'label.deleteRole',
+  mcp__hub__topic: 'topics.label',
 };
 
 /** A tool's name for the user: ours in their language, another server's as "server · tool". */
@@ -182,7 +183,7 @@ const CAPTURED = /^\[(?:Capture jointe :|Attached image:) [^\]\n]+\]\n?/gm;
  * What the hub adds to a message for the model alone: a changed team or post, a handoff note, or the instructions
  * behind a short message the user reads (<hub-note>).
  */
-const HUB_BLOCK = /\s*<hub-(roster|post|note|handoff)>[\s\S]*?<\/hub-\1>/g;
+const HUB_BLOCK = /\s*<hub-(roster|post|note|handoff|topic)\b[^>\n]*>[\s\S]*?<\/hub-\1>/g;
 const HUB_NOTE = /<hub-note>([\s\S]*?)<\/hub-note>/;
 /**
  * A worker's own words inside a hub note, between random tags nothing in them can close; the opening tag starts a line

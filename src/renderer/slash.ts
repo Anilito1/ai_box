@@ -155,7 +155,7 @@ export class SlashMenu {
     if (target.kind === 'cli') {
       // Picked from the menu without an argument: sent as it is.
       this.host.clearText();
-      this.hub.send(s.id, `/${target.command.name}`, []);
+      this.hub.send(s.id, `/${target.command.name}`, [], null);
       return;
     }
     const arg = target.arg;

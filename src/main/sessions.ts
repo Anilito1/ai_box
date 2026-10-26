@@ -23,6 +23,7 @@ import {
 import { z } from 'zod';
 import { addUsage, sumUsage, totalsOf, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
+import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import {
   capEffort,
@@ -88,6 +89,7 @@ import {
   userTextItem,
   visibleText,
 } from './transcript';
+import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlock, topicErrors, topicToolSpec } from './topics';
 import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
 
 /** Push-based prompt stream: keeps a query in streaming-input mode so it can receive messages and controls. */
@@ -261,6 +263,7 @@ const HUB_TOOLS = [
   'create_role',
   'update_role',
   'delete_role',
+  'topic',
 ];
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
@@ -289,6 +292,8 @@ interface Prompt {
   handoff?: boolean;
   /** A slash command: Claude Code reads the text as typed, so nothing (handoff note, news of the team) is added to it. */
   command?: boolean;
+  /** For the master: the topic it is filed under (the one the user wrote in, the worker's a hub message is about). */
+  topic?: string;
 }
 
 /** Tools whose input a permission card shows as it is: the command to run, the edit to make. */
@@ -338,6 +343,18 @@ function confirmationAnswers(schema: Record<string, unknown> | undefined): Recor
   }
   return content;
 }
+
+/** An item with its topics (its own first), or as it is without any. */
+const withTopics = (item: ChatItem, topics: string[] = []): ChatItem => {
+  const [topic, ...also] = topics;
+  return topic ? { ...item, topic, ...(also.length > 0 ? { also } : {}) } : item;
+};
+/** The text of a message's blocks: what a replayed prompt was sent as. */
+const textOf = (blocks: Record<string, unknown>[]) =>
+  blocks
+    .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
+    .filter(Boolean)
+    .join('\n');
 
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
@@ -389,6 +406,8 @@ export class SessionManager extends EventEmitter {
   /** Workers to relaunch at start, from the state saved when the hub last closed. */
   private readonly resumeOnStart = new Map<string, 'mission' | 'work'>();
   private spawnQueue: Promise<unknown> = Promise.resolve();
+  /** Topics of the master's conversation; items a later call settles are filed again with theirs. */
+  private readonly topics = new TopicTracker((ids, topic, also) => this.refile(ids, topic, also));
 
   constructor(private readonly opts: ManagerOptions) {
     super();
@@ -456,6 +475,7 @@ export class SessionManager extends EventEmitter {
     if (running) this.stop(s.id);
     Object.assign(s, { cwd, sessionId: randomUUID(), started: false, historyLoad: null, metrics: null, lastMessage: '' });
     s.items.clear();
+    this.topics.reset();
     this.emit('items', s.id, [], true);
     if (running) void this.launch(s, false);
     this.changed();
@@ -467,8 +487,8 @@ export class SessionManager extends EventEmitter {
     if (s) this.notice(s, t('notice.refused', { reason, text: text.trim() ? ` : « ${oneLine(text, 300)} »` : '' }), 'error');
   }
 
-  /** A message typed by the user in a session's composer. */
-  send(id: string, text: string, images: ImageInput[] = []): void {
+  /** A message typed by the user in a session's composer; `topic`: the master's topic it is written in. */
+  send(id: string, text: string, images: ImageInput[] = [], topic: string | null = null): void {
     const s = this.sessions.get(id);
     const shown = text.trim();
     if (!s || (!shown && images.length === 0)) return;
@@ -481,11 +501,15 @@ export class SessionManager extends EventEmitter {
     } catch (err) {
       this.notice(s, t('notice.imagesNotSaved'), 'error', errorText(err));
     }
-    const textForModel = [shown, ...paths.map(capturedLine)].filter(Boolean).join('\n');
+    const command = parseSlash(shown) !== null;
+    // Written in one of the master's topics: the master is told which, the user does not see it.
+    // A command goes as typed: it is only filed.
+    const filed = s.id === MASTER_ID && topic ? this.topics.get(topic) : undefined;
+    const textForModel = [shown, ...paths.map(capturedLine), filed && !command ? topicBlock(filed, 'user') : ''].filter(Boolean).join('\n');
     // The user took the worker over: its turn no longer answers the master, and it stays open.
     s.owesReport = false;
     s.closeWhenDone = false;
-    this.deliver(s, { text: textForModel, images, shown, command: parseSlash(shown) !== null });
+    this.deliver(s, { text: textForModel, images, shown, command, ...(filed ? { topic: filed.id } : {}) });
   }
 
   interrupt(id: string): void {
@@ -656,6 +680,7 @@ export class SessionManager extends EventEmitter {
     Object.assign(s, { sessionId: randomUUID(), started: false, historyLoad: null, lastMessage: '', noteFresh: false, handoffDone: false, error: '' });
     if (s.metrics) s.metrics = { ...s.metrics, contextTokens: 0, contextPct: 0 };
     s.items.clear();
+    if (s.id === MASTER_ID) this.topics.reset();
     this.pendingItems.delete(s.id);
     this.emit('items', s.id, [], true);
     this.notice(s, t(s.roleId && s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
@@ -716,7 +741,7 @@ export class SessionManager extends EventEmitter {
         retrying: s.retrying,
         error: s.error,
       }));
-    return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits };
+    return { sessions, models: this.modelOptions(), rateLimits: this.rateLimits, topics: this.topics.list() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -812,6 +837,7 @@ export class SessionManager extends EventEmitter {
     if (resume && !(await getSessionInfo(s.sessionId, { dir: s.cwd }).then(Boolean, () => true))) {
       resume = false;
       s.sessionId = randomUUID();
+      if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
     }
     if (resume) await this.loadHistory(s);
     // Everything of a conversation started now is already in `items`: reading its transcript later would duplicate it.
@@ -896,10 +922,12 @@ export class SessionManager extends EventEmitter {
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
-    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }));
+    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);
   }
 
   private teardown(s: Session): void {
+    // Its process is gone with the prompts it had not taken: the turn ends there.
+    if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
     s.liveId = null;
@@ -1008,13 +1036,18 @@ export class SessionManager extends EventEmitter {
         this.markBusy(s);
         // A frame carrying an error has Claude Code's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
-        const blocks = blocksOf(msg.message).filter((b) => !msg.error || b.type !== 'text');
+        const all = blocksOf(msg.message).filter((b) => !msg.error || b.type !== 'text');
+        const master = s.id === MASTER_ID;
+        // The master's topic calls are the hub's filing, not a step worth reading.
+        const blocks = master ? all.filter((b) => b.name !== TOPIC_TOOL) : all;
         const hasText = blocks.some((b) => b.type === 'text');
         if (msg.error && s.liveId) {
           this.drop(s, s.liveId);
           s.liveId = null;
         }
-        for (const item of assistantItems(blocks, msg.uuid, hasText ? (s.liveId ?? undefined) : undefined)) this.upsert(s, item);
+        const items = assistantItems(blocks, msg.uuid, hasText ? (s.liveId ?? undefined) : undefined);
+        const filed = master ? this.fileFrame(all, items) : null;
+        for (const item of items) this.upsert(s, withTopics(item, filed?.get(item.id)));
         if (hasText) s.liveId = null;
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === masterName())) {
           s.owesReport = false;
@@ -1032,6 +1065,7 @@ export class SessionManager extends EventEmitter {
         if ('isReplay' in msg && msg.isReplay && msg.origin?.kind !== 'peer') {
           // One of our prompts reached the model: it is no longer waiting in the queue.
           s.queued = Math.max(0, s.queued - 1);
+          if (s.id === MASTER_ID) this.topics.taken(textOf(blocks));
           this.markBusy(s);
           break;
         }
@@ -1039,7 +1073,11 @@ export class SessionManager extends EventEmitter {
           // `body` (the sender's raw text) is sent by the CLI but not yet in the SDK typings.
           const origin = msg.origin as typeof msg.origin & { body?: string };
           const text = origin.body ?? userTextItem(blocks, '')?.text ?? '';
-          this.upsert(s, { kind: 'peer', id: `peer-${msg.uuid ?? randomUUID()}`, from: origin.name || origin.from, text });
+          const id = `peer-${msg.uuid ?? randomUUID()}`;
+          const from = origin.name || origin.from;
+          // A worker writing to the master directly: filed under its topic, part of the turn it starts.
+          const topic = s.id === MASTER_ID ? this.topics.shown(id, { worker: workerName(from) || null }, false) : null;
+          this.upsert(s, { kind: 'peer', id, from, text, ...(topic ? { topic } : {}) });
           this.event(s, 'message_in');
           break;
         }
@@ -1060,6 +1098,7 @@ export class SessionManager extends EventEmitter {
         s.liveId = null;
         // A local command (/context, /usage…) is never replayed: the CLI's own count says what still waits.
         if (typeof msg.queued_turn_count === 'number') s.queued = Math.min(s.queued, msg.queued_turn_count);
+        if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
         s.compacting = false;
         s.status = s.pending.size > 0 ? 'attention' : 'idle';
@@ -1355,7 +1394,7 @@ export class SessionManager extends EventEmitter {
     return { ...prompt, text: `${prompt.text}\n\n${news}` };
   }
 
-  private pushUser(s: Session, { text, images, from, shown, handoff }: Prompt): void {
+  private pushUser(s: Session, { text, images, from, shown, handoff, topic }: Prompt): void {
     const content =
       images.length === 0
         ? text
@@ -1366,11 +1405,16 @@ export class SessionManager extends EventEmitter {
     // Work after the handoff note makes it stale: the conversation goes on, the note waits for the next sleep.
     if (handoff) Object.assign(s, { handoff: true, handoffStale: false, handoffDone: true });
     else Object.assign(s, { noteFresh: false, handoffDone: false, handoffStale: s.handoff });
+    const id = `${from ? 'peer' : 'user'}-${randomUUID()}`;
+    // In the master's conversation: filed now if its topic is known, part of the turn that takes it.
+    const input: TopicInput = { topic: topic ?? null, worker: from && from !== 'hub' ? from : null, user: !from };
+    const filed = s.id === MASTER_ID ? this.topics.shown(id, input, true, text) : null;
+    const tag = filed ? { topic: filed } : {};
     if (from) {
-      this.upsert(s, { kind: 'peer', id: `peer-${randomUUID()}`, from, text: shown ?? taggedSender(text)?.text ?? visibleText(text) });
+      this.upsert(s, { kind: 'peer', id, from, text: shown ?? taggedSender(text)?.text ?? visibleText(text), ...tag });
     } else {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
-      this.upsert(s, { kind: 'user', id: `user-${randomUUID()}`, text: shown ?? text, images: urls });
+      this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...tag });
     }
     s.inbox?.push({ type: 'user', message: { role: 'user', content }, parent_tool_use_id: null, session_id: s.sessionId });
     s.queued++;
@@ -1415,6 +1459,9 @@ export class SessionManager extends EventEmitter {
 
   private async readHistory(s: Session): Promise<void> {
     const history = new Map<string, ChatItem>();
+    const master = s.id === MASTER_ID;
+    // The master's conversation is filed by topic again, from its own calls (shared/topics.ts).
+    const steps: ReplayStep[] = [];
     try {
       const messages = (await getSessionMessages(s.sessionId, { dir: s.cwd })).slice(-HISTORY_MAX);
       for (const m of messages) {
@@ -1423,7 +1470,9 @@ export class SessionManager extends EventEmitter {
         const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';
         const blocks = blocksOf(m.message).filter((b) => !synthetic || b.type !== 'text');
         if (m.type === 'assistant') {
-          for (const item of assistantItems(blocks, m.uuid)) history.set(item.id, item);
+          const items = assistantItems(master ? blocks.filter((b) => b.name !== TOPIC_TOOL) : blocks, m.uuid);
+          for (const item of items) history.set(item.id, item);
+          if (master) steps.push(...frameSteps(blocks, items.filter((i) => i.kind !== 'tool')));
         } else if (m.type === 'user') {
           for (const b of blocks) {
             if (b.type !== 'tool_result') continue;
@@ -1431,12 +1480,24 @@ export class SessionManager extends EventEmitter {
             if (item?.kind === 'tool') history.set(item.id, { ...item, result: resultText(b.content), isError: b.is_error === true });
           }
           const text = userTextItem(blocks, m.uuid);
-          if (text) history.set(text.id, text);
+          if (!text) continue;
+          history.set(text.id, text);
+          if (master) {
+            const raw = blocks.map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : '')).join('\n');
+            steps.push({ kind: 'input', id: text.id, input: replayInput(text.kind, text.kind === 'peer' ? text.from : '', raw) });
+          }
         }
       }
     } catch {
       s.historyLoad = null; // Unreadable transcript (locked, missing): the view stays as is until the next try.
       return;
+    }
+    if (master) {
+      for (const [id, topics] of this.topics.replay(steps)) {
+        const item = history.get(id);
+        if (item) history.set(id, withTopics(item, topics));
+      }
+      this.changed();
     }
     // History goes first; anything sent while it was loading stays after it.
     s.items = new Map([...history, ...s.items]);
@@ -1453,6 +1514,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private upsert(s: Session, item: ChatItem): void {
+    if (s.id === MASTER_ID) item = this.fileItem(s, item);
     s.items.set(item.id, item);
     if (s.items.size > ITEMS_MAX) {
       for (const key of [...s.items.keys()].slice(0, ITEMS_TRIM)) s.items.delete(key);
@@ -1470,6 +1532,33 @@ export class SessionManager extends EventEmitter {
     }, 40);
   }
 
+  /**
+   * An item of the master's conversation with its topic: the one it already had (a streamed reply, a tool's result),
+   * else the topic of the reply it belongs to. Messages to the master come filed (pushUser), or wait for their turn.
+   */
+  private fileItem(s: Session, item: ChatItem): ChatItem {
+    if (item.topic) return item;
+    const before = s.items.get(item.id);
+    if (before) return before.topic ? { ...item, topic: before.topic, ...(before.also ? { also: before.also } : {}) } : item;
+    if (item.kind === 'user' || item.kind === 'peer') return item;
+    if (item.kind !== 'notice' && item.kind !== 'permission') return withTopics(item, this.topics.reply(item.id, item.kind === 'assistant'));
+    const topic = this.topics.note();
+    return topic ? { ...item, topic } : item;
+  }
+
+  /** Items of the master that a later call filed (the reply named its topic, or fell back on a worker's). */
+  private refile(ids: string[], topic: string, also = false): void {
+    const master = this.sessions.get(MASTER_ID);
+    if (!master) return;
+    for (const id of ids) {
+      const item = master.items.get(id);
+      if (!item) continue;
+      if (also && !item.also?.includes(topic)) this.upsert(master, { ...item, also: [...(item.also ?? []), topic] });
+      else if (!also && item.topic !== topic) this.upsert(master, { ...item, topic });
+    }
+    this.changed();
+  }
+
   /** `detail`: the raw message behind it (an error), folded under "Details" in the conversation. */
   private notice(s: Session, text: string, tone: 'info' | 'error', detail = ''): void {
     this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text, tone, ...(detail ? { detail } : {}) });
@@ -1480,10 +1569,22 @@ export class SessionManager extends EventEmitter {
 
   /** Wakes the master with a hub message about a worker it would otherwise wait on forever. */
   /** `shown`: the short line the user reads; `note`: what the model alone needs (visibleText() hides it). */
-  private notifyMaster(shown: string, note: string): void {
+  private notifyMaster(shown: string, note: string, about?: Session): void {
     const master = this.sessions.get(MASTER_ID);
     if (!master || this.quitting) return;
-    this.deliver(master, { text: `${tags().hub} ${shown}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: 'hub' });
+    const topic = this.workerTopic(about);
+    this.deliver(master, {
+      text: `${tags().hub} ${shown}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
+      images: [],
+      from: 'hub',
+      ...(topic ? { topic: topic.id } : {}),
+    });
+  }
+
+  /** The master's topic a worker works on, if it has one. */
+  private workerTopic(s: Session | undefined) {
+    const id = s ? this.topics.linkOf(s.name) : undefined;
+    return id ? this.topics.get(id) : undefined;
   }
 
   /** A worker the master wrote to ended its turn without answering: the master hears it from the hub. */
@@ -1497,7 +1598,7 @@ export class SessionManager extends EventEmitter {
     // A random tag the worker's text cannot guess: nothing inside it can pass for the hub's own words.
     const tag = `worker-output-${randomTag()}`;
     const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
-    this.notifyMaster(t('hub.silent', { name: displayName(s) }), t('hub.silent.note', { name: s.name, tag, last }));
+    this.notifyMaster(t('hub.silent', { name: displayName(s) }), t('hub.silent.note', { name: s.name, tag, last }), s);
   }
 
   /** End of the turn (and of its background tasks) of a worker the master closed while it was finishing. */
@@ -1576,7 +1677,7 @@ export class SessionManager extends EventEmitter {
   /** A worktree kept on a close the master did not ask for (idle, end of its turn): the master hears why. */
   private tellKept(s: Session): void {
     void s.retiring?.then((text) => {
-      if (s.tree?.state === 'kept' && text) this.notifyMaster(t('hub.treeKept', { name: displayName(s) }), text);
+      if (s.tree?.state === 'kept' && text) this.notifyMaster(t('hub.treeKept', { name: displayName(s) }), text, s);
     });
   }
 
@@ -1659,6 +1760,7 @@ export class SessionManager extends EventEmitter {
       .nullish()
       .describe(t('tool.effort'));
     const byPost = z.string().describe(t('tool.role.byName'));
+    const topicSpec = topicToolSpec();
     const postFields = {
       description: z.string().nullish().describe(t('tool.role.description')),
       instructions: z.string().nullish().describe(t('tool.role.instructions')),
@@ -1756,8 +1858,51 @@ export class SessionManager extends EventEmitter {
           (args, extra) => run(() => this.updateRole(args, signalOf(extra))),
         ),
         tool('delete_role', t('tool.deleteRole'), { name: byPost }, ({ name }, extra) => run(() => this.deleteAsked(name, signalOf(extra)))),
+        tool(
+          'topic',
+          topicSpec.description,
+          {
+            id: z.string().describe(topicSpec.fields.id),
+            title: z.string().nullish().describe(topicSpec.fields.title),
+            awaiting_user: z.boolean().nullish().describe(topicSpec.fields.awaiting_user),
+            question: z.string().nullish().describe(topicSpec.fields.question),
+            workers: z.array(z.string()).nullish().describe(topicSpec.fields.workers),
+          },
+          (args) => run(() => this.declareTopic(args)),
+        ),
       ],
     });
+  }
+
+  /**
+   * The master names the topic of its reply. The call is filed from the reply itself (fileFrame), as it is again from
+   * the transcript at the next start: the tool only checks it and answers.
+   */
+  private declareTopic(raw: unknown): string {
+    const call = parseTopicCall(raw);
+    const errors = topicErrors();
+    if (!call) throw new Error(errors.id);
+    const topic = this.topics.get(call.id);
+    if (!topic && !call.title) throw new Error(errors.title);
+    const shown = { ...(topic ?? { id: call.id, workers: call.workers, at: 0 }), title: call.title || (topic?.title ?? ''), awaiting: call.awaiting, question: call.question };
+    return topicAnswer(shown, !topic || this.topics.createdNow(call.id), this.topics.list().filter((o) => o.id !== call.id));
+  }
+
+  /** A frame of the master's reply: its topic calls and the workers it writes to, then the topics of its items. */
+  private fileFrame(blocks: Record<string, unknown>[], items: ChatItem[]): Map<string, string[]> {
+    const filed = new Map<string, string[]>();
+    for (const step of frameSteps(blocks, items.filter((i) => i.kind !== 'tool'))) {
+      if (step.kind === 'topic') {
+        if (this.topics.declare(step.call)) this.changed();
+      } else if (step.kind === 'wrote') {
+        // A name another worker already has: the new worker starts as "<name>-2", the other one keeps its topic.
+        if (step.spawn && [...this.sessions.values()].some((x) => x.name === step.worker)) this.topics.expect(step.worker);
+        else this.topics.wrote(step.worker);
+      } else if (step.kind === 'item') {
+        filed.set(step.id, step.tool ? this.topics.tool(step.id, step.worker) : this.topics.reply(step.id, step.text));
+      }
+    }
+    return filed;
   }
 
   /**
@@ -1812,6 +1957,7 @@ export class SessionManager extends EventEmitter {
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
     Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true });
+    this.topics.alias(spawnedName(args), s.name);
     const plan = s.tree ? installPlan(s.tree) : null;
     // Only where nothing waits for an approval: an install runs the packages' own scripts.
     const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
@@ -2330,7 +2476,14 @@ export class SessionManager extends EventEmitter {
     s.owesReport = false;
     const tag = `worker-output-${randomTag()}`;
     const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
-    this.deliver(master, { text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: s.name, shown: text });
+    const topic = this.workerTopic(s);
+    this.deliver(master, {
+      text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
+      images: [],
+      from: s.name,
+      shown: text,
+      ...(topic ? { topic: topic.id } : {}),
+    });
     return t('master.delivered');
   }
 
@@ -2594,7 +2747,7 @@ export class SessionManager extends EventEmitter {
   private restore(): void {
     if (!existsSync(this.stateFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[] };
+      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown };
       for (const { resume, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
@@ -2605,6 +2758,8 @@ export class SessionManager extends EventEmitter {
         if (s.noteFresh) this.freshStart(s);
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
       }
+      // The topics of the master's conversation, if they are this conversation's.
+      this.topics.restore(saved.topics, this.sessions.get(MASTER_ID)?.sessionId ?? '');
     } catch {
       // Unreadable state file: set it aside (never overwrite it) and start with an empty hub.
       renameSync(this.stateFile, `${this.stateFile}.corrupt`);
@@ -2656,7 +2811,9 @@ export class SessionManager extends EventEmitter {
     }));
     // Write-then-rename: a crash mid-save can never leave a truncated state.json behind.
     const tmp = `${this.stateFile}.tmp`;
-    writeFileSync(tmp, JSON.stringify({ sessions }, null, 2));
+    const master = this.sessions.get(MASTER_ID);
+    const topics = master ? this.topics.state(master.sessionId) : undefined;
+    writeFileSync(tmp, JSON.stringify({ sessions, topics }, null, 2));
     renameSync(tmp, this.stateFile);
   }
 }
