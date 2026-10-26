@@ -2,10 +2,10 @@ import { execFile } from 'node:child_process';
 import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { adminCommand, npmPrefix, planUpdate, readFailure, verdict, type CliRun, type Failure, type Step, type UpdateAction } from '../shared/cliUpdate';
+import { adminCommand, NO_NODE, npmPrefix, planUpdate, readFailure, verdict, type CliRun, type Failure, type Step, type UpdateAction } from '../shared/cliUpdate';
 import { CLI_PACKAGES, installMethod, isNewer, type CliUpdate } from '../shared/news';
 import type { ProviderId } from '../shared/providers';
-import { installTool, toolCommand, type Tool } from './providers/tools';
+import { installTool, toolCommand, userNpm, type Tool } from './providers/tools';
 import { run } from './updateExec';
 
 // Updates a provider's program in one click: the steps of its install method run here, one after the other, with the
@@ -160,7 +160,10 @@ export class CliUpdater {
       const [exe, args] = admin ? adminCommand(step.exe, step.args, env.PATH ?? '', this.deps.tmp) : [step.exe, step.args];
       append(`\n$ ${admin ? '(administrator) ' : ''}${[step.exe, ...step.args].join(' ')}\n`);
       const r = await this.deps.runner.run(exe, args, env, append);
-      return r.code === 0 ? '' : readFailure(r.code, r.out);
+      if (r.code === 0) return '';
+      const failure = readFailure(r.code, r.out);
+      // Windows refuses to remove or move a program's files while a process runs them: held, not a lack of rights.
+      return failure === 'needs-admin' && this.deps.platform === 'win32' && /\bsyscall (unlink|rename)\b/.test(r.out) ? 'in-use' : failure;
     };
     const canElevate = this.deps.platform === 'darwin';
     const first = await once(!!step.admin && canElevate);
@@ -183,7 +186,18 @@ const TOOLS: Partial<Record<ProviderId, Tool>> = { anthropic: 'claude', openai: 
 /** The runner that does it: programs spawned with an argument list, never a shell. */
 export function realRunner(env: () => Record<string, string>): Runner {
   return {
-    run: (exe, args, e, onData) => run(exe, args, homedir(), e, STEP_MS, onData),
+    run: async (exe, args, e, onData) => {
+      // npm is a .cmd on Windows, which does not start without a shell: its script runs with the user's Node.js.
+      if (process.platform === 'win32' && /(^|[\\/])npm$/.test(exe)) {
+        const npm = await userNpm(e);
+        if (!npm) {
+          onData(`${NO_NODE}\n`);
+          return { code: -1, out: NO_NODE };
+        }
+        return run(npm.node, [npm.cli, ...args], homedir(), e, STEP_MS, onData);
+      }
+      return run(exe, args, homedir(), e, STEP_MS, onData);
+    },
     installApp: (provider) => {
       const tool = TOOLS[provider];
       return tool ? installTool(tool, env()) : Promise.resolve('install-failed');

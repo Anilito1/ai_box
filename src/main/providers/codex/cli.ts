@@ -14,6 +14,9 @@ import type { AgentModel } from '../types';
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Json) : {});
 
+/** Codex names the plan in lower case ("plus"): shown as Claude's is, "ChatGPT Plus". */
+export const chatgptPlan = (plan: string): string => (plan ? `ChatGPT ${plan[0].toUpperCase()}${plan.slice(1)}` : '');
+
 const EXE = process.platform === 'win32' ? 'codex.exe' : 'codex';
 
 /**
@@ -70,7 +73,7 @@ export async function checkCodex(executable: string, env: Record<string, string>
         client.request('model/list', {}).catch(() => ({})),
         client.request('account/rateLimits/read', {}).catch(() => ({})),
       ]);
-      const detail = [account.type === 'chatgpt' ? String(account.email ?? '') : 'API key', String(account.planType ?? '')].filter(Boolean).join(' · ');
+      const detail = [account.type === 'chatgpt' ? String(account.email ?? '') : 'API key', chatgptPlan(String(account.planType ?? ''))].filter(Boolean).join(' · ');
       const listed = modelsOf(obj(models));
       return { status: { ready: true, detail, error: '', models: listed.map((m) => m.value) }, limits: rateLimitsOf(obj(obj(limits).rateLimits)), models: listed };
     };

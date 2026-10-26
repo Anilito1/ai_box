@@ -5666,12 +5666,54 @@ input[type='radio']:focus-visible {
 }
 .acct-mark {
   flex: none;
-  width: 28px;
-  height: 28px;
-  padding: 1px;
-  border-radius: var(--r-md);
-  background: var(--hover-strong);
+  width: 44px;
+  height: 44px;
+  margin: -4px 0;
   object-fit: contain;
+  transform-origin: 50% 90%;
+  animation: mark-breathe 3.6s var(--ease-in-out) infinite;
+}
+/* Out of step from one row to the next, so the mascots do not breathe together. */
+.acct:nth-child(2n) .acct-mark {
+  animation-delay: -1.3s;
+}
+.acct:nth-child(3n) .acct-mark {
+  animation-delay: -2.4s;
+}
+.acct-row:hover .acct-mark {
+  animation: mark-hop 0.7s var(--ease-out);
+}
+@keyframes mark-breathe {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0) scale(1, 1);
+  }
+  25% {
+    transform: translateY(-1px) rotate(-2deg) scale(1.01, 1.03);
+  }
+  50% {
+    transform: translateY(-2px) rotate(0) scale(1, 1.04);
+  }
+  75% {
+    transform: translateY(-1px) rotate(2deg) scale(1.01, 1.03);
+  }
+}
+@keyframes mark-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  15% {
+    transform: translateY(0) scale(1.1, 0.88);
+  }
+  45% {
+    transform: translateY(-8px) rotate(-6deg) scale(0.95, 1.07);
+  }
+  75% {
+    transform: translateY(0) scale(1.06, 0.94);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
 }
 .acct-text {
   display: flex;
@@ -5823,15 +5865,15 @@ input[type='radio']:focus-visible {
 }
 .seg-pic {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
 }
-/* A provider's still mascot as a small mark: its picture is framed for a card, with room for the hats above. */
-.acct-mark,
-.setup-provider-pic,
-.seg-pic {
-  object-view-box: inset(20% 6% 6% 6%);
+@media (prefers-reduced-motion: reduce) {
+  .acct-mark,
+  .acct-row:hover .acct-mark {
+    animation: none;
+  }
 }
 
 /* ---------- what is new at a provider ---------- */
@@ -5924,19 +5966,23 @@ input[type='radio']:focus-visible {
   color: var(--text-2);
 }
 .cli-update-log summary {
-  color: var(--text-3);
-  font-size: 11.5px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
   cursor: pointer;
 }
+.cli-update-log summary:hover {
+  color: var(--text);
+}
 .cli-update-log pre {
-  max-height: 160px;
+  max-height: 200px;
   margin: 6px 0 0;
   overflow: auto;
-  padding: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  background: var(--hover-strong);
-  color: var(--text-2);
-  font: 11px / 1.45 var(--font-mono);
+  background: var(--bg);
+  color: var(--text);
+  font: 12px / 1.5 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

@@ -130,10 +130,15 @@ export function adminCommand(exe: string, args: string[], path: string, tmp: str
 }
 
 /** Why a step failed, read from its output. */
-export type Failure = 'cancelled' | 'needs-admin' | 'network' | 'busy' | 'no-node' | 'timeout' | 'not-installed' | 'unchanged' | 'failed';
+export type Failure = 'cancelled' | 'needs-admin' | 'in-use' | 'network' | 'busy' | 'no-node' | 'timeout' | 'not-installed' | 'unchanged' | 'failed';
+
+/** What the log says when npm cannot run for want of Node.js. */
+export const NO_NODE = 'Node.js not found: npm cannot run';
 
 export function readFailure(code: number, out: string): Failure {
   if (/User cancel+ed|\(-128\)/i.test(out)) return 'cancelled';
+  if (out.includes(NO_NODE) || /spawn (node|npm)\S* ENOENT/.test(out)) return 'no-node';
+  if (/\bEBUSY\b|resource busy or locked/i.test(out)) return 'in-use';
   if (/\bEACCES\b|\bEPERM\b|permission denied|Operation not permitted|not writable/i.test(out)) return 'needs-admin';
   if (/ENOTFOUND|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|Could not resolve host|Failed to connect|curl: \(\d+\)/i.test(out)) return 'network';
   if (/has already locked|another active Homebrew|is locked|Another .*process is running/i.test(out)) return 'busy';

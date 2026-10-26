@@ -1,9 +1,10 @@
 import { OWN_ACCOUNT } from '../shared/accounts';
+import { CLI_PACKAGES } from '../shared/news';
 import { PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
 import type { HubApi, ProviderAccountView, ProviderView } from '../shared/types';
 import { h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
-import { mascotOf, mascotPicture } from './mascot';
+import { mascotMark } from './mascot';
 
 // Settings › Accounts: one row per provider, all built the same way. A row says whether the provider is connected and
 // offers one action; the way of connecting (an account or an API key, Anthropic's other accounts) waits behind its
@@ -12,8 +13,6 @@ import { mascotOf, mascotPicture } from './mascot';
 const WAIT_MS = 5 * 60_000;
 const POLL_MS = 4000;
 
-/** The program each provider's sign-in runs in, by the name the user may know it under. */
-const TOOL_NAME: Partial<Record<ProviderId, string>> = { anthropic: 'Claude Code', openai: 'Codex', gemini: 'Gemini CLI' };
 /** Codes that only say the program is not there yet: connecting installs it, so they are no error. */
 const NOT_INSTALLED = new Set(['no-claude', 'no-codex', 'no-gemini']);
 
@@ -142,7 +141,7 @@ export class ProvidersPanel {
   /** An error code of this provider, in one line that names it when the words alone would not say whose it is. */
   private errorText(id: ProviderId, code: string): string {
     const name = providerDef(id).label;
-    const tool = TOOL_NAME[id] ?? name;
+    const tool = CLI_PACKAGES[id]?.tool ?? name;
     if (code === 'timeout') return t('provider.err.timeout', { name });
     if (code === 'probe-failed') return t('provider.err.probe', { name });
     if (code === 'no-node') return t('provider.err.noNode', { tool });
@@ -173,7 +172,7 @@ export class ProvidersPanel {
     const item = h('div', open ? 'acct open' : 'acct');
     item.dataset.provider = id;
     const row = h('div', 'acct-row');
-    const mark = mascotPicture(mascotOf(id), 'acct-mark');
+    const mark = mascotMark(id, 'acct-mark');
     const text = h('div', 'acct-text');
     text.append(h('span', 'acct-name', def.label));
     const sub = this.subLine(id, v, error, waiting);

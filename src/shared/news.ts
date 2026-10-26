@@ -11,7 +11,7 @@ export type SwitchTarget = 'native' | 'app';
 
 /** A newer version of a provider's program than the one installed. */
 export interface CliUpdate {
-  /** The program's name (claude, codex, gemini). */
+  /** The program's name as the user knows it (Claude Code, Codex, Gemini CLI). */
   tool: string;
   current: string;
   latest: string;
@@ -38,11 +38,11 @@ export interface ProviderNews {
 
 export const NO_NEWS: ProviderNews = { models: [], cli: null, unseen: false };
 
-/** The npm package of each provider's program, and the command name it installs. */
+/** The npm package of each provider's program, and the name it is shown under. */
 export const CLI_PACKAGES: Partial<Record<ProviderId, { tool: string; npm: string; brew: string }>> = {
-  anthropic: { tool: 'claude', npm: '@anthropic-ai/claude-code', brew: 'claude-code' },
-  openai: { tool: 'codex', npm: '@openai/codex', brew: 'codex' },
-  gemini: { tool: 'gemini', npm: '@google/gemini-cli', brew: 'gemini-cli' },
+  anthropic: { tool: 'Claude Code', npm: '@anthropic-ai/claude-code', brew: 'claude-code' },
+  openai: { tool: 'Codex', npm: '@openai/codex', brew: 'codex' },
+  gemini: { tool: 'Gemini CLI', npm: '@google/gemini-cli', brew: 'gemini-cli' },
 };
 
 /** The numbers of a version ("2.1.311", "codex-cli 0.163.0-alpha.2" → [0, 163, 0]); empty when it has none. */

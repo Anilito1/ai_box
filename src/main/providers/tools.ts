@@ -71,12 +71,19 @@ export function installTool(tool: Tool, env: Record<string, string>): Promise<st
   return task;
 }
 
-async function install(tool: Tool, env: Record<string, string>): Promise<string> {
-  if (!root) return 'install-failed';
+/** The user's Node.js and npm's script beside it, null without them: npm runs as `node npm-cli.js`, never through a shell. */
+export async function userNpm(env: Record<string, string>): Promise<{ node: string; cli: string } | null> {
   const where = await run('node', ['-p', 'process.execPath'], homedir(), env, 15_000);
   const node = where.code === 0 ? where.out.trim().split(/\r?\n/)[0] : '';
   const cli = node ? npmCli(node, '') : '';
-  if (!cli) return 'no-node';
+  return cli ? { node, cli } : null;
+}
+
+async function install(tool: Tool, env: Record<string, string>): Promise<string> {
+  if (!root) return 'install-failed';
+  const npm = await userNpm(env);
+  if (!npm) return 'no-node';
+  const { node, cli } = npm;
   mkdirSync(root, { recursive: true });
   const r = await run(node, [cli, 'install', '--prefix', root, '--no-audit', '--no-fund', '--loglevel=error', `${PACKAGES[tool]}@latest`], root, env, INSTALL_MS);
   return r.code === 0 && localTool(tool) ? '' : 'install-failed';

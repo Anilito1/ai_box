@@ -142,6 +142,17 @@ test('the administrator prompt cancelled: a failure that says nothing changed', 
   assert.equal(run?.error, 'cancelled');
 });
 
+test('Windows: npm kept from replacing files the running sessions hold says so, without an administrator prompt', async () => {
+  const path = 'C:/Users/me/AppData/Roaming/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
+  const { updater, ran } = setup({ 'npm install': { code: 1, out: 'npm error code EPERM\nnpm error syscall unlink' } }, { platform: 'win32', update: () => update({ method: 'npm', path }) });
+  const run = await updater.start('anthropic', 'upgrade');
+  assert.deepEqual(ran, ['npm install -g @anthropic-ai/claude-code@latest --no-audit --no-fund']);
+  assert.equal(run?.error, 'in-use');
+  // A folder that cannot be written is a lack of rights, held by no one.
+  const denied = setup({ 'npm install': { code: 1, out: 'npm error code EPERM\nnpm error syscall mkdir' } }, { platform: 'win32', update: () => update({ method: 'npm', path }) });
+  assert.equal((await denied.updater.start('anthropic', 'upgrade'))?.error, 'needs-admin');
+});
+
 test('one update at a time; none without an update', async () => {
   let release = () => {};
   const { updater, runner } = setup({});

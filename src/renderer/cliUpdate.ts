@@ -27,8 +27,11 @@ export function initCliUpdates(hub: HubApi): void {
     const before = runs.get(run.provider);
     runs.set(run.provider, run);
     if (before?.phase !== run.phase) hidden.delete(run.provider);
+    // A failure goes to the corner card: the menu is for picking a model, and shows the offer again. Tried again from
+    // the menu, the update shows there, and the failure's card goes.
+    if (run.phase !== 'failed' && shownInMenu(run.provider)) removeCard(run.provider);
     redrawAll();
-    if (!shownInMenu(run.provider) && !hidden.has(run.provider)) card(run.provider);
+    if ((run.phase === 'failed' || !shownInMenu(run.provider)) && !hidden.has(run.provider)) card(run.provider);
   });
   void hub.cliUpdates().then((list) => {
     for (const run of list) runs.set(run.provider, run);
@@ -47,7 +50,7 @@ function redrawAll(): void {
 
 /** The box of the model menu: the offer, or the update running or just ended. Null when there is neither. */
 export function cliUpdateBox(provider: ProviderId, update: CliUpdate | null): HTMLElement | null {
-  if (!update && !runs.has(provider)) return null;
+  if (!update && (!runs.has(provider) || runs.get(provider)?.phase === 'failed')) return null;
   const el = h('div', 'cli-update');
   // A click in the box must not pick a model nor close the menu.
   el.addEventListener('click', (e) => e.stopPropagation());
@@ -77,6 +80,14 @@ function card(provider: ProviderId): void {
   stack.append(wrap);
   boxes.add({ provider, el, update: null, card: true });
   fill(el, provider, null, true);
+}
+
+function removeCard(provider: ProviderId): void {
+  for (const b of [...boxes]) {
+    if (b.provider !== provider || !b.card) continue;
+    b.el.parentElement?.remove();
+    boxes.delete(b);
+  }
 }
 
 function dismiss(provider: ProviderId): void {
@@ -135,7 +146,8 @@ function fill(el: HTMLElement, provider: ProviderId, update: CliUpdate | null, i
   // The log stays unfolded across redraws if the user opened it.
   const logOpen = !!el.querySelector<HTMLDetailsElement>('details.cli-update-log')?.open;
   el.replaceChildren();
-  const run = runs.get(provider);
+  const ran = runs.get(provider);
+  const run = inCard || ran?.phase !== 'failed' ? ran : undefined;
   const busy = anyRunning();
   const row = (...items: HTMLElement[]) => {
     const r = h('div', 'cli-update-actions');
@@ -174,6 +186,7 @@ function fill(el: HTMLElement, provider: ProviderId, update: CliUpdate | null, i
     el.append(title, h('div', 'cli-update-note', t(`cliUpdate.error.${run.error || 'failed'}` as Key, { tool: run.tool, version: run.to, latest: run.latest })));
     const actions = [button(t('cliUpdate.retry'), run.switchTo ? 'ghost' : 'primary', () => start(provider, run.action), busy)];
     if (run.switchTo) actions.unshift(button(switchLabel(run.switchTo), 'primary', () => start(provider, 'switch'), busy));
+    if (run.error === 'in-use') actions.push(button(t('cliUpdate.restartNow'), 'ghost', () => api?.relaunch()));
     actions.push(button(t('news.close'), 'ghost', () => dismiss(provider)));
     el.append(row(...actions), logOf(run, logOpen));
     if (update?.command) el.append(copyLink(update.command));

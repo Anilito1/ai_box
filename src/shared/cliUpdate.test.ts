@@ -110,6 +110,22 @@ test('what a failed command says, read from its output', () => {
   assert.equal(readFailure(6, 'curl: (6) Could not resolve host: claude.ai'), 'network');
   assert.equal(readFailure(1, 'Error: Another active Homebrew update process is already in progress.'), 'busy');
   assert.equal(readFailure(1, 'Error: Cask claude-code is not installed.'), 'failed');
+  assert.equal(readFailure(-1, '\nspawn npm ENOENT'), 'no-node');
+  assert.equal(readFailure(-4082, 'npm error code EBUSY\nnpm error syscall rename'), 'in-use');
+});
+
+test('a global npm install on Windows (no lib/ in its prefix): npm install -g with the PATH npm, for each provider that has a package', () => {
+  const win = (pkg: string) => `C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\${pkg}`;
+  for (const [provider, path, npm] of [
+    ['anthropic', win('@anthropic-ai\\claude-code\\bin\\claude.exe'), '@anthropic-ai/claude-code'],
+    ['openai', win('@openai\\codex\\bin\\codex.js'), '@openai/codex'],
+    ['gemini', win('@google\\gemini-cli\\bundle\\gemini.js'), '@google/gemini-cli'],
+  ] as const) {
+    assert.equal(installMethod(path), 'npm', provider);
+    assert.deepEqual(plan({ provider, update: { method: 'npm', path, switchTo: '' } }), [{ label: 'npm-install', exe: 'npm', args: ['install', '-g', `${npm}@latest`, '--no-audit', '--no-fund'], admin: false, elevate: true }], provider);
+  }
+  // DeepSeek runs in Claude Code: no program of its own to update.
+  assert.deepEqual(plan({ provider: 'deepseek', update: { method: 'npm', path: win('x'), switchTo: '' } }), []);
 });
 
 test('the version after the update: there, forward but not there yet, or the same', () => {
