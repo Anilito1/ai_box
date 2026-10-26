@@ -14,6 +14,7 @@ import {
   type ProviderBadge,
   type SessionView,
 } from '../shared/types';
+import { splitRecent } from '../shared/models';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
@@ -646,9 +647,14 @@ export class ChatView {
       close();
       window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
     };
+    // The providers whose older models are unfolded behind "See more".
+    const unfolded = new Set<string>();
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
         menu.replaceChildren();
+        // Only the models list scrolls: the provider above and the effort below stay in view, however long the list.
+        const root = h('div', 'model-menu');
+        menu.append(root);
         // The provider first: the models below are its models. One that is not connected is greyed, and leads to Settings.
         const tabs = h('div', 'segmented provider-tabs');
         for (const p of this.providers) {
@@ -662,12 +668,17 @@ export class ChatView {
           });
           tabs.append(b);
         }
-        menu.append(tabs);
+        root.append(tabs);
         const models = tab === current ? this.modelsFor(s) : (this.providers.find((p) => p.id === tab)?.models ?? []);
-        menu.append(h('div', 'menu-label', t('chat.model')));
-        if (pinned && tab === current) menu.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
-        else if (models.length === 0) menu.append(h('div', 'menu-note', t('chat.modelsLater')));
-        for (const model of pinned && tab === current ? [] : models) {
+        root.append(h('div', 'menu-label', t('chat.model')));
+        const list = h('div', 'menu-models');
+        root.append(list);
+        if (pinned && tab === current) list.append(h('div', 'menu-note', t('chat.modelBridged', { model: s.modelLabel })));
+        else if (models.length === 0) list.append(h('div', 'menu-note', t('chat.modelsLater')));
+        // The newest models of each family first, the model in use among them; the others behind "See more".
+        const { recent, older } = splitRecent(pinned && tab === current ? [] : models, tab === current ? s.model : '');
+        const open = unfolded.has(tab);
+        const addModel = (model: ModelOption) => {
           const row = this.menuRow(model.label, model.description, tab === current && model.value === s.model);
           row.addEventListener('click', () => {
             // Provider and model in one go: the session moves to the provider if it is not there already.
@@ -675,14 +686,25 @@ export class ChatView {
             else this.hub.setProviderModel(s.id, tab, model.value);
             close();
           });
-          menu.append(row);
+          list.append(row);
+        };
+        for (const model of open ? [...recent, ...older] : recent) addModel(model);
+        if (older.length) {
+          const more = h('button', 'menu-more', open ? t('chat.modelsLess') : t('chat.modelsMore', { n: older.length }));
+          more.setAttribute('aria-expanded', String(open));
+          more.addEventListener('click', () => {
+            if (open) unfolded.delete(tab);
+            else unfolded.add(tab);
+            draw();
+          });
+          list.append(more);
         }
         // The effort belongs to the model the session runs: shown with its provider's tab.
         const now = models.find((m) => m.value === s.model);
         if (tab === current && !now?.noEffort) {
           const efforts: Effort[] = now?.efforts.length ? now.efforts : EFFORTS;
-          menu.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
-          const seg = h('div', 'segmented');
+          root.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
+          const seg = h('div', 'segmented efforts');
           for (const effort of efforts) {
             const b = h('button', effort === s.effort ? 'seg active' : 'seg', effortLabel(effort));
             b.addEventListener('click', () => {
@@ -691,7 +713,7 @@ export class ChatView {
             });
             seg.append(b);
           }
-          menu.append(seg);
+          root.append(seg);
         }
         if (s.userAccount) {
           const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);
@@ -699,14 +721,14 @@ export class ChatView {
             this.hub.setAccount(s.id, '');
             close();
           });
-          menu.append(h('div', 'menu-sep'), back);
+          root.append(h('div', 'menu-sep'), back);
         }
         if (this.providers.some((p) => !p.connected)) {
           const add = this.menuRow(t('chat.providerConnect'), t('chat.providerConnect.hint'), false);
           add.addEventListener('click', () => openSettings(close));
-          menu.append(h('div', 'menu-sep'), add);
+          root.append(h('div', 'menu-sep'), add);
         }
-        menu.append(h('div', 'menu-note', t('chat.accountNote')));
+        root.append(h('div', 'menu-note', t('chat.accountNote')));
       };
       draw();
     });

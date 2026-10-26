@@ -2749,6 +2749,53 @@ kbd,
   display: flex;
   gap: var(--sp-2);
 }
+/* model menu: only the list of models scrolls, so the provider above and the effort below are always in view */
+.menu:has(> .model-menu) {
+  display: flex;
+  flex-direction: column;
+  min-width: 340px;
+  overflow: hidden;
+}
+.model-menu {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.model-menu > * {
+  flex: none;
+}
+.model-menu > .menu-models {
+  flex: 0 1 auto;
+  min-height: 96px;
+  overflow-y: auto;
+}
+.menu-more {
+  display: block;
+  width: 100%;
+  padding: 5px var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.menu-more:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+/* the efforts size to their words ("Extra high", "très élevé") and wrap rather than run out of the track */
+.segmented.efforts {
+  flex-wrap: wrap;
+}
+.efforts .seg {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 10px;
+  white-space: nowrap;
+}
 /* segmented control: the selected segment rises out of its track */
 .segmented {
   display: flex;
