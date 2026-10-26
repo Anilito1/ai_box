@@ -1,3 +1,15 @@
+import { EFFORTS, type Effort, type ModelOption } from './types';
+
+/**
+ * The effort levels to offer for a model of a catalog: the ones it declares (Codex lists them per model), none when it
+ * takes no effort setting (Gemini's), else all of them for a model whose levels are not known (Claude's, an API's).
+ */
+export function effortsFor(models: Pick<ModelOption, 'value' | 'efforts' | 'noEffort'>[], model: string): Effort[] {
+  const found = models.find((m) => m.value === model);
+  if (found?.noEffort) return [];
+  return found?.efforts.length ? found.efforts : EFFORTS;
+}
+
 // Which models of a provider's catalog are shown first. No list by provider: a model is "recent" when no model of its
 // own family (Opus, Sonnet, GPT, GPT mini, Gemini Pro, Flash…) has a higher version; the rest wait behind "See more".
 

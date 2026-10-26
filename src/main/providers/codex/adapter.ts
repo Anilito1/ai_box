@@ -30,6 +30,35 @@ export function modelsOf(response: Json): AgentModel[] {
     }));
 }
 
+/**
+ * The params of a turn: the effort the session holds goes with each turn, fitted to the levels the model takes (Codex
+ * refuses one it does not list), and is left out when the model lists none.
+ */
+export function turnStartParams(a: {
+  threadId: string;
+  input: string | Block[];
+  cwd: string;
+  model: string;
+  effort: Effort | null;
+  efforts: string[];
+  mode: Mode | null;
+  readOnly: boolean;
+  roots: string[];
+}): Json {
+  const policy = policyOf(a.mode, a.readOnly);
+  const effort = a.effort ? clampEffort(a.effort, a.efforts) : null;
+  return {
+    threadId: a.threadId,
+    input: userInputOf(a.input),
+    cwd: a.cwd,
+    ...(a.model ? { model: a.model } : {}),
+    ...(effort ? { effort } : {}),
+    approvalPolicy: policy.approvalPolicy,
+    approvalsReviewer: policy.reviewer,
+    sandboxPolicy: sandboxPolicy(policy.sandbox, a.roots),
+  };
+}
+
 /** What the hub shows of an account's limits: Codex's windows by their length (5 hours, 7 days). */
 export function rateLimitsOf(snapshot: Json | null): RateLimits | null {
   if (!snapshot) return null;
@@ -211,19 +240,21 @@ class CodexProcess implements AgentProcess {
     this.starting = true;
     const input = this.pending.shift() as AgentInput;
     try {
-      const policy = policyOf(this.mode, this.spec.readOnly);
-      const effort = this.effort ? clampEffort(this.effort, this.effortsOf(this.model)) : null;
       const res = obj(
-        await this.client.request('turn/start', {
-          threadId: this.threadId,
-          input: userInputOf(input.content),
-          cwd: this.spec.cwd,
-          ...(this.model ? { model: this.model } : {}),
-          ...(effort ? { effort } : {}),
-          approvalPolicy: policy.approvalPolicy,
-          approvalsReviewer: policy.reviewer,
-          sandboxPolicy: sandboxPolicy(policy.sandbox, this.roots),
-        }),
+        await this.client.request(
+          'turn/start',
+          turnStartParams({
+            threadId: this.threadId,
+            input: input.content,
+            cwd: this.spec.cwd,
+            model: this.model,
+            effort: this.effort,
+            efforts: this.effortsOf(this.model),
+            mode: this.mode,
+            readOnly: this.spec.readOnly,
+            roots: this.roots,
+          }),
+        ),
       );
       this.turnId = str(obj(res.turn).id) || 'turn';
       this.queue.push({ type: 'promptTaken', text: textOfContent(input.content) });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { modelIdentity, splitRecent } from './models';
+import { effortsFor, modelIdentity, splitRecent } from './models';
+import { EFFORTS } from './types';
 
 const m = (value: string, label = value) => ({ value, label });
 const split = (models: { value: string; label: string }[], keep = '') => {
@@ -40,4 +41,18 @@ test('the model in use stays among the first, even an old one', () => {
 
 test('a list that is all recent has nothing behind "See more"', () => {
   assert.equal(split([m('deepseek-v4-pro', 'DeepSeek V4 Pro'), m('deepseek-v4-flash', 'DeepSeek V4 Flash')]).older.length, 0);
+});
+
+test('the efforts offered: the model\'s own, none for a model without the setting, all when they are not known', () => {
+  const models = [
+    { value: 'gpt-6-sol', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] as const },
+    { value: 'gpt-6-luna', efforts: ['low', 'medium'] as const },
+    { value: 'gemini-3-pro', efforts: [] as const, noEffort: true },
+    { value: 'opus', efforts: [] as const },
+  ].map((x) => ({ ...x, efforts: [...x.efforts] }));
+  assert.deepEqual(effortsFor(models, 'gpt-6-luna'), ['low', 'medium']);
+  assert.deepEqual(effortsFor(models, 'gpt-6-sol'), ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(effortsFor(models, 'gemini-3-pro'), []);
+  assert.deepEqual(effortsFor(models, 'opus'), EFFORTS);
+  assert.deepEqual(effortsFor(models, 'unlisted'), EFFORTS);
 });
