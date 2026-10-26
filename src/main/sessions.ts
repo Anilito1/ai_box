@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -8,6 +9,8 @@ import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/pa
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, pinsModel, runsClaude } from '../shared/accounts';
+import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
+import { buildHandoff } from '../shared/passation';
 import {
   capEffort,
   fromTemplate,
@@ -77,6 +80,7 @@ import {
 import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlock, topicErrors, topicToolSpec } from './topics';
 import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
 import { adapterFor } from './providers';
+import { claudeLimit } from './providers/claude/events';
 import { Inbox } from './providers/inbox';
 import type { McpHub, McpLease } from './mcpHub';
 import type {
@@ -89,11 +93,12 @@ import type {
   ElicitationAnswer,
   ElicitationRequest,
   HubTool,
+  LimitSignal,
   PermissionAnswer,
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -102,6 +107,18 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
   switchPending: boolean;
   pendingTo: string;
+  /** Gone on another account because its own reached a limit: the account pick it left (may be empty), else null. */
+  home: string | null;
+  /** When it left, how many items its conversation held then, and the model its fallback step names. */
+  fallbackAt: number;
+  fallbackMark: number;
+  fallbackModel: string;
+  /** The conversation of each account it ran on, to take up again when it goes back. */
+  convs: Record<string, string>;
+  /** A limit was hit during a turn: it goes on with this step once the turn is over. */
+  fallbackPending: { step: FallbackStep; signal: LimitSignal } | null;
+  /** What happened on the account it was away on, told with its next message once it is back. */
+  backNote: string;
   /** The hub's tools served over HTTP to its running process (programs that cannot take them in-process), else null. */
   mcpLease: McpLease | null;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
@@ -208,6 +225,11 @@ type Persisted = {
   | 'readOnly'
   | 'accountId'
   | 'userAccount'
+  | 'home'
+  | 'fallbackAt'
+  | 'fallbackMark'
+  | 'fallbackModel'
+  | 'convs'
 >;
 
 export interface ManagerOptions {
@@ -357,6 +379,8 @@ export class SessionManager extends EventEmitter {
   /** Plan limits by account, and when each was last asked. */
   private readonly rateLimits = new Map<string, RateLimits>();
   private readonly usageCheckedAt = new Map<string, number>();
+  /** Accounts that reached a limit, and until when. */
+  private readonly cooldowns = new Cooldowns();
   private reposCache: { at: number; text: string } | null = null;
   private readonly pendingItems = new Map<string, Map<string, ChatItem>>();
   private emitTimer: NodeJS.Timeout | null = null;
@@ -405,7 +429,10 @@ export class SessionManager extends EventEmitter {
         });
     }
     this.resumeOnStart.clear();
-    this.sweepTimer = setInterval(() => this.closeIdle(), 60_000);
+    this.sweepTimer = setInterval(() => {
+      this.closeIdle();
+      this.returnIdle();
+    }, 60_000);
     this.pruneAttachments();
     void this.retireLeftovers();
   }
@@ -639,6 +666,8 @@ export class SessionManager extends EventEmitter {
     if (account && account !== DEFAULT_ACCOUNT && !this.opts.cfg.accounts.some((a) => a.id === account)) return '';
     s.accountId = account;
     if (byUser) s.userAccount = account !== '';
+    // Moved by hand (or by the master): it is no longer "away" from anywhere.
+    Object.assign(s, { home: null, fallbackPending: null, fallbackModel: '', backNote: '' });
     return this.applyAccount(s);
   }
 
@@ -653,11 +682,11 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The account a session runs on: its own pick, else its post's (or the master's setting), else the workers'. */
-  private accountOf(s: Session): string {
+  private accountOf(s: Session, pick = s.accountId): string {
     const { cfg } = this.opts;
     return s.role === 'master'
-      ? firstAccount(cfg.accounts, s.accountId, cfg.masterAccount)
-      : firstAccount(cfg.accounts, s.accountId, this.postOf(s)?.account, cfg.workerAccount);
+      ? firstAccount(cfg.accounts, pick, cfg.masterAccount)
+      : firstAccount(cfg.accounts, pick, this.postOf(s)?.account, cfg.workerAccount);
   }
 
   /** The account's sessions run one model of its own (an OpenAI account's, or a named one of an Anthropic-compatible server). */
@@ -686,7 +715,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private accountBadges(): AccountBadge[] {
-    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, pinned: false }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, pinned: pinsModel(a) }))];
+    return [{ id: DEFAULT_ACCOUNT, name: t('account.default'), kind: 'default' as const, pinned: false, limitedUntil: this.limitedSeconds(DEFAULT_ACCOUNT) }, ...this.opts.cfg.accounts.map((a) => ({ id: a.id, name: a.name, kind: a.kind, pinned: pinsModel(a), limitedUntil: this.limitedSeconds(a.id) }))];
   }
 
   /** An account as the master writes it (a name, an id, "default"), else an error naming the accounts there are. */
@@ -737,6 +766,179 @@ export class SessionManager extends EventEmitter {
     if (s.runAccount === this.accountOf(s)) s.switchPending = false;
     else this.relaunch(s);
     this.changed();
+  }
+
+  // ---------- fallback ----------
+
+  private limitedSeconds(account: string): number | null {
+    const at = this.cooldowns.limitedUntil(account, Date.now());
+    return at ? Math.ceil(at / 1000) : null;
+  }
+
+  /** An account the chain may send a session to: it exists, its program is there, and a paid one has the user's word. */
+  private usableFallback(account: string): boolean {
+    const { cfg } = this.opts;
+    if (account !== DEFAULT_ACCOUNT && !cfg.accounts.some((a) => a.id === account)) return false;
+    const paid = account === DEFAULT_ACCOUNT ? cfg.provider === 'api-key' : isPaid(this.kindOf(account));
+    if (paid && !cfg.fallback.paidOk.includes(account)) return false;
+    return harnessOf(this.kindOf(account)) === 'claude' ? !!this.opts.executable() : !!this.opts.codexExecutable();
+  }
+
+  private nextStep(from: string): FallbackStep | null {
+    const { fallback } = this.opts.cfg;
+    if (!fallback.enabled) return null;
+    return pickTarget({ chain: fallback.chain, from, limited: (a) => this.limitedSeconds(a) !== null, usable: (a) => this.usableFallback(a) });
+  }
+
+  /** An account reached a limit: it rests until it opens again, and a session of it goes on with the chain's next account. */
+  private onLimit(s: Session, q: AgentProcess, signal: LimitSignal): void {
+    const account = s.runAccount || this.accountOf(s);
+    this.cooldowns.set(account, signal, Date.now());
+    this.save();
+    this.changed();
+    if (s.fallbackPending || !this.opts.cfg.fallback.enabled) return;
+    const step = this.nextStep(account);
+    if (!step) {
+      this.notice(s, t('notice.fallbackNone', { from: this.accountName(account) }), 'error');
+      return;
+    }
+    s.fallbackPending = { step, signal };
+    // Stuck on a request the account refuses: the turn is cut, and the session moves once it ends.
+    if (this.settled(s)) void this.runFallback(s, q);
+    else q.interrupt().catch(() => undefined);
+  }
+
+  private fallbackIfDone(s: Session, q: AgentProcess): void {
+    if (s.query !== q || !s.fallbackPending) return;
+    if (!this.settled(s)) {
+      setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
+      return;
+    }
+    void this.runFallback(s, q);
+  }
+
+  /** `git status` and the size of the changes in its folder, for the summary; empty when it is no repository. */
+  private gitState(cwd: string): Promise<string> {
+    const run = (args: string[]) => new Promise<string>((resolve) => execFile('git', args, { cwd, timeout: 5000, windowsHide: true, maxBuffer: 1 << 20 }, (err, out) => resolve(err ? '' : out)));
+    return Promise.all([run(['status', '--short']), run(['diff', '--stat'])]).then(([status, stat]) => [status.trim(), stat.trim()].filter(Boolean).join('\n'));
+  }
+
+  private async handoffNote(s: Session, kind: 'away' | 'back', from: string, to: string, reason: 'rate' | 'quota' | 'auth' | 'ready'): Promise<string> {
+    const items = [...s.items.values()];
+    const opens = this.cooldowns.limitedUntil(from, Date.now());
+    return buildHandoff({
+      lang: lang(),
+      kind,
+      fromName: this.accountName(from),
+      toName: this.accountName(to),
+      reason,
+      opensAt: kind === 'away' ? opens : null,
+      mission: s.mission,
+      items: kind === 'back' ? items.slice(s.fallbackMark) : items,
+      git: await this.gitState(s.cwd),
+      now: Date.now(),
+    });
+  }
+
+  /** The session leaves the account that is limited, for the step's: a new conversation there, with a summary. */
+  private async runFallback(s: Session, q: AgentProcess): Promise<void> {
+    const pending = s.fallbackPending;
+    if (!pending || s.query !== q) return;
+    s.fallbackPending = null;
+    const from = s.runAccount || this.accountOf(s);
+    // The target may have been limited itself while the turn ended.
+    const step = this.limitedSeconds(pending.step.account) === null ? pending.step : this.nextStep(from);
+    if (!step) return this.notice(s, t('notice.fallbackNone', { from: this.accountName(from) }), 'error');
+    const reason = pending.signal.kind === 'overloaded' ? 'rate' : pending.signal.kind;
+    const note = await this.handoffNote(s, 'away', from, step.account, reason);
+    if (s.query !== q) return; // Closed while the summary was written.
+    this.moveAway(s, step, reason, { text: note, images: [], from: 'hub', shown: t('fallback.shown', { from: this.accountName(from), to: this.accountName(step.account) }) });
+  }
+
+  /** A new process on another account, in a new conversation (away) or the old one (back). */
+  private switchProcess(s: Session, to: string, conversation: string | null, prompt?: Prompt): void {
+    const q = s.query;
+    const from = s.runAccount || this.accountOf(s);
+    if (s.started) s.convs[from] = s.sessionId;
+    s.inbox?.close();
+    if (q) this.teardown(s);
+    q?.close();
+    s.accountId = to;
+    s.sessionId = conversation ?? randomUUID();
+    s.started = conversation !== null;
+    this.changed();
+    void this.launch(s, conversation !== null, prompt);
+  }
+
+  private moveAway(s: Session, step: FallbackStep, reason: string, prompt: Prompt): void {
+    const from = s.runAccount || this.accountOf(s);
+    if (s.home === null) Object.assign(s, { home: s.accountId, fallbackAt: Date.now(), fallbackMark: s.items.size });
+    s.fallbackModel = step.model;
+    const opens = this.cooldowns.limitedUntil(from, Date.now());
+    const when = opens ? ` ${t('fallback.until', { time: new Date(opens).toLocaleTimeString(lang(), { hour: '2-digit', minute: '2-digit' }) })}` : '';
+    this.notice(s, t('notice.fallbackAway', { from: this.accountName(from), to: this.accountName(step.account), when }), 'info');
+    if (s.role === 'worker') this.notifyMaster(t('hub.fallback', { name: displayName(s), from: this.accountName(from), to: this.accountName(step.account) }), t('hub.fallback.note', { reason }), s);
+    // The account it was asked for is kept in `home`; while away, the step's account is the pick.
+    this.switchProcess(s, step.account, null, prompt);
+  }
+
+  /** On its own account again: its old conversation, and what happened meanwhile. */
+  private async goHome(s: Session, prompt?: Prompt): Promise<void> {
+    if (s.home === null) return;
+    const home = s.home;
+    const target = this.accountOf(s, home);
+    const current = s.runAccount || this.accountOf(s);
+    const note = await this.handoffNote(s, 'back', current, target, 'ready');
+    const conversation = s.convs[target] ?? null;
+    Object.assign(s, { home: null, fallbackAt: 0, fallbackModel: '', fallbackPending: null });
+    this.notice(s, t('notice.fallbackBack', { to: this.accountName(target) }), 'info');
+    if (s.role === 'worker') this.notifyMaster(t('hub.fallbackBack', { name: displayName(s), to: this.accountName(target) }), t('hub.fallbackBack.note'), s);
+    if (prompt) prompt = { ...prompt, text: `${note}\n\n${prompt.text}` };
+    else s.backNote = note;
+    // The pick it had before it left (maybe empty: its post's or the usual one) applies again.
+    this.switchProcess(s, home, conversation, prompt);
+  }
+
+  /** Whether a message goes through the fallback first: back home, or away from an account limited right now. */
+  private fallbackRoute(s: Session, prompt: Prompt): boolean {
+    const { cfg } = this.opts;
+    if (s.home !== null && !s.fallbackPending) {
+      const homeAccount = this.accountOf(s, s.home);
+      const due = returnDue({ back: cfg.fallback.back, homeLimited: this.limitedSeconds(homeAccount) !== null, settled: !s.query || this.settled(s), message: true });
+      if (due === 'now') {
+        void this.goHome(s, prompt);
+        return true;
+      }
+    }
+    if (!s.inbox && cfg.fallback.enabled) {
+      const account = this.accountOf(s);
+      if (this.limitedSeconds(account) !== null) {
+        const step = this.nextStep(account);
+        // Away, and the chain now leads home: that is a return, not a second departure.
+        if (step && s.home !== null && step.account === this.accountOf(s, s.home)) {
+          void this.goHome(s, prompt);
+          return true;
+        }
+        if (step) {
+          void this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(account) === 'quota' ? 'quota' : 'rate').then((note) => {
+            this.moveAway(s, step, 'rate', { ...prompt, text: `${note}\n\n${prompt.text}` });
+          });
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** `idle` policy: a session away, with nothing to do, goes home as soon as its account is open. */
+  private returnIdle(): void {
+    const { cfg } = this.opts;
+    if (cfg.fallback.back !== 'idle') return;
+    for (const s of this.sessions.values()) {
+      if (s.home === null || s.fallbackPending || !s.query) continue;
+      const due = returnDue({ back: 'idle', homeLimited: this.limitedSeconds(this.accountOf(s, s.home)) !== null, settled: this.settled(s), message: false });
+      if (due === 'now') void this.goHome(s);
+    }
   }
 
   // ---------- slash commands (composer) ----------
@@ -869,6 +1071,7 @@ export class SessionManager extends EventEmitter {
         retrying: s.retrying,
         error: s.error,
         account: s.runAccount || this.accountOf(s),
+        fallbackFrom: s.home === null ? '' : this.accountOf(s, s.home),
         accountPending: s.switchPending,
         userAccount: s.userAccount,
       }));
@@ -1013,7 +1216,7 @@ export class SessionManager extends EventEmitter {
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
       // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
-      model: this.modelFits(account, s.fixedModel) ? s.fixedModel : '',
+      model: s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '',
       effort: s.fixedEffort,
       mode,
       instructions: append,
@@ -1151,6 +1354,7 @@ export class SessionManager extends EventEmitter {
         // Refused by a plan limit: the program waits or gives up; either way the session is stuck until the next frame.
         s.retrying = true;
         this.event(s, 'retry');
+        this.onLimit(s, q, ev.signal);
         break;
       case 'stream': {
         const before = s.status;
@@ -1191,6 +1395,9 @@ export class SessionManager extends EventEmitter {
         }
         if (blocks.some((b) => b.type === 'tool_use' && OUTGOING.test(String(b.name)))) this.event(s, 'message_out');
         if (ev.error) this.notice(s, assistantError(ev.error), 'error', ev.error);
+        // Claude Code says its limits by the error of a reply; Codex's come as limit events of their own.
+        const limit = ev.error && this.adapterOf(s).harness === 'claude' ? claudeLimit(ev.error) : null;
+        if (limit) this.onLimit(s, q, limit);
         if (ev.contextTokens > 0) this.setContext(s, ev.contextTokens, s.metrics?.contextSize ?? 0);
         break;
       }
@@ -1260,6 +1467,7 @@ export class SessionManager extends EventEmitter {
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
         if (s.switchPending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
+        if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
         void this.refreshUsage(s, q);
         break;
@@ -1465,6 +1673,13 @@ export class SessionManager extends EventEmitter {
 
   /** Into the running session, or resumes a closed one with its conversation. */
   private deliver(s: Session, prompt: Prompt): void {
+    // Away on another account: back on its own as soon as it is open again and the policy says so. Or its account is
+    // limited at this very moment: it goes on elsewhere, with a summary.
+    if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
+    if (s.backNote && s.inbox) {
+      prompt = { ...prompt, text: `${s.backNote}\n\n${prompt.text}` };
+      s.backNote = '';
+    }
     prompt = this.withNote(s, prompt);
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
@@ -2916,6 +3131,13 @@ export class SessionManager extends EventEmitter {
       switchPending: false,
       pendingTo: '',
       mcpLease: null,
+      home: null,
+      fallbackAt: 0,
+      fallbackMark: 0,
+      fallbackModel: '',
+      convs: {},
+      fallbackPending: null,
+      backNote: '',
       userAccount: false,
     };
     this.sessions.set(id, s);
@@ -2940,7 +3162,8 @@ export class SessionManager extends EventEmitter {
   private restore(): void {
     if (!existsSync(this.stateFile)) return;
     try {
-      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown };
+      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown; cooldowns?: unknown };
+      this.cooldowns.restore(saved.cooldowns, Date.now());
       for (const { resume, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
@@ -3000,6 +3223,11 @@ export class SessionManager extends EventEmitter {
       readOnly: s.readOnly,
       accountId: s.accountId,
       userAccount: s.userAccount,
+      home: s.home,
+      fallbackAt: s.fallbackAt,
+      fallbackMark: s.fallbackMark,
+      fallbackModel: s.fallbackModel,
+      convs: s.convs,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),
@@ -3008,7 +3236,7 @@ export class SessionManager extends EventEmitter {
     const tmp = `${this.stateFile}.tmp`;
     const master = this.sessions.get(MASTER_ID);
     const topics = master ? this.topics.state(master.sessionId) : undefined;
-    writeFileSync(tmp, JSON.stringify({ sessions, topics }, null, 2));
+    writeFileSync(tmp, JSON.stringify({ sessions, topics, cooldowns: this.cooldowns.state() }, null, 2));
     renameSync(tmp, this.stateFile);
   }
 }

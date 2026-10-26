@@ -2509,6 +2509,9 @@ kbd,
 .menu-row.danger .menu-title {
   color: var(--danger);
 }
+.cbtn.warn {
+  color: var(--warn);
+}
 .ctx {
   display: flex;
   align-items: center;

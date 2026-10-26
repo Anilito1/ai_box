@@ -2,7 +2,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { totalsOf } from '../../../shared/costs';
 import type { Effort } from '../../../shared/types';
 import { blocksOf } from '../blocks';
-import type { AgentCommand, AgentEvent } from '../types';
+import type { AgentCommand, AgentEvent, LimitSignal } from '../types';
 
 // Claude Code's stream (the Agent SDK's messages) as the hub's own events. Pure: the adapter feeds it, tests replay it.
 
@@ -99,4 +99,12 @@ export function translate(msg: SDKMessage): AgentEvent[] {
     default:
       return ACTIVITY;
   }
+}
+
+/** What a Claude Code reply error means for the account: its limit, its money, or its sign-in. Anything else is no limit. */
+export function claudeLimit(error: string): LimitSignal | null {
+  if (error === 'rate_limit') return { kind: 'rate', resetsAt: null, source: `assistant:${error}` };
+  if (error === 'billing_error') return { kind: 'quota', resetsAt: null, source: `assistant:${error}` };
+  if (error === 'authentication_failed' || error === 'oauth_org_not_allowed' || error === 'account_on_hold') return { kind: 'auth', resetsAt: null, source: `assistant:${error}` };
+  return null;
 }

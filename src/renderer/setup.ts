@@ -1,5 +1,6 @@
 import { ACCOUNT_LIMITS, ACCOUNTS_MAX, DEFAULT_ACCOUNT, hasServer, normalizeAccount, OPENAI_URL } from '../shared/accounts';
 import { presetsOf, PRESETS } from '../shared/presets';
+import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
@@ -170,6 +171,8 @@ export class SetupView {
     private readonly models: () => ModelOption[],
     /** The models an account lists for itself (Codex), else null: Claude's list applies. */
     private readonly catalog: (account: string) => ModelOption[] | null = () => null,
+    /** When an account's limit ends (epoch seconds), while it is limited. */
+    private readonly limitedUntil: (account: string) => number | null = () => null,
   ) {
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -1143,7 +1146,94 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     for (const kind of ACCOUNT_KINDS) row.append(this.button(t(`setup.accounts.add.${kind}`), kind === 'claude' ? 'btn' : 'btn ghost', () => this.editAccount(normalizeAccount({ kind, isolated: kind === 'codex' })), full));
     add.append(row);
-    el.append(add, h('p', 'setup-fine', t('setup.accounts.fine')));
+    el.append(add, this.fallbackField(s), h('p', 'setup-fine', t('setup.accounts.fine')));
+  }
+
+  /** The chain of accounts a session goes on with when its own reaches a limit. */
+  private fallbackField(s: HubSettings): HTMLElement {
+    const f = this.field(t('setup.fallback'), t('setup.fallback.hint'));
+    const fb = s.fallback;
+    const change = (next: Partial<FallbackConfig>) => void this.save({ fallback: { ...fb, ...next } });
+    const on = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = fb.enabled;
+    box.disabled = this.busy;
+    box.addEventListener('change', () => change({ enabled: box.checked }));
+    const onText = h('span', 'setup-choice-text');
+    onText.append(h('span', 'setup-choice-title', t('setup.fallback.enabled')), h('span', 'setup-choice-hint', t('setup.fallback.enabled.hint')));
+    on.append(box, onText);
+    f.append(on);
+    if (!fb.enabled) return f;
+
+    const name = (id: string) => (id === DEFAULT_ACCOUNT ? t('account.default') : (s.accounts.find((a) => a.id === id)?.name ?? id));
+    const paidOf = (id: string) => (id === DEFAULT_ACCOUNT ? s.provider === 'api-key' : isPaid(s.accounts.find((a) => a.id === id)?.kind ?? 'claude'));
+    const list = h('div', 'team-list');
+    if (fb.chain.length === 0) list.append(h('div', 'setup-hint', t('setup.fallback.empty')));
+    fb.chain.forEach((step, i) => {
+      const row = h('div', 'team-row');
+      const text = h('div', 'team-row-text');
+      const select = h('select', 'setup-select');
+      select.setAttribute('aria-label', t('setup.fallback.account'));
+      const taken = new Set(fb.chain.map((x) => x.account));
+      for (const id of [DEFAULT_ACCOUNT, ...s.accounts.map((a) => a.id)]) if (id === step.account || !taken.has(id)) select.append(new Option(name(id), id));
+      select.value = step.account;
+      select.disabled = this.busy;
+      select.addEventListener('change', () => change({ chain: fb.chain.map((x, j) => (j === i ? { ...x, account: select.value } : x)) }));
+      const model = this.input(step.model, t('setup.fallback.model'));
+      model.disabled = this.busy;
+      model.addEventListener('change', () => change({ chain: fb.chain.map((x, j) => (j === i ? { ...x, model: model.value.trim() } : x)) }));
+      const own = this.catalog(step.account);
+      if (own) {
+        const id = `fallback-models-${i}`;
+        const dl = h('datalist');
+        dl.id = id;
+        dl.append(...own.map((m) => new Option(m.label, m.value)));
+        model.setAttribute('list', id);
+        text.append(dl);
+      }
+      const head = h('div', 'team-row-title');
+      head.append(h('b', '', `${i + 1}.`), select);
+      text.append(head, model);
+      const until = this.limitedUntil(step.account);
+      if (until) text.append(h('div', 'setup-hint', t('setup.accounts.limitedUntil', { time: new Date(until * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })));
+      if (paidOf(step.account)) {
+        const paid = h('label', 'setup-toggle');
+        const pbox = h('input');
+        pbox.type = 'checkbox';
+        pbox.checked = fb.paidOk.includes(step.account);
+        pbox.addEventListener('change', () => change({ paidOk: pbox.checked ? [...fb.paidOk, step.account] : fb.paidOk.filter((x) => x !== step.account) }));
+        paid.append(pbox, h('span', 'setup-choice-text', t('setup.fallback.paid')));
+        text.append(paid);
+      }
+      const actions = h('div', 'team-row-actions');
+      const move = (d: -1 | 1) => {
+        const chain = [...fb.chain];
+        [chain[i], chain[i + d]] = [chain[i + d], chain[i]];
+        change({ chain });
+      };
+      actions.append(
+        this.button('↑', 'btn ghost small', () => move(-1), i === 0 || this.busy),
+        this.button('↓', 'btn ghost small', () => move(1), i === fb.chain.length - 1 || this.busy),
+        this.button(t('setup.fallback.remove'), 'btn ghost small', () => change({ chain: fb.chain.filter((_, j) => j !== i) }), this.busy),
+      );
+      row.append(text, actions);
+      list.append(row);
+    });
+    f.append(list);
+    const free = [DEFAULT_ACCOUNT, ...s.accounts.map((a) => a.id)].find((id) => !fb.chain.some((x) => x.account === id));
+    f.append(this.button(t('setup.fallback.add'), 'btn ghost small', () => free && change({ chain: [...fb.chain, { account: free, model: '' }] }), !free || fb.chain.length >= CHAIN_MAX || this.busy));
+
+    const back = this.field(t('setup.fallback.back'), t('setup.fallback.back.hint'));
+    const sel = h('select', 'setup-select');
+    sel.setAttribute('aria-label', t('setup.fallback.back'));
+    sel.append(...FALLBACK_BACKS.map((b) => new Option(t(`setup.fallback.back.${b}`), b)));
+    sel.value = fb.back;
+    sel.disabled = this.busy;
+    sel.addEventListener('change', () => change({ back: sel.value as FallbackConfig['back'] }));
+    back.append(sel);
+    f.append(back);
+    return f;
   }
 
   /** "default", then each account: what a setting or a post picks from. `inherit`: a first choice that follows another. */
@@ -1186,6 +1276,8 @@ export class SetupView {
     const tags = h('div', 'team-tags');
     if (hasServer(a.kind)) tags.append(h('span', 'setup-tag', hostOf(a.baseUrl)), ...(a.model ? [h('span', 'setup-tag', a.smallModel ? `${a.model} · ${a.smallModel}` : a.model)] : []));
     const st = this.accountStates.get(a.id);
+    const limited = this.limitedUntil(a.id);
+    if (limited) tags.append(h('span', 'setup-pill warn', t('setup.accounts.limitedUntil', { time: new Date(limited * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })));
     if (st === undefined) void this.checkAccount(a.id);
     if (!st || st === 'checking') tags.append(h('span', 'setup-pill', t('setup.accounts.checking')));
     else if (st.ready) tags.append(h('span', 'setup-pill ok', t('setup.accounts.ready')), ...(st.detail && !hasServer(a.kind) ? [h('span', 'setup-tag', st.detail)] : []));

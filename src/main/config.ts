@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
 import { isLang, type Lang } from '../shared/i18n';
+import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
 import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
@@ -46,6 +47,7 @@ function defaults(lang: Lang): HubConfig {
     accounts: [],
     masterAccount: DEFAULT_ACCOUNT,
     workerAccount: DEFAULT_ACCOUNT,
+    fallback: structuredClone(FALLBACK_DEFAULTS),
     parallel: { ...PARALLEL_DEFAULTS },
     permissionMode: '',
     masterInstructions: '',
@@ -93,6 +95,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   // An account the list no longer has falls back to "default" (see knownAccounts).
   take('masterAccount', raw.masterAccount, isAccountRef, (v) => (cfg.masterAccount = v));
   take('workerAccount', raw.workerAccount, isAccountRef, (v) => (cfg.workerAccount = v));
+  take('fallback', raw.fallback, isFallback, (v) => (cfg.fallback = v));
   take('parallel', raw.parallel, isParallel, (v) => (cfg.parallel = { perPost: v.perPost, maxWorkers: v.maxWorkers }));
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
@@ -186,6 +189,9 @@ export function knownAccounts(cfg: HubConfig): void {
   if (!known(cfg.masterAccount)) cfg.masterAccount = DEFAULT_ACCOUNT;
   if (!known(cfg.workerAccount)) cfg.workerAccount = DEFAULT_ACCOUNT;
   for (const r of cfg.team) if (r.account && !known(r.account)) r.account = '';
+  // A chain forgets an account that is gone.
+  cfg.fallback.chain = cfg.fallback.chain.filter((s) => known(s.account));
+  cfg.fallback.paidOk = cfg.fallback.paidOk.filter(known);
 }
 
 export function saveConfig(dataDir: string, cfg: HubConfig): void {
@@ -208,6 +214,7 @@ export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null 
   const known = (id: string) => id === DEFAULT_ACCOUNT || cfg.accounts.some((a) => a.id === id);
   if (!known(next.masterAccount)) return 'masterAccount';
   if (!known(next.workerAccount)) return 'workerAccount';
+  if (next.fallback.chain.some((s) => !known(s.account)) || next.fallback.paidOk.some((id) => !known(id))) return 'fallback';
   Object.assign(cfg, next);
   return null;
 }

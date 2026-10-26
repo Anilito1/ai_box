@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
-import { translate } from './events';
+import { claudeLimit, translate } from './events';
 
 // Claude Code's messages as the SDK sends them (trimmed to what the hub reads), through the translation.
 const msg = (m: Record<string, unknown>) => m as unknown as SDKMessage;
@@ -98,4 +98,11 @@ test('a result becomes a turn: its outcome, the prompts left in the queue, the c
 test('what the hub does not read is activity, so the idle timer still sees the session alive', () => {
   assert.deepEqual(translate(msg({ type: 'tool_progress' })), [{ type: 'activity' }]);
   assert.deepEqual(translate(msg({ type: 'system', subtype: 'hook_started' })), [{ type: 'activity' }]);
+});
+
+test('which reply errors of Claude Code are limits of the account', () => {
+  assert.deepEqual(claudeLimit('rate_limit'), { kind: 'rate', resetsAt: null, source: 'assistant:rate_limit' });
+  assert.equal(claudeLimit('billing_error')?.kind, 'quota');
+  assert.equal(claudeLimit('authentication_failed')?.kind, 'auth');
+  for (const e of ['overloaded', 'server_error', 'invalid_request', 'max_output_tokens', 'unknown', '']) assert.equal(claudeLimit(e), null, e);
 });

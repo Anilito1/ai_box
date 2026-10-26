@@ -25,6 +25,19 @@ Ce qui est **vérifié** (commande lancée, sonde exécutée, code lu) est sépa
 
 ---
 
+## 0 bis. État de l'implémentation (branche `feature/multi-comptes`)
+
+| Phase | Fait | Où |
+|---|---|---|
+| 1 | Abstraction `ProviderAdapter` / `AgentProcess` / `AgentEvent`, adaptateur Claude, traduction pure testée | `src/main/providers/` |
+| 2 | Adaptateur Codex (app-server), serveur MCP HTTP loopback + jeton par session, outil `send_message`, comptes Codex (`CODEX_HOME` dédié par défaut), détection des programmes, menus modèle/effort par compte | `providers/codex/`, `mcpHub.ts`, `renderer/setup.ts` |
+| 3 | Type « compatible Anthropic » (DeepSeek en préréglage), préréglages en données, clés dans `safeStorage` | `shared/presets.ts`, `main/accounts.ts` |
+| 4 | Repli : cooldown par compte (persisté), chaîne configurable, consentement des comptes payants, note de passation écrite par le hub, retour (`message` / `idle` / `never`), maître inclus | `shared/fallback.ts`, `shared/passation.ts`, `sessions.ts` |
+
+Écarts avec la conception ci-dessus : pas de `convs` par compte dans `Session` pour tous les cas (une table `convs` est tenue seulement pour le repli) ; pas de chaîne par poste (chaîne globale) ; pas de bascule préventive à X % (jamais implémentée) ; coût des comptes Codex en tokens seulement (le journal accepte des coûts à zéro). Non testé en réel : DeepSeek (pas de clé), repli complet sur un vrai quota, Windows.
+
+---
+
 ## 1. État des lieux
 
 ### 1.1 Ce que contient déjà `feature/multi-comptes`

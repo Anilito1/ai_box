@@ -13,6 +13,7 @@ export type Status = 'starting' | 'busy' | 'idle' | 'attention' | 'exited';
 /** The program that runs an agent: Claude Code (also for Anthropic-compatible and bridged accounts) or Codex. */
 export type HarnessId = 'claude' | 'codex';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+import type { FallbackConfig } from './fallback';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions' | 'dontAsk';
 
 /** Image formats the Messages API accepts. */
@@ -105,6 +106,8 @@ export interface AccountBadge {
   id: string;
   name: string;
   kind: AccountKind | 'default';
+  /** Epoch seconds when the account's limit ends, while it is limited. */
+  limitedUntil: number | null;
   /** Its sessions run the account's own model: the model menu has nothing to pick. */
   pinned: boolean;
 }
@@ -180,6 +183,8 @@ export interface SessionView {
   error: string;
   /** Account it runs on (while running) or will run on at its next launch. */
   account: string;
+  /** Gone on another account because its own reached a limit: the account it left, else empty. */
+  fallbackFrom: string;
   /** A switch to another account waits for the turn in progress to end. */
   accountPending: boolean;
   /** The user picked its account by hand: the master's choices leave it alone. */
@@ -460,6 +465,8 @@ export interface HubSettings {
   /** Account the master runs on, and the one workers run on unless their post or the user picks another. */
   masterAccount: string;
   workerAccount: string;
+  /** Automatic fallback to another account when one reaches a limit. */
+  fallback: FallbackConfig;
   /** Instances of one post at the same time (its own worker included), and workers running at the same time. */
   parallel: { perPost: number; maxWorkers: number };
   /** Permission mode of every session at launch; empty = Claude Code's own default (settings, else auto or manual). */
