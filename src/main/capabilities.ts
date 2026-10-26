@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   draftError,
   draftJson,
@@ -29,8 +30,8 @@ import { findRepos } from './repos';
 
 // What Claude Code has installed for the user's own account: MCP servers (~/.claude.json, the repos' .mcp.json,
 // plugins, claude.ai connectors) and skills (~/.claude/skills, the repos', plugins'). Files are read for the list,
-// Claude Code itself (`claude mcp list`) says each server's state, adds and removes servers. Every program runs from an
-// argument list, never a shell.
+// Claude Code itself (`claude mcp list`, then a session's own view) says each server's state, adds and removes
+// servers. Every program runs from an argument list, never a shell.
 
 const HOME = homedir();
 const CLAUDE_DIR = join(HOME, '.claude');
@@ -41,6 +42,8 @@ const DIRS = {
 const SETTINGS = join(CLAUDE_DIR, 'settings.json');
 const LIST_MS = 120_000;
 const GET_MS = 60_000;
+/** How long a session's servers get to finish connecting. */
+const SESSION_MS = 60_000;
 const INSTALL_MS = 5 * 60_000;
 const FILE_BYTES_MAX = 256 * 1024;
 const SKILL_BYTES_MAX = 100 * 1024;
@@ -177,6 +180,43 @@ function run(exe: string, args: string[], cwd: string, env: Record<string, strin
   });
 }
 
+/**
+ * Each server's state as a session started in `cwd` sees it, sign-ins included. No prompt is sent: nothing is
+ * billed. Servers still connecting after SESSION_MS, or every server if Claude Code does not answer, are left out.
+ */
+async function sessionStates(exe: string, cwd: string, env: Record<string, string>): Promise<Map<string, McpState>> {
+  let close = () => undefined as void;
+  const prompt: AsyncIterable<SDKUserMessage> = {
+    [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => (close = () => resolve({ value: undefined, done: true }))) }),
+  };
+  const q = query({ prompt, options: { cwd, pathToClaudeCodeExecutable: exe, env, persistSession: false } });
+  const states = new Map<string, McpState>();
+  const deadline = Date.now() + SESSION_MS;
+  const watch = async () => {
+    for (;;) {
+      const list = await q.mcpServerStatus();
+      for (const s of list) states.set(s.name, s.status);
+      if (!list.some((s) => s.status === 'pending') || Date.now() > deadline) return;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  };
+  const watching = watch();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([watching, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('timeout')), SESSION_MS + 30_000)))]);
+  } catch {
+    states.clear();
+  } finally {
+    clearTimeout(timer);
+    close();
+    q.close();
+    // Closing ends a status call still waiting: its failure is the expected end, not an error.
+    watching.catch(() => undefined);
+  }
+  for (const [name, state] of states) if (state === 'pending') states.delete(name);
+  return states;
+}
+
 /** What a failed command printed, without the values the user typed (an env value, a header) and kept short. */
 function scrub(out: string, secrets: string[]): string {
   let text = out;
@@ -195,7 +235,7 @@ export interface CapabilityDeps {
 }
 
 export class CapabilityStore {
-  /** State of each server by name, from `claude mcp list` in the master's folder. */
+  /** State of each server by name, in the master's folder: as a session sees it, else as `claude mcp list` says. */
   private states = new Map<string, McpState>();
   /** Servers only Claude Code knows of (claude.ai connectors, managed ones): name and masked URL. */
   private listed: { name: string; target: string; state: McpState }[] = [];
@@ -313,8 +353,9 @@ export class CapabilityStore {
     }
     const env = this.deps.env();
     const master = masterCwd(this.deps.cfg);
-    const r = await run(exe, ['mcp', 'list'], master, env, LIST_MS);
-    const rows = parseMcpList(r.out);
+    const [r, session] = await Promise.all([run(exe, ['mcp', 'list'], master, env, LIST_MS), sessionStates(exe, master, env)]);
+    // `claude mcp list` reaches a claude.ai connector or a plugin's server a session is refused: the session has the last word.
+    const rows = parseMcpList(r.out).map((row) => ({ ...row, state: session.get(row.name) ?? row.state }));
     if (r.code !== 0 && rows.length === 0) {
       this.checkError = 'failed';
       return;
