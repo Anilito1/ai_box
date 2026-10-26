@@ -12,6 +12,7 @@ import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, is
 import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff } from '../shared/passation';
+import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
   fromTemplate,
@@ -101,14 +102,18 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
   /** Account its running process was started on; empty when closed. */
   runAccount: string;
+  /** Ultracode was on when its running process started: a worker's Workflow tool is there only then (see the adapter). */
+  runUltracode: boolean;
   /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
   switchPending: boolean;
+  /** A worker asked for Ultracode during a turn: it restarts once the turn is over, to get the Workflow tool. */
+  ultracodePending: boolean;
   pendingTo: string;
   /** Gone on another account because its own reached a limit: the account pick it left (may be empty), else null. */
   home: string | null;
@@ -168,6 +173,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   /** The user picked its model or effort by hand: the master's choices leave them alone. */
   userModel: boolean;
   userEffort: boolean;
+  /** The user chose its Ultracode by hand: the master's choices leave it alone. */
+  userUltracode: boolean;
   /** The conversation that got the handoff note with its first message: each new one gets it once. */
   noteSentTo: string;
   /** The note is on its way with a first message: until the conversation exists, it is not added again. */
@@ -223,6 +230,8 @@ type Persisted = {
   | 'noteSentTo'
   | 'userModel'
   | 'userEffort'
+  | 'userUltracode'
+  | 'ultracode'
   | 'instanceOf'
   | 'tree'
   | 'readOnly'
@@ -390,6 +399,9 @@ export class SessionManager extends EventEmitter {
   private readonly usageCheckedAt = new Map<string, number>();
   /** Which providers are connected, as the main process last checked them. */
   private providerStates: Partial<Record<ProviderId, ProviderState>> = {};
+  private plans = new Map<string, string>();
+  /** The version of the Claude Code installed, empty when unknown. */
+  private claudeVersion = '';
   /** Accounts that reached a limit, and until when. */
   private readonly cooldowns = new Cooldowns();
   private reposCache: { at: number; text: string } | null = null;
@@ -646,8 +658,55 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
-    s.query?.setEffort(effort).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
+    s.query?.setEffort(effort, s.ultracode && s.runUltracode).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
     this.changed();
+  }
+
+  /**
+   * Ultracode on or off (Claude Code's standing workflow mode). Refused where the account's plan does not allow it.
+   * On a running process it applies now; a worker launched without the Workflow tool restarts on its conversation to
+   * get it: now if it is idle, else once its turn is over. Returns what the master is told.
+   */
+  setUltracode(id: string, on: boolean, byUser = true): string {
+    const s = this.sessions.get(id);
+    if (!s) return '';
+    if (on && this.ultracodeAccessOf(s.runAccount || this.accountOf(s)) !== 'allowed') {
+      const why = t('notice.ultracodeUnavailable');
+      this.notice(s, why, 'error');
+      return why;
+    }
+    if (s.ultracode === on) return t(on ? 'ultracode.already' : 'ultracode.alreadyOff', { name: s.name });
+    s.ultracode = on;
+    if (byUser) s.userUltracode = true;
+    if (s.query) {
+      s.query.setUltracode(on).catch((err: unknown) => {
+        // Not taken (the model has no xhigh effort, workflows are off in Claude Code's own settings): the choice goes back.
+        s.ultracode = !on;
+        this.notice(s, t('notice.ultracodeRefused'), 'error', errorText(err));
+        this.changed();
+      });
+      if (on && s.role === 'worker' && !s.runUltracode) this.restartForUltracode(s);
+    }
+    this.changed();
+    return t(on ? 'ultracode.on' : 'ultracode.off', { name: s.name });
+  }
+
+  /** Ultracode for a worker that has not started yet: its launch picks it up. Said when the account's plan does not allow it. */
+  private startUltracode(s: Session, asked: boolean): string {
+    if (this.ultracodeAccessOf(this.accountOf(s)) !== 'allowed') return asked ? t('notice.ultracodeUnavailable') : '';
+    s.ultracode = true;
+    return t('ultracode.on', { name: s.name });
+  }
+
+  /** A worker's Workflow tool is fixed when its process starts: one that did not have it restarts, when no turn is in the way. */
+  private restartForUltracode(s: Session): void {
+    if (!this.settled(s)) {
+      s.ultracodePending = true;
+      this.notice(s, t('notice.ultracodeAfterTurn'), 'info');
+      if (s.query) this.switchIfDone(s, s.query);
+      return;
+    }
+    this.relaunch(s, 'notice.ultracodeRestarted');
   }
 
   setMode(id: string, mode: Mode): void {
@@ -711,7 +770,8 @@ export class SessionManager extends EventEmitter {
       const r = resolveProvider(this.providerStates, def.id);
       const account = 'account' in r ? r.account : '';
       const models = account ? (isBuiltinAccount(account) ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
-      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models };
+      const plan = def.id === 'anthropic' && account ? this.planOf(account) : undefined;
+      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models, ...(plan !== undefined ? { plan, ultracodeAccess: this.ultracodeAccessOf(account) } : {}) };
     });
   }
 
@@ -742,6 +802,27 @@ export class SessionManager extends EventEmitter {
     if ('account' in r) return r.account;
     const list = this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ');
     throw new Error(t(r.error === 'unknown' ? 'provider.unknown' : 'provider.notConnected', { name: ref, list }));
+  }
+
+  /** The plan of each Claude account ("own", an account id) as its program told it: Ultracode is offered by it. */
+  setPlans(plans: Record<string, string>, claudeVersion: string): void {
+    this.plans = new Map(Object.entries(plans));
+    this.claudeVersion = claudeVersion;
+    this.changed();
+  }
+
+  private planOf(account: string): string {
+    return this.plans.get(this.canon(account)) ?? '';
+  }
+
+  /**
+   * What an account allows of Ultracode: a Claude Code sign-in by its plan; an API key has no plan to read (shown, off);
+   * another server, Codex and Gemini do not have it.
+   */
+  private ultracodeAccessOf(account: string): UltracodeAccess {
+    const kind = this.kindOf(this.canon(account));
+    if (kind === 'anthropic-key') return 'unknown';
+    return kind === 'default' || kind === 'claude' ? ultracodeAccess(this.planOf(account), this.claudeVersion) : 'hidden';
   }
 
   /** The settings changed an account, a default or a post: each running session goes where it now belongs. */
@@ -827,25 +908,27 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A new process on the same conversation. Unlike stop(), its worktree stays as it is: the work goes on. */
-  private relaunch(s: Session): void {
+  private relaunch(s: Session, note?: Parameters<typeof t>[0]): void {
     const q = s.query;
     s.inbox?.close();
     this.teardown(s);
     q?.close();
-    this.notice(s, t('notice.accountSwitched', { account: this.accountName(this.accountOf(s)) }), 'info');
+    this.notice(s, note ? t(note) : t('notice.accountSwitched', { account: this.accountName(this.accountOf(s)) }), 'info');
     void this.launch(s, s.started);
     this.changed();
   }
 
   /** The turn that held a switch is over (with its background tasks): the session restarts on its new account. */
   private switchIfDone(s: Session, q: AgentProcess): void {
-    if (s.query !== q || !s.switchPending) return;
+    if (s.query !== q || !(s.switchPending || s.ultracodePending)) return;
     if (!this.settled(s) || Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
       return;
     }
-    if (s.runAccount === this.accountOf(s)) s.switchPending = false;
-    else this.relaunch(s);
+    if (s.runAccount !== this.accountOf(s)) this.relaunch(s);
+    else if (s.ultracodePending && s.ultracode && !s.runUltracode) this.relaunch(s, 'notice.ultracodeRestarted');
+    s.switchPending = false;
+    s.ultracodePending = false;
     this.changed();
   }
 
@@ -1155,6 +1238,8 @@ export class SessionManager extends EventEmitter {
         fallbackFrom: s.home === null ? '' : this.accountOf(s, s.home),
         accountPending: s.switchPending,
         userAccount: s.userAccount,
+        ultracode: s.ultracode,
+        ultracodeAccess: this.ultracodeAccessOf(s.runAccount || this.accountOf(s)),
       }));
     // The status bar shows the limits of the master's account.
     const master = this.sessions.get(MASTER_ID);
@@ -1278,6 +1363,7 @@ export class SessionManager extends EventEmitter {
     // The account is fixed for the life of the process: a switch starts another one on the same conversation.
     s.runAccount = account;
     s.switchPending = false;
+    s.ultracodePending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
@@ -1287,6 +1373,9 @@ export class SessionManager extends EventEmitter {
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
     const tools = this.hubTools(s, harness);
+    // Ultracode where the program and the plan have it; a choice the plan no longer allows stays asked, but off.
+    const ultracode = s.ultracode && harness === 'claude' && this.ultracodeAccessOf(account) === 'allowed';
+    s.runUltracode = ultracode;
     s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
     // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
@@ -1302,6 +1391,7 @@ export class SessionManager extends EventEmitter {
       model: this.launchModel(account, picked),
       // A worker never inherits the user's own effort from settings.json: unset, it runs at the hub's default.
       effort: s.fixedEffort ?? (isMaster ? null : this.workerEffort()),
+      ultracode,
       mode,
       instructions: append,
       stableInstructions: isMaster || !!post,
@@ -1362,6 +1452,7 @@ export class SessionManager extends EventEmitter {
     s.queued = 0;
     s.runAccount = '';
     s.switchPending = false;
+    s.ultracodePending = false;
     // Withdrawn, not refused: nobody answered them.
     for (const finish of [...s.pending.values()]) finish(null);
     s.status = 'exited';
@@ -1550,7 +1641,7 @@ export class SessionManager extends EventEmitter {
         this.countTurn(s, ev.usage);
         if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
         if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
-        if (s.switchPending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
+        if (s.switchPending || s.ultracodePending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
         if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
         void this.refreshUsage(s, q);
@@ -2183,6 +2274,7 @@ export class SessionManager extends EventEmitter {
       .enum(EFFORTS as [Effort, ...Effort[]])
       .nullish()
       .describe(t('tool.effort'));
+    const ultracode = z.boolean().nullish().describe(t('tool.ultracode'));
     const account = z.string().nullish().describe(t('tool.account', { list: this.accountBadges().map((a) => a.name).join(', ') }));
     const provider = z.string().nullish().describe(t('tool.provider', { list: this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ') }));
     const byPost = z.string().describe(t('tool.role.byName'));
@@ -2196,6 +2288,7 @@ export class SessionManager extends EventEmitter {
         .enum(['auto', ...EFFORTS] as [string, ...string[]])
         .nullish()
         .describe(t('tool.role.effort')),
+      ultracode: z.boolean().nullish().describe(t('tool.role.ultracode')),
       enabled: z.boolean().nullish().describe(t('tool.role.enabled')),
     };
     return [
@@ -2211,6 +2304,7 @@ export class SessionManager extends EventEmitter {
             read_only: z.boolean().nullish().describe(t('tool.spawn.readOnly')),
             model,
             effort,
+            ultracode,
             provider,
             account,
           },
@@ -2234,6 +2328,7 @@ export class SessionManager extends EventEmitter {
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
             model,
             effort,
+            ultracode,
             provider,
             account,
           },
@@ -2346,6 +2441,7 @@ export class SessionManager extends EventEmitter {
     read_only?: boolean | null;
     model?: string | null;
     effort?: Effort | null;
+    ultracode?: boolean | null;
     account?: string | null;
     provider?: string | null;
   }): Promise<string> {
@@ -2388,6 +2484,8 @@ export class SessionManager extends EventEmitter {
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
     Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true, accountId });
+    // Asked by the master or held by the post; refused (and said) where the account's plan does not have it.
+    const ultracodeNote = args.ultracode ?? post?.ultracode ? this.startUltracode(s, args.ultracode === true) : '';
     this.topics.alias(spawnedName(args), s.name);
     const plan = s.tree ? installPlan(s.tree) : null;
     // Only where nothing waits for an approval: an install runs the packages' own scripts.
@@ -2417,6 +2515,7 @@ export class SessionManager extends EventEmitter {
       ...(made ? [t('tree.made', { branch: made.tree.branch, base: made.tree.baseRef || 'HEAD', sha: made.tree.base.slice(0, 8) }), ...(made.stale ? [t('tree.stale')] : [])] : []),
       ...(plan ? [t(byHub ? 'install.byHub' : 'install.byWorker', { command: planText(plan) })] : []),
       ...(readOnly ? [t('spawn.readOnly')] : []),
+      ...(ultracodeNote ? [ultracodeNote] : []),
       ...notes,
       t('spawn.howTo', { name: s.name }),
     ].join('\n');
@@ -2443,6 +2542,7 @@ export class SessionManager extends EventEmitter {
     interrupt?: boolean | null;
     model?: string | null;
     effort?: Effort | null;
+    ultracode?: boolean | null;
     account?: string | null;
     provider?: string | null;
   }): Promise<string> {
@@ -2466,6 +2566,10 @@ export class SessionManager extends EventEmitter {
     if (newMission) s.mission = message;
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
+    let ultracodeNote = '';
+    if (args.ultracode != null && args.ultracode !== s.ultracode) {
+      ultracodeNote = s.userUltracode ? t('ultracode.locked', { name: s.name }) : this.setUltracode(s.id, args.ultracode, false);
+    }
     if (args.interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
     // Before the message: an idle worker restarts on the new account right away, and the message goes to that process.
     const accountNote =
@@ -2483,7 +2587,7 @@ export class SessionManager extends EventEmitter {
         ? t('message.interrupted', { name: s.name })
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
-    return [state, ...runs, ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
+    return [state, ...runs, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
@@ -2560,7 +2664,7 @@ export class SessionManager extends EventEmitter {
       if (this.sessions.has(role.id)) continue;
       // A post in auto starts with the usual worker model and effort, until the master picks some.
       const s = this.create(role.id, 'worker', sessionNameOf(role), '', role.folders[0], role.model || cfg.worker.model, role.effort || cfg.worker.effort || null);
-      Object.assign(s, { roleId: role.id, status: 'exited' });
+      Object.assign(s, { roleId: role.id, status: 'exited', ultracode: role.ultracode });
       if (role.enabled) this.shownPosts.add(s.id);
     }
     this.changed();
@@ -2638,6 +2742,14 @@ export class SessionManager extends EventEmitter {
         else s.fixedEffort = cfg.worker.effort || null;
       }
     }
+    if (role.ultracode !== before.ultracode) {
+      if (by === 'master' && s.userUltracode) notes.push('ultracodeLocked');
+      else {
+        s.userUltracode = false;
+        if (s.query) this.setUltracode(s.id, role.ultracode, false);
+        else s.ultracode = role.ultracode && this.ultracodeAccessOf(this.accountOf(s)) === 'allowed';
+      }
+    }
     const mode = role.mode || this.hubMode();
     if (role.mode !== before.mode && s.query && mode) this.setMode(s.id, mode);
     return notes;
@@ -2690,7 +2802,7 @@ export class SessionManager extends EventEmitter {
       `- ${r.name} (${sessionNameOf(r)}) · ${state}`,
       t('role.line.description', { text: r.description }),
       t('role.line.folders', { list: r.folders.join(', ') }),
-      t('role.line.run', { model: r.model || 'auto', effort: r.effort || 'auto', mode: r.mode || t('role.hubMode') }),
+      t('role.line.run', { model: r.model || 'auto', effort: r.effort || 'auto', mode: (r.mode || t('role.hubMode')) + (r.ultracode ? ' · ultracode' : '') }),
       t('role.line.instructions', { text: inside(r.instructions) || t('report.none') }),
     ].join('\n');
   }
@@ -2701,7 +2813,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The master's fields for a post: "auto" (or empty) leaves the choice to it, a model must be an allowed one. */
-  private postValues(args: { model?: string | null; effort?: string | null }): Partial<TeamRole> {
+  private postValues(args: { model?: string | null; effort?: string | null; ultracode?: boolean | null }): Partial<TeamRole> {
     const { cfg } = this.opts;
     const out: Partial<TeamRole> = {};
     if (args.model != null) {
@@ -2711,6 +2823,7 @@ export class SessionManager extends EventEmitter {
       out.model = model === 'auto' ? '' : (allowed ?? '');
     }
     if (args.effort != null) out.effort = args.effort === 'auto' ? '' : capEffort(args.effort as Effort, cfg.workerMaxEffort);
+    if (args.ultracode != null) out.ultracode = args.ultracode;
     return out;
   }
 
@@ -2723,6 +2836,7 @@ export class SessionManager extends EventEmitter {
       folders?: string[] | null;
       model?: string | null;
       effort?: string | null;
+      ultracode?: boolean | null;
       enabled?: boolean | null;
     },
     signal: AbortSignal,
@@ -2752,6 +2866,7 @@ export class SessionManager extends EventEmitter {
       folders?: string[] | null;
       model?: string | null;
       effort?: string | null;
+      ultracode?: boolean | null;
       enabled?: boolean | null;
     },
     signal: AbortSignal,
@@ -2777,7 +2892,7 @@ export class SessionManager extends EventEmitter {
     if ('error' in r) throw new Error(this.roleErrorText(r.error, before.name));
     this.masterSaw(known);
     const after = r.role;
-    const changed = (['name', 'description', 'folders', 'model', 'effort', 'enabled'] as const)
+    const changed = (['name', 'description', 'folders', 'model', 'effort', 'ultracode', 'enabled'] as const)
       .filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
       .map((k) => `- ${k}: ${JSON.stringify(before[k])} → ${JSON.stringify(after[k])}`);
     // The former instructions in full: nothing the master replaces is lost.
@@ -3255,6 +3370,9 @@ export class SessionManager extends EventEmitter {
       seen: '',
       userModel: false,
       userEffort: false,
+      userUltracode: false,
+      ultracode: false,
+      runUltracode: false,
       noteSentTo: '',
       noteSending: false,
       noteDue: false,
@@ -3271,6 +3389,7 @@ export class SessionManager extends EventEmitter {
       accountId: '',
       runAccount: '',
       switchPending: false,
+      ultracodePending: false,
       pendingTo: '',
       mcpLease: null,
       home: null,
@@ -3360,6 +3479,8 @@ export class SessionManager extends EventEmitter {
       noteSentTo: s.noteSentTo,
       userModel: s.userModel,
       userEffort: s.userEffort,
+      userUltracode: s.userUltracode,
+      ultracode: s.ultracode,
       instanceOf: s.instanceOf,
       tree: s.tree,
       readOnly: s.readOnly,

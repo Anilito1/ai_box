@@ -54,7 +54,7 @@ import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
 import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
 import { checkCodex, CODEX_MIN_VERSION, codexExecutable, codexLogout, codexVersion, versionAtLeast } from './providers/codex/cli';
-import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './providers/claude/cli';
+import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus, claudeVersion } from './providers/claude/cli';
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
 import { errorCode } from './errors';
@@ -380,6 +380,10 @@ class Hub {
       Promise.all(claudeAccounts.map((a) => claudeStatus(this.cfg, this.mgr.environment(a.id)))),
     ]);
     this.executable = claude.executable || this.executable;
+    // Ultracode is offered by the plan of each Claude Code sign-in, and by the Claude Code installed.
+    const plans: Record<string, string> = { [OWN_ACCOUNT]: claude.status.account?.plan ?? '' };
+    claudeAccounts.forEach((a, i) => (plans[a.id] = others[i].status.account?.plan ?? ''));
+    this.mgr.setPlans(plans, await claudeVersion(claude.executable, this.mgr.toolEnv()));
     const viewOf = (r: { executable: string; status: { account: { ready: boolean; provider: string; email: string; plan: string; source: string } | null; error: string } }): MethodView => {
       const who = r.status.account;
       return {
@@ -810,6 +814,7 @@ class Hub {
     on('session:interrupt', (id) => isStr(id) && mgr.interrupt(id));
     on('session:model', (id, model) => isStr(id) && isStr(model) && MODEL.test(model) && mgr.setModel(id, model));
     on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
+    on('session:ultracode', (id, on_) => isStr(id) && typeof on_ === 'boolean' && mgr.setUltracode(id, on_));
     on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
     on('session:account', (id, account) => isStr(id) && (account === '' || isAccountRef(account)) && mgr.setAccount(id, account as string));
     on('session:decide', (id, requestId, decision) => {

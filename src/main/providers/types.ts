@@ -122,6 +122,8 @@ export interface LaunchSpec {
   /** Empty = the program's own choice (its settings). */
   model: string;
   effort: Effort | null;
+  /** Ultracode on from the start (Claude Code only; the others ignore it). */
+  ultracode: boolean;
   mode: Mode | null;
   /** The hub's instructions for this session, added to the program's own. */
   instructions: string;
@@ -147,7 +149,10 @@ export interface AgentProcess {
   interrupt(): Promise<void>;
   close(): void;
   setModel(model: string): Promise<void>;
-  setEffort(effort: Effort): Promise<void>;
+  /** `ultracode`: the session's Ultracode choice, which a change of effort must carry along (Claude Code's would drop it). */
+  setEffort(effort: Effort, ultracode?: boolean): Promise<void>;
+  /** Turns Ultracode on or off in the running process; rejects when the program cannot (or the model, the plan). */
+  setUltracode(on: boolean): Promise<void>;
   setMode(mode: Mode): Promise<void>;
   context(): Promise<{ tokens: number; size: number; model: string }>;
   /** Running totals of the conversation so far (a resumed one carries its earlier turns); rejects when unknown. */

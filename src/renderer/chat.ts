@@ -462,7 +462,7 @@ export class ChatView {
     this.modelBtn.replaceChildren(
       ...(provider ? [h('span', 'cbtn-provider', provider)] : []),
       h('span', '', shown),
-      h('span', 'cbtn-muted', [s.effort ? effortLabel(s.effort) : '', note].filter(Boolean).join(' · ')),
+      h('span', 'cbtn-muted', [s.effort ? effortLabel(s.effort) : '', s.ultracode && s.ultracodeAccess === 'allowed' ? t('chat.ultracode') : '', note].filter(Boolean).join(' · ')),
       icon(ICONS.chevron, 'ico small'),
     );
     this.modelBtn.title = t('chat.modelTitle');
@@ -652,6 +652,8 @@ export class ChatView {
     let nextEffort: Effort | null = null;
     // The effort just picked for the session itself: the menu stays open, the button shows it before the session reports back.
     let applied: Effort | null = null;
+    // Same for Ultracode, a switch of the session itself.
+    let ultracode: boolean | null = null;
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
         menu.replaceChildren();
@@ -728,6 +730,24 @@ export class ChatView {
             seg.append(b);
           }
           root.append(seg);
+        }
+        // Ultracode belongs to Claude Code: on Anthropic's tab, for a session that runs there. Hidden on a Pro plan; shown
+        // but off when the plan is not known.
+        if (tab === current && current === 'anthropic' && s.ultracodeAccess !== 'hidden') {
+          const known = s.ultracodeAccess === 'allowed';
+          const on = known && (ultracode ?? s.ultracode);
+          const old = s.ultracodeAccess === 'outdated';
+          const row = this.menuRow(t('chat.ultracode'), t(known ? 'chat.ultracode.hint' : old ? 'chat.ultracode.old' : 'chat.ultracode.unknown'), on);
+          row.setAttribute('role', 'switch');
+          row.setAttribute('aria-checked', String(on));
+          row.disabled = !known;
+          if (!known) row.title = t(old ? 'chat.ultracode.old' : 'chat.ultracode.unknownTip');
+          row.addEventListener('click', () => {
+            ultracode = !on;
+            this.hub.setUltracode(s.id, ultracode);
+            draw();
+          });
+          root.append(h('div', 'menu-sep'), row);
         }
         if (s.userAccount) {
           const back = this.menuRow(t('chat.accountUsual'), t('chat.accountUsual.hint'), false);

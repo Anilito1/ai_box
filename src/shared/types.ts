@@ -5,6 +5,7 @@ import type { KeepReason } from './parallel';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
 import type { Topic } from './topics';
+import type { UltracodeAccess } from './ultracode';
 import type { UpdateChoice, UpdateMode, UpdateState } from './update';
 
 export { APP_NAME } from './brand';
@@ -76,6 +77,8 @@ export interface TeamRole {
   /** Empty = auto: the master picks the model (or effort) of each mission. */
   model: string;
   effort: Effort | '';
+  /** Its worker runs in Ultracode (Claude Code's standing workflow mode), where its account's plan allows it. */
+  ultracode: boolean;
   /** Empty = the mode of the other sessions. */
   mode: Mode | '';
   /** Account its worker runs on (an account id, or "default"); empty = the workers' account. */
@@ -199,6 +202,10 @@ export interface SessionView {
   accountPending: boolean;
   /** The user picked its account by hand: the master's choices leave it alone. */
   userAccount: boolean;
+  /** Ultracode (Claude Code's standing workflow mode) is asked for; it takes effect where the account's plan allows it. */
+  ultracode: boolean;
+  /** What its account's plan allows of Ultracode (see shared/ultracode.ts). */
+  ultracodeAccess: UltracodeAccess;
 }
 
 /** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
@@ -407,6 +414,10 @@ export interface ProviderBadge {
   /** The account its sessions run on ("default" for Anthropic), empty when not connected. */
   accountId: string;
   models: ModelOption[];
+  /** Anthropic only: the plan of the account in use ("max", "pro"…), empty when not read; Ultracode is shown by it. */
+  plan?: string;
+  /** Anthropic only: what that plan allows of Ultracode. */
+  ultracodeAccess?: UltracodeAccess;
 }
 
 /** An Anthropic account in its block: who it is, whether it is signed in, whether it is the one in use. */
@@ -658,6 +669,8 @@ export interface HubApi {
   interrupt(id: string): void;
   setModel(id: string, model: string): void;
   setEffort(id: string, effort: Effort): void;
+  /** Turns Ultracode on or off for a session (Claude Code, a plan that allows it). */
+  setUltracode(id: string, on: boolean): void;
   setMode(id: string, mode: Mode): void;
   /** Moves a session to another account (an id, "default"); it restarts on it with its conversation. */
   setAccount(id: string, account: string): void;

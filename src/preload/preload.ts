@@ -31,6 +31,7 @@ const api: HubApi = {
   interrupt: (id) => ipcRenderer.send('session:interrupt', id),
   setModel: (id, model) => ipcRenderer.send('session:model', id, model),
   setEffort: (id, effort) => ipcRenderer.send('session:effort', id, effort),
+  setUltracode: (id, on) => ipcRenderer.send('session:ultracode', id, on),
   setMode: (id, mode) => ipcRenderer.send('session:mode', id, mode),
   setAccount: (id, account) => ipcRenderer.send('session:account', id, account),
   setProvider: (id, provider) => ipcRenderer.send('session:provider', id, provider),
