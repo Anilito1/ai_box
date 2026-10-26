@@ -126,6 +126,8 @@ export interface LaunchSpec {
   /** Instructions that never change between launches of this session (a post, the master). */
   stableInstructions: boolean;
   tools: HubTool[];
+  /** Where a program that cannot take in-process tools reaches the hub's tools: a local MCP server and its token. */
+  mcp: { url: string; token: string } | null;
   /** Absolute path of the program, empty = its default. */
   executable: string;
   env: Record<string, string>;
@@ -159,13 +161,19 @@ export interface HistoryMessage {
   blocks: Block[];
 }
 
+/** How to reach the program outside a session: its path and the environment of the account. */
+export interface AdapterContext {
+  executable: string;
+  env: Record<string, string>;
+}
+
 export interface ProviderAdapter {
   readonly harness: HarnessId;
   start(spec: LaunchSpec): AgentProcess;
   /** The conversation is still stored (can be resumed); an unreadable check says yes rather than lose the link. */
-  hasConversation(id: string, cwd: string): Promise<boolean>;
+  hasConversation(id: string, cwd: string, ctx: AdapterContext): Promise<boolean>;
   /** The stored conversation, oldest first; throws when it cannot be read. */
-  history(id: string, cwd: string): Promise<HistoryMessage[]>;
+  history(id: string, cwd: string, ctx: AdapterContext): Promise<HistoryMessage[]>;
   /** The permission mode the program would start in, before it says (from its own settings). */
   defaultMode(cwd: string): Promise<Mode | null>;
   /** The effort its settings give a model, when the program does not report it; undefined when they cannot be read. */

@@ -26,6 +26,7 @@ import {
   type AccountKind,
   type ChatItem,
   type Effort,
+  type HarnessId,
   type HubEventKind,
   type HubSnapshot,
   type ImageInput,
@@ -77,7 +78,9 @@ import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlo
 import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
 import { adapterFor } from './providers';
 import { Inbox } from './providers/inbox';
+import type { McpHub, McpLease } from './mcpHub';
 import type {
+  ProviderAdapter,
   AgentCommand,
   AgentEvent,
   AgentInput,
@@ -99,6 +102,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
   switchPending: boolean;
   pendingTo: string;
+  /** The hub's tools served over HTTP to its running process (programs that cannot take them in-process), else null. */
+  mcpLease: McpLease | null;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
   started: boolean;
   items: Map<string, ChatItem>;
@@ -211,6 +216,10 @@ export interface ManagerOptions {
   dataDir: string;
   /** Claude Code executable to run; empty = the SDK's default. */
   executable(): string;
+  /** Codex executable to run; empty = none found. */
+  codexExecutable(): string;
+  /** Where the hub's tools are served to programs that reach them over HTTP. */
+  mcpHub: McpHub;
   /** Variables added to (set) or removed from (unset) the environment of a session on this account: its access, GitHub. */
   sessionEnv(account: string): { set: Record<string, string>; unset: string[] };
   /** Writes the settings: the master's tools change the team. */
@@ -341,6 +350,8 @@ const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, Session>();
   private modelInfos: AgentModel[] = [];
+  /** The models of each Codex account, as Codex lists them. */
+  private readonly catalogs = new Map<string, AgentModel[]>();
   /** Commands of the last session that started: offered to one that has not run yet. */
   private lastCommands: AgentCommand[] = [];
   /** Plan limits by account, and when each was last asked. */
@@ -545,6 +556,19 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** The models an account offers, once known (a Codex account's own list; Claude's for the others). */
+  setCatalog(account: string, models: AgentModel[]): void {
+    if (models.length === 0) return;
+    this.catalogs.set(account, models);
+    this.changed();
+  }
+
+  /** The plan limits of an account, as its program last told them. */
+  setLimits(account: string, limits: RateLimits): void {
+    this.rateLimits.set(account, limits);
+    this.changed();
+  }
+
   /** A session running on this account is in the middle of something. */
   workingOn(account: string): boolean {
     return [...this.sessions.values()].some((s) => s.query && s.runAccount === account && this.isWorking(s));
@@ -648,7 +672,7 @@ export class SessionManager extends EventEmitter {
   /** A failed start that means the program is not there: for Claude, no executable was found either. */
   private missingProgram(s: Session, failure: string): boolean {
     const adapter = this.adapterOf(s);
-    return adapter.isMissingProgram(failure) || (adapter.harness === 'claude' && !this.opts.executable());
+    return adapter.isMissingProgram(failure) || !(adapter.harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable());
   }
 
   private accountName(account: string): string {
@@ -845,7 +869,9 @@ export class SessionManager extends EventEmitter {
     // The status bar shows the limits of the master's account.
     const master = this.sessions.get(MASTER_ID);
     const limits = this.rateLimits.get(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT) ?? null;
-    return { sessions, models: this.modelOptions(), rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges() };
+    const catalogs: Record<string, ModelOption[]> = {};
+    for (const a of this.opts.cfg.accounts) if (a.kind === 'codex') catalogs[a.id] = this.optionsOf(this.catalogs.get(a.id) ?? []);
+    return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -908,7 +934,7 @@ export class SessionManager extends EventEmitter {
       // Claude Code could not be started (missing executable, broken install): nothing else would report it.
       if (s.query) return; // Started: consume() reports what happens next.
       this.teardown(s);
-      this.failed(s, errorText(err), this.missingProgram(s, errorText(err)));
+      this.failed(s, errorText(err), this.missingProgram(s, errorText(err)), this.adapterOf(s).harness);
       this.changed();
     }
   }
@@ -938,9 +964,11 @@ export class SessionManager extends EventEmitter {
     if (s.tree?.state === 'kept') Object.assign(s.tree, { state: 'active', kept: [] });
 
     const account = this.accountOf(s);
-    const adapter = adapterFor(harnessOf(this.kindOf(account)));
+    const harness = harnessOf(this.kindOf(account));
+    const adapter = adapterFor(harness);
+    const executable = harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable();
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
-    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd))) {
+    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account) }))) {
       resume = false;
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
@@ -957,14 +985,17 @@ export class SessionManager extends EventEmitter {
     const mode = this.modeOf(s);
     s.mode = mode ?? (await adapter.defaultMode(s.cwd));
     if (this.quitting || s.inbox !== inbox) return;
-    const executable = this.opts.executable();
     // The account is fixed for the life of the process: a switch starts another one on the same conversation.
     s.runAccount = account;
     s.switchPending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
-    const append = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
+    const base = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
+    // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
+    const append = harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message');
+    const tools = this.hubTools(s, harness);
+    s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
     // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
     if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
@@ -976,12 +1007,13 @@ export class SessionManager extends EventEmitter {
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
       // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
-      model: s.fixedModel && runsClaude(this.kindOf(account)) ? s.fixedModel : '',
+      model: this.modelFits(account, s.fixedModel) ? s.fixedModel : '',
       effort: s.fixedEffort,
       mode,
       instructions: append,
       stableInstructions: isMaster || !!post,
-      tools: this.hubTools(s),
+      tools,
+      mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
       env: this.environment(account),
       conversation: { id: s.sessionId, resume },
@@ -995,11 +1027,11 @@ export class SessionManager extends EventEmitter {
     s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
     void this.onReady(s, q);
-    s.exit = this.consume(s, q, (f) => adapter.isMissingProgram(f) || (adapter.harness === 'claude' && !executable));
+    s.exit = this.consume(s, q, (f) => adapter.isMissingProgram(f) || !executable, adapter);
     await s.exit;
   }
 
-  private async consume(s: Session, q: AgentProcess, isMissing: (failure: string) => boolean): Promise<void> {
+  private async consume(s: Session, q: AgentProcess, isMissing: (failure: string) => boolean, adapter: ProviderAdapter): Promise<void> {
     let failure = '';
     try {
       for await (const ev of q.events) this.onEvent(s, q, ev);
@@ -1008,18 +1040,20 @@ export class SessionManager extends EventEmitter {
     }
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
-    if (failure && !this.quitting) this.failed(s, failure, isMissing(failure));
+    if (failure && !this.quitting) this.failed(s, failure, isMissing(failure), adapter.harness);
     this.changed();
   }
 
   /** A session that stopped on an error: its card and conversation say why; the master hears about a worker. */
-  private failed(s: Session, failure: string, noProgram: boolean): void {
+  private failed(s: Session, failure: string, noProgram: boolean, harness: HarnessId): void {
     if (this.quitting) return;
     // The program is missing: the fix is in the settings, not in the conversation.
-    const noClaude = noProgram;
-    s.error = noClaude ? t('error.noClaude') : humanError(failure);
+    const noClaude = noProgram && harness === 'claude';
+    const noCodex = noProgram && harness === 'codex';
+    s.error = noClaude ? t('error.noClaude') : noCodex ? t('error.noCodex') : humanError(failure);
     this.event(s, 'crashed');
     if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'claude-settings' });
+    else if (noCodex) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noCodex'), tone: 'error', action: 'accounts-settings' });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);
   }
@@ -1029,6 +1063,8 @@ export class SessionManager extends EventEmitter {
     if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
+    s.mcpLease?.dispose();
+    s.mcpLease = null;
     s.liveId = null;
     s.queued = 0;
     s.runAccount = '';
@@ -1258,6 +1294,7 @@ export class SessionManager extends EventEmitter {
       const init = await q.ready();
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
       if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount))) this.modelInfos = init.models;
+      else if (init.models.length > 0 && this.kindOf(s.runAccount) === 'codex') this.setCatalog(s.runAccount, init.models);
       if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
     } catch {
       return; // The session failed to start: consume() reports it.
@@ -1338,7 +1375,7 @@ export class SessionManager extends EventEmitter {
   /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
   private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
     const account = s.runAccount || DEFAULT_ACCOUNT;
-    if (!runsClaude(this.kindOf(account)) || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
+    if (this.kindOf(account) === 'openai' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
     this.usageCheckedAt.set(account, Date.now());
     try {
       const limits = await q.rateLimits();
@@ -1523,7 +1560,10 @@ export class SessionManager extends EventEmitter {
     // The master's conversation is filed by topic again, from its own calls (shared/topics.ts).
     const steps: ReplayStep[] = [];
     try {
-      const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd)).slice(-HISTORY_MAX);
+      const account = s.runAccount || this.accountOf(s);
+      const harness = harnessOf(this.kindOf(account));
+      const ctx = { executable: harness === 'claude' ? this.opts.executable() : this.opts.codexExecutable(), env: this.environment(account) };
+      const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd, ctx)).slice(-HISTORY_MAX);
       for (const m of messages) {
         const { blocks } = m;
         if (m.role === 'assistant') {
@@ -1794,7 +1834,7 @@ export class SessionManager extends EventEmitter {
    * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
    * hub's own channel always reaches this hub's master.
    */
-  private hubTools(s: Session): HubTool[] {
+  private hubTools(s: Session, harness: HarnessId = 'claude'): HubTool[] {
     const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -1813,7 +1853,14 @@ export class SessionManager extends EventEmitter {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
         run(() => this.messageMaster(s, message)),
       );
-      return [listWorkers, listRepos, toMaster];
+      // A program without Claude Code's SendMessage gets the hub's own tool for the same job.
+      const sendMessage = tool(
+        'send_message',
+        t('tool.sendMessage'),
+        { to: z.string().describe(t('tool.sendMessage.to')), message: z.string().describe(t('tool.sendMessage.message')) },
+        ({ to, message }) => run(() => this.sendPeer(s, String(to), String(message))),
+      );
+      return [listWorkers, listRepos, toMaster, ...(harness === 'claude' ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -1995,7 +2042,7 @@ export class SessionManager extends EventEmitter {
     if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
     const over = this.overCap(post?.id ?? null);
     if (over) throw new Error(over);
-    const choice = this.choose(null, args, post);
+    const choice = this.choose(null, args, post, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
     const model = choice.model ?? (post?.model || cfg.worker.model);
     const effort = choice.effort ?? (post?.effort || cfg.worker.effort || null);
     const readOnly = !!args.read_only;
@@ -2091,7 +2138,7 @@ export class SessionManager extends EventEmitter {
       const over = this.overCap(s.instanceOf);
       if (over) throw new Error(over);
     }
-    const choice = this.choose(s, args);
+    const choice = this.choose(s, args, undefined, accountId ?? undefined);
     const wasClosed = !s.inbox;
     const wasWorking = !wasClosed && this.isWorking(s);
     // A permanent worker handed work while it had none starts a new mission: its card and list_workers show it, and
@@ -2133,16 +2180,20 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
-  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null) {
+  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
     const { cfg } = this.opts;
+    // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
+    const codex = this.kindOf(account) === 'codex';
+    const listed = this.catalogOf(account).map((m) => m.value);
+    const allowed = codex ? (listed.length > 0 ? listed : requested.model ? [requested.model.trim()] : []) : cfg.workerModels;
     const choice = resolveChoice({
       requested,
       post: post ? { model: post.model, effort: post.effort } : null,
       locked: { model: !!s?.userModel, effort: !!s?.userEffort },
-      allowed: cfg.workerModels,
+      allowed,
       maxEffort: cfg.workerMaxEffort,
     });
-    if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: cfg.workerModels.join(', ') }));
+    if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: allowed.join(', ') }));
     return choice;
   }
 
@@ -2574,6 +2625,19 @@ export class SessionManager extends EventEmitter {
     return t('master.delivered');
   }
 
+  /** A worker writes to another session (the master, or a worker) through the hub, as Claude Code's SendMessage does. */
+  private sendPeer(from: Session, to: string, message: string): string {
+    const text = message.trim();
+    if (!text) throw new Error(t('message.empty'));
+    const wanted = to.trim().toLowerCase().replace(/\s*\[[0-9a-f]{4,}\]$/i, '');
+    if (wanted === masterName().toLowerCase() || wanted === MASTER_ID) return this.messageMaster(from, text);
+    const peer = this.findWorker(wanted);
+    if (peer === from) throw new Error(t('worker.notFound', { name: to }));
+    if (this.ended(peer)) throw new Error(t('instance.ended', { name: peer.name }));
+    this.deliver(peer, { text: `${tags().worker(from.name)}\n${text}`, images: [], from: from.name, shown: text });
+    return t('message.delivered', { name: peer.name });
+  }
+
   /** The master changed the team itself: it knows, unless the user had changed it too since it last heard. */
   private masterSaw(known: string): void {
     const master = this.sessions.get(MASTER_ID);
@@ -2714,12 +2778,33 @@ export class SessionManager extends EventEmitter {
   // ---------- models ----------
 
   private modelOptions(): ModelOption[] {
-    return this.modelInfos.map((m) => ({
+    return this.optionsOf(this.modelInfos);
+  }
+
+  private optionsOf(models: AgentModel[]): ModelOption[] {
+    return models.map((m) => ({
       value: m.value,
       label: modelLabel(m.value, m.displayName),
-      description: modelHint(m.value, m.displayName),
+      description: m.description && !this.modelInfos.includes(m) ? m.description : modelHint(m.value, m.displayName),
       efforts: m.efforts,
     }));
+  }
+
+  /** The model list of the program an account runs on. */
+  private catalogOf(account: string): AgentModel[] {
+    return this.kindOf(account) === 'codex' ? (this.catalogs.get(account) ?? []) : this.modelInfos;
+  }
+
+  /** A model the program of this account can take (Claude's names are not Codex's): else the account's own choice stands. */
+  private modelFits(account: string, model: string): boolean {
+    if (!model) return false;
+    const kind = this.kindOf(account);
+    if (kind === 'openai') return false;
+    if (kind === 'codex') {
+      const catalog = this.catalogs.get(account) ?? [];
+      return catalog.length === 0 ? !/^(default|opus|sonnet|haiku|fable|claude-)/i.test(model) : catalog.some((m) => m.value === model);
+    }
+    return /^(default|best|opusplan|opus|sonnet|haiku|fable|claude-)/i.test(model) || this.modelInfos.some((m) => m.value === model || m.resolvedModel === model);
   }
 
   /**
@@ -2738,8 +2823,13 @@ export class SessionManager extends EventEmitter {
   private applyModel(s: Session, modelId: string): void {
     if (!modelId) return;
     // On a bridged account the model is the account's: shown as it is, the Claude choice kept for the next account.
-    if (s.runAccount && !runsClaude(this.kindOf(s.runAccount))) {
+    if (s.runAccount && this.kindOf(s.runAccount) === 'openai') {
       s.modelLabel = modelId;
+      return;
+    }
+    if (s.runAccount && this.kindOf(s.runAccount) === 'codex') {
+      s.model = modelId;
+      s.modelLabel = this.catalogOf(s.runAccount).find((m) => m.value === modelId)?.displayName ?? modelId;
       return;
     }
     const alias = this.modelInfos.find((m) => m.resolvedModel === modelId && m.value !== 'default')?.value;
@@ -2819,6 +2909,7 @@ export class SessionManager extends EventEmitter {
       runAccount: '',
       switchPending: false,
       pendingTo: '',
+      mcpLease: null,
       userAccount: false,
     };
     this.sessions.set(id, s);

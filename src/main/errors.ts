@@ -40,6 +40,7 @@ export function assistantError(code: string): string {
     invalid_request: 'error.request',
     server_error: 'error.server',
     max_output_tokens: 'error.output',
+    context_exceeded: 'error.tooLong',
   };
   return t(known[code] ?? 'error.unknown');
 }

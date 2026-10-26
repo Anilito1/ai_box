@@ -18,7 +18,7 @@ after(() => rmSync(root, { recursive: true, force: true }));
 
 const { accountDir, accountEnv, prepareClaudeDir, removeClaudeDir } = await import('./accounts');
 type Account = import('../shared/types').Account;
-const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '' };
+const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '', isolated: false };
 
 test('a Claude account folder shares everything but its sign-in', () => {
   const dir = accountDir(data, claude.id);
@@ -54,7 +54,7 @@ test('accountEnv: each kind gets its own access, the user’s own switches remov
   assert.ok(c.unset.includes('ANTHROPIC_API_KEY') && c.unset.includes('ANTHROPIC_BASE_URL'));
   const k = accountEnv({ ...claude, id: 'a-key00001', kind: 'anthropic-key' }, ctx);
   assert.deepEqual(k.set, { ANTHROPIC_API_KEY: 'k-123' });
-  const o = accountEnv({ ...claude, id: 'a-oai00001', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5', smallModel: '' }, ctx);
+  const o = accountEnv({ ...claude, id: 'a-oai00001', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5', smallModel: '', isolated: false }, ctx);
   assert.equal(o.set.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9/a-x');
   assert.equal(o.set.ANTHROPIC_AUTH_TOKEN, 'tok', 'the bridge token, never the OpenAI key');
   assert.ok(!Object.values(o.set).includes('k-123'));

@@ -30,6 +30,7 @@ const en = {
   'notice.modeRefused': 'The mode could not be changed.',
   'notice.stopped': 'Session stopped: {error}',
   'error.noClaude': 'Claude Code not found',
+  'error.noCodex': 'Codex not found',
   'error.network': 'The connection to Claude was lost. Try again in a moment.',
   'error.overloaded': 'Claude is busy or your usage limit is reached. Try again a little later.',
   'error.billing': 'Your Claude account has a billing problem: check it in the Claude Console.',
@@ -41,6 +42,7 @@ const en = {
   'error.unknown': 'Something went wrong in this session.',
   'startup.failed': '{app} could not start. Restart it; if this happens again, the details below help to understand why.',
   'notice.noClaude': 'Claude Code could not be started: it is not installed, or not where {app} looks for it.',
+  'notice.noCodex': 'Codex could not be started: it is not installed, or not where {app} looks for it (npm install -g @openai/codex).',
   'notice.compacted': 'Context compacted',
   'notice.compactedTo': 'Context compacted: {before} → {after} tokens, {pct}% of the window',
   'notice.nothingToCompact': 'Nothing to compact yet: the conversation is empty.',
@@ -197,6 +199,10 @@ const en = {
   'tool.messageMaster':
     "Writes to this hub's master: final report, question, progress update. Always use this tool to reach the master (never SendMessage): it reaches the master of this hub, even when other hubs run on the computer.",
   'tool.messageMaster.message': 'Self-contained message',
+  'tool.sendMessage':
+    "Writes to another session of this hub: the master or a worker, by its name. Use it to align with a worker whose work touches yours (API contract, schema, shared types) and to answer a teammate's message. The hub delivers it; the answer comes back as a message to you.",
+  'tool.sendMessage.to': "The name of the session (the master's, or a worker's)",
+  'tool.sendMessage.message': 'Self-contained message',
   'topics.label': 'Topic',
   'master.unreachable': 'The master is not available.',
   'master.delivered': 'Delivered to the master.',
@@ -397,6 +403,7 @@ const fr: Record<Key, string> = {
   'notice.modeRefused': 'Le mode n’a pas pu être changé.',
   'notice.stopped': 'Session arrêtée : {error}',
   'error.noClaude': 'Claude Code introuvable',
+  'error.noCodex': 'Codex introuvable',
   'error.network': 'La connexion à Claude a été coupée. Réessaie dans un instant.',
   'error.overloaded': 'Claude est très sollicité ou ta limite d’usage est atteinte. Réessaie un peu plus tard.',
   'error.billing': 'Ton compte Claude a un problème de facturation : vérifie-le dans la Claude Console.',
@@ -408,6 +415,7 @@ const fr: Record<Key, string> = {
   'error.unknown': 'Un problème est survenu dans cette session.',
   'startup.failed': '{app} n’a pas pu démarrer. Relance-le ; si cela se reproduit, les détails ci-dessous aident à comprendre pourquoi.',
   'notice.noClaude': 'Claude Code n’a pas pu démarrer : il n’est pas installé, ou pas là où {app} le cherche.',
+  'notice.noCodex': 'Codex n’a pas pu démarrer : il n’est pas installé, ou pas là où {app} le cherche (npm install -g @openai/codex).',
   'notice.compacted': 'Contexte compacté',
   'notice.compactedTo': 'Contexte compacté : {before} → {after} tokens, {pct} % de la fenêtre',
   'notice.nothingToCompact': 'Rien à compacter : la conversation est vide.',
@@ -566,6 +574,10 @@ const fr: Record<Key, string> = {
   'tool.messageMaster':
     "Écrit au maître de ce hub : rapport final, question, point d'étape. Utilise toujours cet outil pour joindre le maître (jamais SendMessage) : il atteint le maître de ce hub, même si d'autres hubs tournent sur l'ordinateur.",
   'tool.messageMaster.message': 'Message autonome',
+  'tool.sendMessage':
+    "Écrit à une autre session de ce hub : le maître ou un worker, par son nom. Sers-t'en pour t'aligner avec un worker dont le travail touche le tien (contrat d'API, schéma, types communs) et pour répondre au message d'un coéquipier. Le hub le délivre ; la réponse te revient en message.",
+  'tool.sendMessage.to': 'Le nom de la session (celui du maître, ou d\'un worker)',
+  'tool.sendMessage.message': 'Message autonome',
   'topics.label': 'Sujet',
   'master.unreachable': "Le maître n'est pas disponible.",
   'master.delivered': 'Remis au maître.',

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 const { checkAccount, findAccount, firstAccount, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL } = await import('./accounts');
 type Account = import('./types').Account;
 
-const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '' });
+const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '', isolated: false });
 const openai = (over: Partial<Account> = {}): Account => ({ id: '', kind: 'openai', name: 'Work', baseUrl: OPENAI_URL, model: 'gpt-5', smallModel: '', ...over });
 
 test('normalizeAccount: trims, defaults the OpenAI server, drops the OpenAI fields of other kinds', () => {

@@ -27,6 +27,7 @@ import {
   IMAGE_TYPES,
   type AccountStatus,
   type ChatItem,
+  type CodexCli,
   type Effort,
   type FoundRepo,
   type HubEventKind,
@@ -40,9 +41,11 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
-import { accountDir, accountEnv, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, removeClaudeDir } from './accounts';
+import { accountDir, accountEnv, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, removeClaudeDir, removeCodexDir } from './accounts';
 import { agentFiles } from './agents';
 import { Bridge, type BridgeAccount } from './bridge';
+import { McpHub } from './mcpHub';
+import { checkCodex, CODEX_MIN_VERSION, codexExecutable, codexLogout, codexVersion, versionAtLeast } from './providers/codex/cli';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus } from './providers/claude/cli';
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
@@ -75,6 +78,7 @@ let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
 let updater: Updater | undefined;
 let bridge: Bridge | undefined;
+let mcpHubRef: McpHub | undefined;
 /** A restart from the settings: an update left for the close waits, the new hub starts right away. */
 let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
@@ -237,8 +241,11 @@ class Hub {
   readonly updater: Updater;
   /** Where the sessions of OpenAI accounts send Claude Code's requests. */
   readonly bridge = new Bridge((id) => this.bridgeAccount(id));
+  /** The hub's tools for sessions of programs that reach them over HTTP (Codex). */
+  readonly mcpHub = new McpHub();
   private readonly device = new DeviceFlow();
   private executable = '';
+  private codex = '';
   private gh = '';
   private masterStarted = false;
 
@@ -249,6 +256,8 @@ class Hub {
       cfg: this.cfg,
       dataDir: this.dataDir,
       executable: () => this.executable,
+      codexExecutable: () => this.codex,
+      mcpHub: this.mcpHub,
       sessionEnv: (account) => this.sessionEnv(account),
       persist: () => this.save(),
       costLog: this.costLog,
@@ -272,11 +281,13 @@ class Hub {
 
   async init(): Promise<void> {
     setGitSignIn(() => githubSignIn(this.cfg, this.secrets.get('githubToken'), this.gh));
-    [this.executable, this.gh] = await Promise.all([
+    [this.executable, this.codex, this.gh] = await Promise.all([
       claudeExecutable(this.cfg),
+      codexExecutable(this.cfg.codexPath),
       this.cfg.github.source === 'gh' ? ghPath() : '',
       this.secrets.load(),
       this.bridge.start(),
+      this.mcpHub.start(),
     ]);
   }
 
@@ -310,6 +321,12 @@ class Hub {
       const who = status.account;
       if (!who) return { ...none, error: status.error === 'timeout' ? 'timeout' : 'probe-failed' };
       return { ...none, ready: who.ready, detail: [who.email, who.plan].filter(Boolean).join(' · ') };
+    }
+    if (a.kind === 'codex') {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      const { status, limits } = await checkCodex(this.codex, this.mgr.environment(a.id));
+      if (limits) this.mgr.setLimits(a.id, limits);
+      return status;
     }
     if (a.kind === 'anthropic-key') {
       if (!key) return { ...none, error: 'no-key' };
@@ -348,12 +365,13 @@ class Hub {
       status = await checkOpenAI(account.baseUrl, k);
       if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
     }
-    const storesKey = account.kind !== 'claude' && typed !== null;
+    const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai') && typed !== null;
     if (storesKey && typed && !this.secrets.available()) return fail('no-keychain', 'key');
     if (!account.id) account.id = `a-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
     if (storesKey) await this.secrets.set(`account:${account.id}`, typed || null);
     this.cfg.accounts = before ? this.cfg.accounts.map((a) => (a.id === account.id ? account : a)) : [...this.cfg.accounts, account];
     if (account.kind === 'claude') prepareClaudeDir(accountDir(this.dataDir, account.id));
+    if (account.kind === 'codex' && account.isolated) prepareCodexDir(accountDir(this.dataDir, account.id));
     this.save();
     this.mgr.accountsChanged();
     return { ...this.view(), ok: true, error: '', field: '', id: account.id, status };
@@ -373,6 +391,11 @@ class Hub {
     if (a.kind === 'claude') {
       await claudeLogout(await claudeExecutable(this.cfg), env);
       removeClaudeDir(this.dataDir, a.id);
+    }
+    // A Codex account that has a folder of the hub's is signed out and its folder removed; the user's own Codex is never touched.
+    if (a.kind === 'codex' && a.isolated) {
+      await codexLogout(this.codex, env);
+      removeCodexDir(this.dataDir, a.id);
     }
     if (this.secrets.has(`account:${a.id}`)) await this.secrets.set(`account:${a.id}`, null);
     return { ...this.view(), ok: true, error: '' };
@@ -554,7 +577,21 @@ class Hub {
     handle('accounts:delete', (id) => (isStr(id) ? this.deleteAccount(id) : this.view()));
     handle('accounts:check', (id) => (isStr(id) ? this.checkAccount(id) : { ready: false, detail: '', error: 'not-found', models: [] }));
     // Claude Code's own sign-in, in that account's folder: the user signs in there, through Anthropic's own flow.
+    handle('codex:check', async (): Promise<CodexCli> => {
+      this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+      const version = await codexVersion(this.codex, mgr.toolEnv());
+      return { found: this.codex !== '', version, outdated: version !== '' && !versionAtLeast(version, CODEX_MIN_VERSION) };
+    });
     handle('accounts:login', async (id) => {
+      const c = this.cfg.accounts.find((x) => x.id === id && x.kind === 'codex');
+      if (c) {
+        this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
+        if (!this.codex) return false;
+        const set = this.mgr.environment(c.id);
+        if (c.isolated) prepareCodexDir(accountDir(this.dataDir, c.id));
+        // Codex's own sign-in (a browser opens): the user signs in there, through OpenAI's own flow.
+        return openTerminal({ title: `Codex · ${c.name}`, file: this.codex, args: ['login'], ...(c.isolated ? { env: { CODEX_HOME: accountDir(this.dataDir, c.id) } } : {}) }, set);
+      }
       const a = this.cfg.accounts.find((x) => x.id === id && x.kind === 'claude');
       const exe = a ? await claudeExecutable(this.cfg) : '';
       if (!a || !exe) return false;
@@ -715,6 +752,7 @@ async function start(): Promise<void> {
   const mgr = hub.mgr;
   manager = mgr;
   bridge = hub.bridge;
+  mcpHubRef = hub.mcpHub;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
@@ -765,6 +803,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
     bridge?.stop();
+    mcpHubRef?.stop();
   });
   app
     .whenReady()

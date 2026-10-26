@@ -34,6 +34,7 @@ function defaults(lang: Lang): HubConfig {
     language: lang,
     onboarded: false,
     claudePath: '',
+    codexPath: '',
     provider: 'claude-code',
     workspaces: found.length > 0 ? found.slice(0, 1) : [homedir()],
     mainRepos: [],
@@ -128,6 +129,7 @@ function mergeOwn(cfg: HubConfig, raw: Raw): void {
     cfg.accounts = accounts;
   }
   if (raw.claudePath === '' || isPath(raw.claudePath)) cfg.claudePath = raw.claudePath;
+  if (raw.codexPath === '' || isPath(raw.codexPath)) cfg.codexPath = raw.codexPath;
   const g = obj(raw.github);
   if (['none', 'oauth', 'token', 'gh'].includes(g.source as string)) cfg.github.source = g.source as HubConfig['github']['source'];
   if (isStr(g.login, 39, /^[\w-]*$/)) cfg.github.login = g.login;

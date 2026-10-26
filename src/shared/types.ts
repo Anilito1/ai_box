@@ -79,10 +79,11 @@ export interface TeamRole {
 /**
  * An account sessions can run on, besides the Claude access of Settings › Claude ("default"). `claude`: a Claude
  * account signed in through Claude Code's own sign-in, in a Claude Code folder of its own; `anthropic-key`: an
- * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge.
+ * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge;
+ * `codex`: a ChatGPT account signed in through Codex's own sign-in, driven by the Codex program (its own harness).
  */
-export type AccountKind = 'claude' | 'anthropic-key' | 'openai';
-export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai'];
+export type AccountKind = 'claude' | 'anthropic-key' | 'openai' | 'codex';
+export const ACCOUNT_KINDS: AccountKind[] = ['claude', 'anthropic-key', 'openai', 'codex'];
 
 export interface Account {
   /** "a-" + 8 characters, made by the main process. */
@@ -94,6 +95,8 @@ export interface Account {
   baseUrl: string;
   model: string;
   smallModel: string;
+  /** codex only: signed in in a Codex folder of the hub's own (true), or the one the user's Codex already uses (false). */
+  isolated: boolean;
 }
 
 /** What the composer and the sidebar show of an account. */
@@ -368,6 +371,8 @@ export interface HubSnapshot {
   sessions: SessionView[];
   models: ModelOption[];
   rateLimits: RateLimits | null;
+  /** The models of each account that has a list of its own (Codex), by account id. */
+  catalogs: Record<string, ModelOption[]>;
   /** Topics of the master's conversation, most recent activity first. */
   topics: Topic[];
   /** The accounts a session can be switched to, "default" first. */
@@ -408,7 +413,7 @@ export type ChatItem = (
       text: string;
       tone: 'info' | 'error';
       /** A button that opens Settings › Claude. */
-      action?: 'claude-settings';
+      action?: 'claude-settings' | 'accounts-settings';
       /** The raw message behind an error, shown folded under "Details". */
       detail?: string;
     }
@@ -431,6 +436,8 @@ export interface HubSettings {
   onboarded: boolean;
   /** Claude Code executable; empty = the binary bundled with the Agent SDK, else `claude` found on the PATH. */
   claudePath: string;
+  /** Codex program to run; empty = the one found on the PATH. */
+  codexPath: string;
   provider: Provider;
   /** Folders scanned by `list_repos`; the master runs in the first one. */
   workspaces: string[];
@@ -484,7 +491,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'team' | 'accounts'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts'>> & {
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -496,6 +503,14 @@ export interface AgentFile {
   role: Omit<TeamRole, 'id'>;
   /** Subagent settings a post does not carry (its tools, a bypass mode…), named so the user knows. */
   ignored: AgentDrop[];
+}
+
+/** The Codex program, as the accounts section reports it. */
+export interface CodexCli {
+  found: boolean;
+  version: string;
+  /** Older than the first version the hub was written against. */
+  outdated: boolean;
 }
 
 export interface ClaudeStatus {
@@ -577,6 +592,8 @@ export interface HubApi {
   /** Stores (or with null, deletes) the Anthropic API key after checking it with the API. */
   setApiKey(key: string | null): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;
+  /** The Codex program on this computer: found or not, its version, and whether the hub knows that version. */
+  checkCodex(): Promise<CodexCli>;
   /**
    * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
    * '' to remove it. A key is checked with its service first; `field` names the field refused.

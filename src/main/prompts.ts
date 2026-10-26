@@ -71,14 +71,14 @@ export const rosterKey = (cfg: HubConfig) =>
 function accountsText(cfg: HubConfig, l: Lang): string {
   if (cfg.accounts.length === 0) return '';
   const kinds = {
-    fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible' },
-    en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible' },
+    fr: { claude: 'compte Claude', 'anthropic-key': 'clé API Anthropic', openai: 'OpenAI ou compatible', codex: 'Codex (ChatGPT)' },
+    en: { claude: 'Claude account', 'anthropic-key': 'Anthropic API key', openai: 'OpenAI or compatible', codex: 'Codex (ChatGPT)' },
   }[l];
   const usual = cfg.accounts.find((a) => a.id === cfg.workerAccount)?.name ?? 'default';
   const list = cfg.accounts.map((a) => `${a.name} (${kinds[a.kind]}${a.kind === 'openai' ? ` · ${a.model}` : ''})`).join(', ');
   return l === 'fr'
-    ? ` Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle.`
-    : ` Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model.`;
+    ? ` Comptes : default (l'accès Claude habituel), ${list} ; les workers tournent sur ${usual} par défaut. Pour mettre un worker sur un autre compte : account de spawn_worker ou de message_worker, quand l'utilisateur le demande. Un compte OpenAI fait tourner son propre modèle ; un compte Codex (ChatGPT) tourne sur les modèles de Codex : omets model pour son modèle par défaut.`
+    : ` Accounts: default (the usual Claude access), ${list}; workers run on ${usual} by default. To put a worker on another account: account of spawn_worker or message_worker, when the user asks. An OpenAI account runs its own model; a Codex (ChatGPT) account runs on Codex's models: leave model out for its default.`;
 }
 
 const allowedText = (cfg: HubConfig, l: Lang) =>

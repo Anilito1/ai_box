@@ -48,6 +48,7 @@ const api: HubApi = {
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
   setApiKey: (key) => ipcRenderer.invoke('settings:api-key', key),
   checkClaude: () => ipcRenderer.invoke('claude:check'),
+  checkCodex: () => ipcRenderer.invoke('codex:check'),
   saveAccount: (account, key) => ipcRenderer.invoke('accounts:save', account, key),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   checkAccount: (id) => ipcRenderer.invoke('accounts:check', id),

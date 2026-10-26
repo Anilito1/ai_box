@@ -15,9 +15,9 @@ const URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/i;
 
 export const isAccountRef = (v: unknown): v is string => typeof v === 'string' && (v === DEFAULT_ACCOUNT || ACCOUNT_ID.test(v));
 /** The account runs Claude models: Claude Code talks to Anthropic itself, no bridge in between. */
-export const runsClaude = (kind: AccountKind | 'default') => kind !== 'openai';
+export const runsClaude = (kind: AccountKind | 'default') => kind !== 'openai' && kind !== 'codex';
 /** The program that runs the sessions of an account. */
-export const harnessOf = (_kind: AccountKind | 'default'): HarnessId => ('claude');
+export const harnessOf = (kind: AccountKind | 'default'): HarnessId => (kind === 'codex' ? 'codex' : 'claude');
 /** A server on this computer (LM Studio, llama.cpp, Ollama…): it usually needs no key. */
 export const isLocalUrl = (url: string) => /^https?:\/\/(localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(url);
 /** OpenAI's own API names the output limit max_completion_tokens; most compatible servers, max_tokens. */
@@ -37,6 +37,7 @@ export function normalizeAccount(raw: unknown): Account {
     baseUrl: openai ? str(o.baseUrl).trim().replace(/\/+$/, '') || OPENAI_URL : '',
     model: openai ? str(o.model).trim() : '',
     smallModel: openai ? str(o.smallModel).trim() : '',
+    isolated: kind === 'codex' && o.isolated === true,
   };
 }
 

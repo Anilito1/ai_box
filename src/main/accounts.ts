@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { ACCOUNT_ID, isLocalUrl } from '../shared/accounts';
@@ -116,6 +116,15 @@ export function accountEnv(account: Account, ctx: AccountEnvContext): { set: Rec
     }
     case 'anthropic-key':
       return { set: ctx.key ? { ANTHROPIC_API_KEY: ctx.key } : {}, unset: ACCESS_VARS };
+    case 'codex': {
+      // The user's own Codex sign-in unless the account has a folder of its own; an API key in the environment would
+      // take the place of the ChatGPT sign-in this account stands for.
+      const unset = ['OPENAI_API_KEY', 'CODEX_API_KEY'];
+      if (!account.isolated) return { set: {}, unset };
+      const dir = accountDir(ctx.dataDir, account.id);
+      prepareCodexDir(dir);
+      return { set: { CODEX_HOME: dir }, unset };
+    }
     case 'openai': {
       // Every Claude model name lands on the account's models (the bridge maps the rest the same way).
       const small = account.smallModel || account.model;
@@ -161,6 +170,20 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
   } catch (err) {
     return { ...none, error: errorCode(err) };
   }
+}
+
+/** Makes the Codex folder of an account of its own: where Codex keeps the sign-in and the conversations of its sessions. */
+export function prepareCodexDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const config = join(dir, 'config.toml');
+  if (!existsSync(config)) writeFileSync(config, '# Written by Claude Hub. This folder is one Codex account of the hub: its sign-in and its sessions.\n', { mode: 0o600 });
+}
+
+/** Removes a Codex account's own folder (its sign-in was ended first). Never the user's own Codex folder. */
+export function removeCodexDir(dataDir: string, id: string): void {
+  const dir = accountDir(dataDir, id);
+  if (!dir.startsWith(join(dataDir, 'accounts') + sep) || !existsSync(dir)) return;
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /** Claude Code's own sign-out for an account's folder, quietly: the folder goes right after. */
