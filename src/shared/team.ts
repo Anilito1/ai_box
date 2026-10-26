@@ -258,11 +258,14 @@ export function modelGrid(allowed: string[], maxEffort: Effort): GridRow[] {
   ];
 }
 
-// ---------- context of a permanent worker ----------
+// ---------- context of a worker ----------
 
-/** A permanent worker going to sleep with more than this share of its window starts its next mission afresh. */
-export const FRESH_START_PCT = 50;
-export const needsFreshStart = (m: Metrics | null) => (m?.contextPct ?? 0) >= FRESH_START_PCT;
+/** A worker compacts its conversation past this many tokens: a safety net, its handoff note comes first. */
+export const WORKER_COMPACT_WINDOW = 250_000;
+/** A worker settling with more context than this (or half its window, when smaller) starts its next mission afresh. */
+const FRESH_START_TOKENS = 200_000;
+export const needsFreshStart = (m: Metrics | null) =>
+  !!m && m.contextTokens >= Math.min(FRESH_START_TOKENS, m.contextSize ? m.contextSize / 2 : FRESH_START_TOKENS);
 
 // ---------- Claude Code subagent files ----------
 

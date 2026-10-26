@@ -34,6 +34,7 @@ import {
   sessionNameOf,
   slugify,
   TEMPLATE_IDS,
+  WORKER_COMPACT_WINDOW,
   type ChoiceNote,
   type RoleError,
 } from '../shared/team';
@@ -265,6 +266,10 @@ const HUB_TOOLS = [
   'delete_role',
   'topic',
 ];
+/** Effort of a worker when nobody fixed one: the user's own default (settings.json) is for their own sessions. */
+const WORKER_EFFORT: Effort = 'high';
+/** Connectors a worker never needs: their tool schemas would weigh on each of its turns. */
+const WORKER_DENIED_MCP = ['higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs'];
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
 const ITEMS_MAX = 1500;
@@ -540,7 +545,7 @@ export class SessionManager extends EventEmitter {
     return !s.inbox && s.tree?.state === 'removed';
   }
 
-  /** A permanent worker that wrote its handoff note: its next launch is a new conversation, seeded with the note. */
+  /** A worker that wrote its handoff note: its next launch is a new conversation, seeded with the note. */
   private freshStart(s: Session): void {
     Object.assign(s, { sessionId: randomUUID(), started: false, historyLoad: null, noteFresh: false });
     if (s.metrics) s.metrics = { ...s.metrics, contextTokens: 0, contextPct: 0 };
@@ -715,7 +720,7 @@ export class SessionManager extends EventEmitter {
     if (s.id === MASTER_ID) this.topics.reset();
     this.pendingItems.delete(s.id);
     this.emit('items', s.id, [], true);
-    this.notice(s, t(s.roleId && s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
+    this.notice(s, t(s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
     if (running && !this.orphan(s)) void this.launch(s, false);
     this.changed();
   }
@@ -891,9 +896,10 @@ export class SessionManager extends EventEmitter {
     const options: Options = {
       cwd: s.cwd,
       ...(post && post.folders.length > 1 ? { additionalDirectories: post.folders.slice(1) } : {}),
-      // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
+      // No model = the CLI resolves it from settings.json, exactly like a normal session; the master's effort too.
       ...(s.fixedModel ? { model: s.fixedModel } : {}),
-      ...(s.fixedEffort ? { effort: s.fixedEffort } : {}),
+      // A worker never inherits the user's own effort from settings.json: unset, it runs at the hub's default.
+      ...(s.fixedEffort || !isMaster ? { effort: s.fixedEffort ?? this.workerEffort() } : {}),
       ...(mode ? { permissionMode: mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
       allowDangerouslySkipPermissions: true,
@@ -905,11 +911,16 @@ export class SessionManager extends EventEmitter {
       // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
       extraArgs: { name: s.name, 'replay-user-messages': null },
       includePartialMessages: true,
+      // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups.
       disallowedTools: isMaster
         ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage']
         : s.readOnly
-          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion']
-          : ['AskUserQuestion'],
+          ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'Workflow', 'ScheduleWakeup']
+          : ['AskUserQuestion', 'Workflow', 'ScheduleWakeup'],
+      // Flag-level settings, over the user's own: a worker compacts early and loads none of the unneeded connectors.
+      ...(isMaster
+        ? {}
+        : { settings: { autoCompactWindow: WORKER_COMPACT_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) } }),
       mcpServers: { hub: this.hubServer(s) },
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
       allowedTools: HUB_TOOLS.map((name) => `mcp__hub__${name}`),
@@ -1401,9 +1412,9 @@ export class SessionManager extends EventEmitter {
     void this.launch(s, s.started, lostMission ? { ...prompt, command: false, text:`${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
-  /** The first message of a post's conversation after a context renewal carries its handoff note. */
+  /** The first message of a worker's conversation after a context renewal carries its handoff note. */
   private withNote(s: Session, prompt: Prompt): Prompt {
-    if (!s.roleId || !s.note || (s.started && !s.noteDue) || prompt.handoff || s.noteSending || s.noteSentTo === s.sessionId) return prompt;
+    if (!s.note || (s.started && !s.noteDue) || prompt.handoff || s.noteSending || s.noteSentTo === s.sessionId) return prompt;
     if (prompt.command) {
       s.noteDue = true;
       return prompt;
@@ -1652,7 +1663,8 @@ export class SessionManager extends EventEmitter {
       return;
     }
     this.stop(s.id);
-    this.notice(s, t('notice.closedByMaster'), 'info');
+    // A note is only asked of a worker closed for idleness: one the master closes has ended its job.
+    this.notice(s, s.handoffDone ? t('notice.closedIdle', { min: IDLE_CLOSE_MIN }) : t('notice.closedByMaster'), 'info');
     this.tellKept(s);
   }
 
@@ -1665,6 +1677,7 @@ export class SessionManager extends EventEmitter {
         this.sleep(s, PERMANENT_SLEEP_MIN);
         continue;
       }
+      if (this.askHandoff(s)) continue;
       this.event(s, 'idle_closed');
       this.stop(s.id);
       this.notice(s, t('notice.closedIdle', { min: IDLE_CLOSE_MIN }), 'info');
@@ -1750,15 +1763,19 @@ export class SessionManager extends EventEmitter {
    * seeded with the note. False while it writes the note. `idleMin`: it falls asleep for lack of work.
    */
   private sleep(s: Session, idleMin?: number): boolean {
-    if (s.query && !s.handoffDone && needsFreshStart(s.metrics)) {
-      s.owesReport = false;
-      s.closeWhenDone = true;
-      this.pushUser(s, { text: handoffRequest(), images: [], from: 'hub', handoff: true });
-      return false;
-    }
+    if (this.askHandoff(s)) return false;
     this.event(s, 'idle_closed');
     this.stop(s.id);
     this.notice(s, idleMin ? t('notice.asleepIdle', { min: idleMin }) : t('notice.asleep'), 'info');
+    return true;
+  }
+
+  /** A worker closing with a well-filled context first writes its handoff note, then closes. True while it writes it. */
+  private askHandoff(s: Session): boolean {
+    if (!s.query || s.handoffDone || !needsFreshStart(s.metrics)) return false;
+    s.owesReport = false;
+    s.closeWhenDone = true;
+    this.pushUser(s, { text: handoffRequest(), images: [], from: 'hub', handoff: true });
     return true;
   }
 
@@ -2670,6 +2687,11 @@ export class SessionManager extends EventEmitter {
     }));
   }
 
+  /** Effort of a worker nobody fixed one for (master, post or user), within the highest one allowed. */
+  private workerEffort(): Effort {
+    return capEffort(WORKER_EFFORT, this.opts.cfg.workerMaxEffort);
+  }
+
   /**
    * The CLI does not report an effort it took from settings (system/init leaves it empty), so resolve it with the
    * CLI's own settings cascade: per-model `modelSettings` first, then the global `effortLevel`.
@@ -2677,6 +2699,10 @@ export class SessionManager extends EventEmitter {
   private async inheritEffort(s: Session, modelId: string): Promise<void> {
     if (s.fixedEffort || s.effortResolved || !modelId) return;
     s.effortResolved = true;
+    if (s.role === 'worker') {
+      s.effort = this.workerEffort();
+      return;
+    }
     try {
       const { effective } = await resolveSettings({ cwd: s.cwd });
       if (s.fixedEffort) return; // Chosen in the composer meanwhile.
