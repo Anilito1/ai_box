@@ -650,6 +650,8 @@ export class ChatView {
     const unfolded = new Set<string>();
     // The effort picked on a provider's tab the session is not on yet: it goes with the model picked next.
     let nextEffort: Effort | null = null;
+    // The effort just picked for the session itself: the menu stays open, the button shows it before the session reports back.
+    let applied: Effort | null = null;
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
         menu.replaceChildren();
@@ -711,7 +713,7 @@ export class ChatView {
         if (efforts.length > 0 && !(fresh && models.length === 0)) {
           root.append(h('div', 'menu-sep'), h('div', 'menu-label', t('chat.effort')));
           const seg = h('div', 'segmented efforts');
-          const active = fresh ? nextEffort : s.effort;
+          const active = fresh ? nextEffort : (applied ?? s.effort);
           for (const effort of efforts) {
             const b = h('button', effort === active ? 'seg active' : 'seg', effortLabel(effort));
             b.addEventListener('click', () => {
@@ -720,7 +722,8 @@ export class ChatView {
                 return draw();
               }
               this.hub.setEffort(s.id, effort);
-              close();
+              applied = effort;
+              draw();
             });
             seg.append(b);
           }
