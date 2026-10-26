@@ -7,6 +7,24 @@ Ce qui est **vérifié** (commande lancée, sonde exécutée, code lu) est sépa
 
 ---
 
+## 0. Vision produit et règles de conformité
+
+**Le hub est un framework distribuable, pas un outil personnel.** Chaque utilisateur l'installe sur sa machine et y branche ses propres comptes. Conséquences, qui s'appliquent à toutes les phases :
+
+- **Rien de propre à un utilisateur en dur** : ni chemins, ni noms, ni dossiers de travail. Tout passe par la configuration.
+- **Tout est local** : aucun serveur central, aucun identifiant ne quitte la machine (les clés API restent dans `safeStorage`, les connexions dans les CLI officiels).
+- **Onboarding** : détecter les CLI installés (`claude`, `codex`), leur version et leur état de connexion ; guider l'installation et la connexion s'ils manquent (bouton qui ouvre un terminal, jamais de formulaire de login).
+- **Deux modes par fournisseur** : connexion par abonnement via le CLI officiel, **ou clé API** (Anthropic, OpenAI, DeepSeek…). La clé API est l'option **recommandée dans l'interface pour un usage automatisé intensif** (c'est aussi ce que recommandent les CGU).
+- **Registre de fournisseurs extensible** : en plus des adaptateurs dédiés (Claude Code, Codex), deux types génériques, « compatible Anthropic » et « compatible OpenAI » (URL + clé + correspondance de modèles), ajoutent Mistral, OpenRouter, Groq, DeepSeek… **par configuration, sans code**. Des préréglages (données, pas du code) pré-remplissent l'URL et les modèles.
+
+**Règles de conformité (CGU vérifiées par ailleurs) :**
+
+1. Le hub lance toujours les binaires officiels `claude` et `codex`, non modifiés, avec le login de l'utilisateur. Il ne lit, ne copie, n'extrait ni ne stocke jamais de jeton OAuth, de `auth.json` ni d'identifiants Claude. Aucune fonction d'export ou de partage de compte. (Une clé API saisie par l'utilisateur est stockée chiffrée ; ce n'est pas un jeton d'abonnement.)
+2. Codex sur abonnement ChatGPT : limites courtes (fenêtre de 5 h + hebdomadaire). Le repli et le cooldown de la phase 4 les gèrent comme des limites à fenêtres, avec `resetsAt`.
+3. DeepSeek par l'endpoint Anthropic : les noms de modèle envoyés doivent commencer par `claude` (`claude-opus*` → `deepseek-v4-pro`, `claude-sonnet*`/`claude-haiku*` → modèle flash) ; les fonctions `mcp_servers`, `document` et exécution de code **côté API** sont ignorées. Les outils MCP locaux de Claude Code (dont le serveur `hub`) ne passent pas par ces champs : ils restent des outils ordinaires. Vérifié en phase 3.
+
+---
+
 ## 1. État des lieux
 
 ### 1.1 Ce que contient déjà `feature/multi-comptes`
