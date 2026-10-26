@@ -1,3 +1,4 @@
+import { splitRecent } from '../shared/models';
 import { providerOfAccount } from '../shared/providers';
 import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
 import { DEFAULT_ACCOUNT } from '../shared/accounts';
@@ -130,6 +131,8 @@ export class SetupView {
   private draftError: { field: string; text: string } | null = null;
   /** "Allow everything" picked for the post being edited, waiting for its confirmation. */
   private confirmPostBypass = false;
+  /** The post editor also lists the older models of each provider (behind "See more"). */
+  private olderModels = false;
   /** Post whose deletion waits for the confirmation shown in its row. */
   private confirmDelete = '';
   /** Subagent files offered for import: null = list closed, [] = loading or none. */
@@ -1560,6 +1563,7 @@ export class SetupView {
     const effective = d.account || s.workerAccount;
     const wanted = d.account ? `${d.account}|${d.model}` : d.model ? `${s.workerAccount}|${d.model}` : '';
     const offered = new Set<string>();
+    let hidden = 0;
     for (const p of this.providerList()) {
       if (!p.connected && p.accountId !== effective) continue;
       const group = h('optgroup');
@@ -1567,7 +1571,11 @@ export class SetupView {
       const account = p.accountId || effective;
       const own = p.id === 'anthropic' ? [...new Set([...p.models.map((m) => m.value).filter((m) => m !== 'default'), ...MODEL_ALIASES])] : p.models.map((m) => m.value);
       const label = (value: string) => p.models.find((m) => m.value === value)?.label ?? value;
-      const rows: [string, string][] = [[`${account}|`, t('team.autoModelOf', { provider: p.label })], ...own.map((m): [string, string] => [`${account}|${m}`, label(m)])];
+      // The newest models of each family; the post's own stays, whatever its age.
+      const { recent, older } = splitRecent(own.map((value) => ({ value, label: label(value) })), `${account}|${d.model}` === wanted ? d.model : '');
+      hidden += this.olderModels ? 0 : older.length;
+      const shown = this.olderModels ? [...recent, ...older] : recent;
+      const rows: [string, string][] = [[`${account}|`, t('team.autoModelOf', { provider: p.label })], ...shown.map((m): [string, string] => [`${account}|${m.value}`, m.label])];
       for (const [value, text] of rows) {
         group.append(new Option(text, value));
         offered.add(value);
@@ -1596,6 +1604,13 @@ export class SetupView {
     runField.append(runRow);
     mark('model', runField, model);
     mark('account', runField, model);
+    if (hidden || this.olderModels) {
+      const toggle = this.button(this.olderModels ? t('chat.modelsLess') : t('chat.modelsMore', { n: hidden }), 'btn ghost small', () => {
+        this.olderModels = !this.olderModels;
+        this.render();
+      });
+      runField.append(toggle);
+    }
     grid.append(runField);
     if (this.providerList().some((p) => !p.connected)) runField.append(h('div', 'setup-hint', t('team.account.none')), this.button(t('setup.accounts.addLink'), 'btn ghost small', () => this.go('accounts')));
 
