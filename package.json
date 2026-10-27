@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Anilito1/claude-hub.git"
+    "url": "https://github.com/Anilito1/ai_box.git"
   },
   "main": "dist/main.mjs",
   "engines": {

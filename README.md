@@ -48,8 +48,8 @@ More time. Everything in parallel. Peace of mind.
 You need [Node.js](https://nodejs.org) 22.12+ and [git](https://git-scm.com).
 
 ```sh
-git clone https://github.com/Anilito1/claude-hub.git
-cd claude-hub
+git clone https://github.com/Anilito1/ai_box.git
+cd ai_box
 npm install
 npm start
 ```

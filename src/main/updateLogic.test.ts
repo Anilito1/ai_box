@@ -25,7 +25,7 @@ import {
   type Moment,
 } from './updateLogic';
 
-const OFFICIAL = 'github.com/anilito1/claude-hub';
+const OFFICIAL = 'github.com/anilito1/ai_box';
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 
@@ -41,6 +41,8 @@ test('normalizeRemote: one repository however it is written', () => {
     'git+https://github.com/Anilito1/claude-hub.git',
     'github:Anilito1/claude-hub',
     'Anilito1/claude-hub',
+    'https://github.com/Anilito1/ai_box.git',
+    'git@github.com:Anilito1/ai_box.git',
     '  https://GITHUB.com/anilito1/CLAUDE-hub.git  ',
   ]) {
     assert.equal(normalizeRemote(url), OFFICIAL, url);

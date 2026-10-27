@@ -9,6 +9,8 @@ export const SHA = /^[0-9a-f]{40,64}$/;
 /** The branch the official version lives on. */
 export const MAIN = 'main';
 export const TARGET_REF = 'refs/remotes/origin/main';
+/** The official repository was renamed: checkouts whose origin still has the old name stay official. */
+const RENAMED: Record<string, string> = { 'github.com/anilito1/claude-hub': 'github.com/anilito1/ai_box' };
 
 /**
  * A repository URL as `host/owner/name` (or `file:<path>` for a local one), lower case, without credentials, port
@@ -18,7 +20,10 @@ export const TARGET_REF = 'refs/remotes/origin/main';
 export function normalizeRemote(raw: string): string {
   const url = raw.trim().replace(/^git\+/, '');
   if (!url || /\s/.test(url)) return '';
-  const tidy = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  const tidy = (s: string) => {
+    const clean = s.replace(/\\/g, '/').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+    return RENAMED[clean] ?? clean;
+  };
   if (/^github:[\w.-]+\/[\w.-]+$/i.test(url)) return tidy(`github.com/${url.slice('github:'.length)}`);
   if (/^[\w.-]+\/[\w.-]+$/.test(url)) return tidy(`github.com/${url}`);
   if (/^file:\/\//i.test(url)) {

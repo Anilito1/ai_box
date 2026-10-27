@@ -344,7 +344,7 @@ function fill(el: HTMLElement): void {
   actionsRow.append(...actions(s, 'btn primary small', 'btn small'));
   if (actionsRow.childElementCount > 0) el.append(actionsRow);
   if (s.kind === 'off' || s.kind === 'unofficial') {
-    el.append(button(t('update.readme'), 'setup-link', () => hub.openExternal('https://github.com/Anilito1/claude-hub#updating')));
+    el.append(button(t('update.readme'), 'setup-link', () => hub.openExternal('https://github.com/Anilito1/ai_box#updating')));
     return;
   }
   const choices = h('div', 'setup-choices update-modes');
