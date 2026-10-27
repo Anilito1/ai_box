@@ -1,6 +1,44 @@
 /** Commands the hub runs itself, in every session (master, worker or post), in the order the menu lists them. */
-export const HUB_COMMANDS = ['compact', 'clear', 'model', 'effort', 'mode', 'cost', 'help'] as const;
+export const HUB_COMMANDS = ['compact', 'clear', 'model', 'effort', 'mode', 'cost', 'mcp', 'skills', 'config', 'login', 'help'] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
+
+/** Claude Code's names for what the hub shows in its own panels: they open the panel rather than a terminal menu. */
+const HUB_ALIASES: Record<string, HubCommand> = { settings: 'config', plugin: 'skills', plugins: 'skills', logout: 'login', status: 'login' };
+
+/**
+ * Claude Code commands that only a terminal runs, or that the hub does itself: refused with a line on where to do it
+ * instead, rather than sent for nothing. The value names that line.
+ */
+const ELSEWHERE: Record<string, Elsewhere> = {
+  resume: 'resume',
+  continue: 'resume',
+  memory: 'memory',
+  permissions: 'permissions',
+  'allowed-tools': 'permissions',
+  rename: 'managed',
+  color: 'managed',
+  exit: 'managed',
+  quit: 'managed',
+  fast: 'terminal',
+  focus: 'terminal',
+  heapdump: 'terminal',
+  hooks: 'terminal',
+  ide: 'terminal',
+  vim: 'terminal',
+  theme: 'terminal',
+  'terminal-setup': 'terminal',
+  statusline: 'terminal',
+  keybindings: 'terminal',
+  'add-dir': 'terminal',
+  export: 'terminal',
+  bug: 'terminal',
+  feedback: 'terminal',
+  'release-notes': 'terminal',
+  upgrade: 'terminal',
+  'privacy-settings': 'terminal',
+  'install-github-app': 'terminal',
+};
+export type Elsewhere = 'terminal' | 'managed' | 'resume' | 'memory' | 'permissions';
 
 /** A command or skill of Claude Code, as the session lists it. */
 export interface CliCommand {
@@ -11,10 +49,11 @@ export interface CliCommand {
 }
 
 /**
- * Claude Code commands the menu never offers: the hub has its own version (clear, compact, model, effort, cost), or
- * they would break the hub's session (its name is how the sessions reach each other) or only make sense in a terminal.
+ * Claude Code commands the menu never offers: the hub has its own version (clear, compact, model, effort, cost, mcp,
+ * config...), or they would break the hub's session (its name is how the sessions reach each other) or only make
+ * sense in a terminal.
  */
-const HIDDEN = new Set(['clear', 'compact', 'model', 'effort', 'cost', 'rename', 'color', 'focus', 'heapdump', 'exit', 'quit', 'resume', 'login', 'logout', 'config']);
+const HIDDEN = new Set<string>([...HUB_COMMANDS, ...Object.keys(HUB_ALIASES), ...Object.keys(ELSEWHERE)]);
 
 export const visibleCli = (c: CliCommand) => !HIDDEN.has(c.name.toLowerCase()) && !c.name.startsWith('_');
 
@@ -29,15 +68,20 @@ export function parseSlash(text: string): SlashInput | null {
   return m ? { name: m[1], arg: (m[2] ?? '').trim() } : null;
 }
 
-export type SlashTarget = { kind: 'hub'; command: HubCommand; arg: string } | { kind: 'cli'; command: CliCommand; arg: string } | { kind: 'unknown'; name: string };
+export type SlashTarget =
+  | { kind: 'hub'; command: HubCommand; arg: string }
+  | { kind: 'cli'; command: CliCommand; arg: string }
+  | { kind: 'elsewhere'; name: string; where: Elsewhere }
+  | { kind: 'unknown'; name: string };
 
-/** The hub's own commands first, then Claude Code's by name or alias; case does not matter. */
+/** The hub's own commands first, then Claude Code's by name or alias, then those a terminal runs; case does not matter. */
 export function resolveSlash(input: SlashInput, cli: CliCommand[]): SlashTarget {
   const name = input.name.toLowerCase();
-  const hub = HUB_COMMANDS.find((c) => c === name);
+  const hub = HUB_COMMANDS.find((c) => c === name) ?? (Object.hasOwn(HUB_ALIASES, name) ? HUB_ALIASES[name] : undefined);
   if (hub) return { kind: 'hub', command: hub, arg: input.arg };
   const command = cli.filter(visibleCli).find((c) => c.name.toLowerCase() === name || c.aliases.some((a) => a.toLowerCase() === name));
-  return command ? { kind: 'cli', command, arg: input.arg } : { kind: 'unknown', name: input.name };
+  if (command) return { kind: 'cli', command, arg: input.arg };
+  return Object.hasOwn(ELSEWHERE, name) ? { kind: 'elsewhere', name, where: ELSEWHERE[name] } : { kind: 'unknown', name: input.name };
 }
 
 /**

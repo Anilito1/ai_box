@@ -196,7 +196,8 @@ export class ChatView {
       models: () => (this.session ? this.modelsFor(this.session) : this.models),
       openModelMenu: () => this.openModelMenu(),
       openModeMenu: (bypass) => this.openModeMenu(bypass),
-      note: (text) => this.attachError(text),
+      // A sentence on where to do it instead: longer to read than an attachment's error.
+      note: (text) => this.attachError(text, 8000),
       clearText: () => {
         this.input.value = '';
         this.syncSend();
@@ -578,11 +579,11 @@ export class ChatView {
     );
   }
 
-  private attachError(text: string): void {
+  private attachError(text: string, ms = 4000): void {
     this.attachNote.textContent = text;
     this.attachNote.hidden = false;
     window.clearTimeout(this.noteTimer);
-    this.noteTimer = window.setTimeout(() => (this.attachNote.hidden = true), 4000);
+    this.noteTimer = window.setTimeout(() => (this.attachNote.hidden = true), ms);
   }
 
   private interrupt(): void {

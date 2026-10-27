@@ -469,6 +469,8 @@ window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;
   void setup.open('settings', section === 'accounts' ? 'accounts' : 'general');
 });
+// The composer's /mcp and /skills.
+window.addEventListener('hub:open-caps', (e) => void capsView.open((e as CustomEvent<unknown>).detail === 'skills' ? 'skills' : 'mcp'));
 // The git panel's own buttons to follow another repo or stop following one.
 window.addEventListener('hub:add-repo', () => void setup.open('settings', 'repos'));
 window.addEventListener('hub:remove-repo', (e) => {

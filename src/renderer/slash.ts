@@ -162,6 +162,8 @@ export class SlashMenu {
     if (!HUB_COMMANDS.includes(input.name.toLowerCase() as HubCommand)) await this.load();
     const target = resolveSlash(input, this.cli);
     if (target.kind === 'cli') return { handled: false, text: `/${target.command.name}${target.arg ? ` ${target.arg}` : ''}` };
+    // "/config key=value" is Claude Code's, which sets it; bare, it opens the settings.
+    if (target.kind === 'hub' && target.command === 'config' && target.arg) return { handled: false, text: `/config ${target.arg}` };
     await this.run(input);
     return { handled: true };
   }
@@ -176,6 +178,7 @@ export class SlashMenu {
       this.host.note(this.cli.length > 0 ? t('slash.unknown', { name: target.name }) : t('slash.unknownNoList', { name: target.name }));
       return;
     }
+    if (target.kind === 'elsewhere') return this.host.note(t(`slash.elsewhere.${target.where}`, { name: target.name }));
     if (target.kind === 'cli') {
       // Picked from the menu without an argument: sent as it is.
       this.host.clearText();
@@ -235,6 +238,16 @@ export class SlashMenu {
       }
       case 'cost':
         this.hub.showCost(s.id);
+        break;
+      case 'mcp':
+      case 'skills':
+        window.dispatchEvent(new CustomEvent('hub:open-caps', { detail: target.command }));
+        break;
+      case 'config':
+        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'general' }));
+        break;
+      case 'login':
+        window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
         break;
       case 'help':
         // The list is the help: the menu opens with every command.
@@ -313,6 +326,10 @@ export class SlashMenu {
       effort: `[${(s ? this.efforts(s) : EFFORTS).join(' | ')}]`,
       mode: `[${MENU_MODES.map((m) => MODE_ALIASES[m] ?? m).join(' | ')}]`,
       cost: '',
+      mcp: '',
+      skills: '',
+      config: t('slash.arg.config'),
+      login: '',
       help: '',
     };
     return HUB_COMMANDS.map((c) => ({ name: c, args: args[c], description: t(`slash.${c}`), hub: c, cli: null }));

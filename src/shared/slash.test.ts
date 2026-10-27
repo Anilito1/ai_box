@@ -30,9 +30,22 @@ test('resolveSlash prefers the hub, then Claude Code by name or alias', () => {
 });
 
 test('resolveSlash never passes hidden or unknown commands through', () => {
-  assert.deepEqual(resolveSlash({ name: 'rename', arg: 'x' }, CLI), { kind: 'unknown', name: 'rename' });
+  assert.deepEqual(resolveSlash({ name: 'rename', arg: 'x' }, CLI), { kind: 'elsewhere', name: 'rename', where: 'managed' });
   assert.deepEqual(resolveSlash({ name: '__remote-workflow', arg: '' }, CLI), { kind: 'unknown', name: '__remote-workflow' });
   assert.deepEqual(resolveSlash({ name: 'nope', arg: '' }, []), { kind: 'unknown', name: 'nope' });
+});
+
+test('resolveSlash opens the hub panels for the terminal menus', () => {
+  assert.deepEqual(resolveSlash({ name: 'mcp', arg: '' }, [cli('mcp')]), { kind: 'hub', command: 'mcp', arg: '' });
+  assert.deepEqual(resolveSlash({ name: 'settings', arg: 'a=b' }, CLI), { kind: 'hub', command: 'config', arg: 'a=b' });
+  assert.deepEqual(resolveSlash({ name: 'Logout', arg: '' }, CLI), { kind: 'hub', command: 'login', arg: '' });
+  assert.deepEqual(resolveSlash({ name: 'plugin', arg: '' }, CLI), { kind: 'hub', command: 'skills', arg: '' });
+});
+
+test('resolveSlash says where a terminal-only command is done', () => {
+  assert.deepEqual(resolveSlash({ name: 'resume', arg: '' }, CLI), { kind: 'elsewhere', name: 'resume', where: 'resume' });
+  assert.deepEqual(resolveSlash({ name: 'fast', arg: '' }, [cli('fast')]), { kind: 'elsewhere', name: 'fast', where: 'terminal' });
+  assert.deepEqual(resolveSlash({ name: 'constructor', arg: '' }, []), { kind: 'unknown', name: 'constructor' });
 });
 
 test('filterCommands ranks prefix, then substring, then description', () => {
