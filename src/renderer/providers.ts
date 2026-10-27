@@ -616,25 +616,24 @@ export class ProvidersPanel {
       el.append(h('span', 'setup-label', label), ...content);
       return el;
     };
-    const input = (value: string, placeholder: string, set: (v: string) => void, type = 'text') => {
+    const input = (value: string, set: (v: string) => void, type = 'text') => {
       const i = h('input', 'setup-input');
       i.type = type;
       i.value = value;
-      i.placeholder = placeholder;
       i.spellcheck = false;
       i.autocomplete = 'off';
       i.addEventListener('input', () => set(i.value));
       return i;
     };
-    const name = input(f.name, 'Venice', (v) => (f.name = v));
+    const name = input(f.name, (v) => (f.name = v));
     name.maxLength = 40;
-    const url = input(f.baseUrl, 'https://api.venice.ai/api/v1', (v) => (f.baseUrl = v));
+    const url = input(f.baseUrl, (v) => (f.baseUrl = v));
     // The stored key never comes back: an empty field keeps it.
-    const key = input(f.key, f.id ? t('provider.custom.keyKept') : 'sk-…', (v) => (f.key = v), 'password');
+    const key = input(f.key, (v) => (f.key = v), 'password');
+    if (f.id) key.placeholder = t('provider.custom.keyKept');
     const models = h('textarea', 'setup-textarea');
     models.rows = 3;
     models.value = f.models;
-    models.placeholder = 'venice-uncensored';
     models.spellcheck = false;
     models.addEventListener('input', () => (f.models = models.value));
     const modelsRow = h('div', 'acct-keyrow');
