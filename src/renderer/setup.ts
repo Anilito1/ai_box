@@ -994,7 +994,7 @@ export class SetupView {
       for (const a of legacy) list.append(this.legacyRow(a));
       el.append(this.field(t('setup.accounts.legacy'), t('setup.accounts.legacy.hint')), list);
     }
-    el.append(this.fallbackField(s), h('p', 'setup-fine', t('setup.accounts.fine')));
+    el.append(this.fallbackField(s));
   }
 
   /** The chain of accounts a session goes on with when its own reaches a limit. */
