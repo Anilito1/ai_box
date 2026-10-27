@@ -58,6 +58,10 @@ A short setup asks for your language, your providers and the folders that hold y
 
 To build an installer: `npm run dist`. Before a merge: `npm run typecheck`, `npm test` and `npm run build` must be green.
 
+## Updating
+
+AI Box checks `Anilito1/ai_box` at start and every few hours. When `main` has something new, an **Update** button appears: one click fast-forwards your checkout, installs new dependencies, rebuilds and restarts the app, and puts the previous version back if anything fails. Nothing is touched if the checkout has local changes or is not the official repository.
+
 > [!WARNING]
 > Agents act as you: they read and change files and run commands, within the permission mode you choose. Only send them into repos you trust. AI Box has no telemetry, never sees your passwords (accounts sign in through each provider's own CLI) and stores API keys encrypted by your OS.
 
