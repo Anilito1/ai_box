@@ -108,9 +108,9 @@ const en = {
   'tool.close.force': 'true = cuts it right away, even in the middle of its work',
   'tool.listRoles': 'The posts of the team (permanent workers) with every field: name, state, description, folders, model, effort, permission mode, standing instructions in full.',
   'tool.createRole':
-    'Creates a post (a permanent worker), only when the user asks. Refused if the name is taken: change an existing post with update_role. Its permission mode is the one of the other sessions; only the user changes it, in the settings.',
+    'Creates a post (a permanent worker), only when the user asks. Refused if the name is taken: change an existing post with update_role. It may run on any connected provider: provider + a model of it. Its permission mode is the one of the other sessions; only the user changes it, in the settings.',
   'tool.updateRole':
-    'Changes the fields given of a post, only when the user asks; the others stay. Returns each change with its former value (the former instructions in full). Its name and folders change while its worker sleeps; the folders of a post with a permission mode of its own are the user’s to change.',
+    'Changes the fields given of a post, only when the user asks; the others stay. provider + model move it to another connected provider. Returns each change with its former value (the former instructions in full). Its name and folders change while its worker sleeps; the folders of a post with a permission mode of its own are the user’s to change.',
   'tool.deleteRole':
     'Deletes a post, only when the user asks. The user confirms it in the hub before anything happens. Its conversation stays on disk but the post and its handoff note are gone.',
   'tool.role.byName': 'Name of the post (e.g. "backend")',
@@ -120,7 +120,10 @@ const en = {
   'tool.role.instructions': 'Standing instructions added to its prompt (replaces all of them; 8000 characters max)',
   'tool.role.append': 'Line(s) added at the end of its standing instructions, the rest kept',
   'tool.role.folders': 'Absolute folders (see list_repos): the first is its cwd, the others are added directories (5 max)',
-  'tool.role.model': '"auto" = you pick it for each mission; else one of the allowed models, fixed',
+  'tool.role.model': '"auto" = you pick it for each mission; else a model of the post’s provider, fixed (without provider: one of the allowed models)',
+  'tool.role.provider':
+    'Provider the post runs on: one of {list}. Name only the provider ("openai", "deepseek"): the hub finds its connected account, and refuses one that is not connected (the user connects it in Settings › Accounts). Left out: unchanged (a new post: the workers’ provider). Pair it with model, a model of that provider; a provider whose models take no effort ignores it.',
+  'tool.role.account': 'Account the post runs on, by its name: one of {list}. Only when the user names an account; otherwise use provider.',
   'tool.role.effort': '"auto" = you pick it for each mission; else a fixed level',
   'tool.role.enabled': 'false = the post is kept but off: its worker is hidden and cannot be reached',
   'tool.role.newName': 'New name of the post (its worker must be asleep)',
@@ -211,7 +214,8 @@ const en = {
   'role.hubMode': 'same as the other sessions',
   'role.line.description': '  description: {text}',
   'role.line.folders': '  folders: {list}',
-  'role.line.run': '  model {model} · effort {effort} · mode: {mode}',
+  'role.line.run': '  provider {provider} · model {model} · effort {effort} · mode: {mode}',
+  'role.modelOf': 'It is a model of {provider}: pass provider: "{provider}" with it.',
   'role.line.instructions': '  standing instructions:\n<post-instructions>\n{text}\n</post-instructions>',
   'role.created': 'Post created: {name} (worker "{session}"), asleep until its first mission.',
   'role.updated': 'Post {name} changed:',
@@ -524,9 +528,9 @@ const fr: Record<Key, string> = {
   'tool.listRoles':
     "Les postes de l'équipe (workers permanents) avec tous leurs champs : nom, état, description, dossiers, modèle, effort, mode de permission, consignes permanentes en entier.",
   'tool.createRole':
-    "Crée un poste (un worker permanent), seulement à la demande de l'utilisateur. Refusé si le nom est pris : modifie un poste existant avec update_role. Son mode de permission est celui des autres sessions ; seul l'utilisateur le change, dans les Réglages.",
+    "Crée un poste (un worker permanent), seulement à la demande de l'utilisateur. Refusé si le nom est pris : modifie un poste existant avec update_role. Il peut tourner chez n'importe quel fournisseur connecté : provider + un modèle de celui-ci. Son mode de permission est celui des autres sessions ; seul l'utilisateur le change, dans les Réglages.",
   'tool.updateRole':
-    "Change les champs donnés d'un poste, seulement à la demande de l'utilisateur ; les autres restent. Renvoie chaque changement avec l'ancienne valeur (les anciennes consignes en entier). Son nom et ses dossiers changent pendant que son worker dort ; les dossiers d’un poste qui a son propre mode de permission reviennent à l’utilisateur.",
+    "Change les champs donnés d'un poste, seulement à la demande de l'utilisateur ; les autres restent. provider + model le passent chez un autre fournisseur connecté. Renvoie chaque changement avec l'ancienne valeur (les anciennes consignes en entier). Son nom et ses dossiers changent pendant que son worker dort ; les dossiers d’un poste qui a son propre mode de permission reviennent à l’utilisateur.",
   'tool.deleteRole':
     "Supprime un poste, seulement à la demande de l'utilisateur. L'utilisateur le confirme dans le hub avant que rien ne se passe. Sa conversation reste sur le disque mais le poste et sa note de passation disparaissent.",
   'tool.role.byName': 'Nom du poste (ex. "backend")',
@@ -536,7 +540,10 @@ const fr: Record<Key, string> = {
   'tool.role.instructions': 'Consignes permanentes ajoutées à son prompt (les remplace toutes ; 8000 caractères max)',
   'tool.role.append': 'Ligne(s) ajoutée(s) à la fin de ses consignes permanentes, le reste gardé',
   'tool.role.folders': 'Dossiers absolus (voir list_repos) : le premier est son cwd, les autres des dossiers ajoutés (5 max)',
-  'tool.role.model': '"auto" = tu le choisis à chaque mission ; sinon un des modèles autorisés, fixé',
+  'tool.role.model': '"auto" = tu le choisis à chaque mission ; sinon un modèle du fournisseur du poste, fixé (sans provider : un des modèles autorisés)',
+  'tool.role.provider':
+    'Fournisseur sur lequel le poste tourne : parmi {list}. Donne seulement le fournisseur ("openai", "deepseek") : le hub trouve son compte connecté, et refuse un fournisseur non connecté (l’utilisateur le connecte dans Réglages › Comptes). Omis : inchangé (nouveau poste : le fournisseur des workers). À associer à model, un modèle de ce fournisseur ; un fournisseur dont les modèles n’ont pas d’effort l’ignore.',
+  'tool.role.account': 'Compte sur lequel le poste tourne, par son nom : parmi {list}. Seulement si l’utilisateur nomme un compte ; sinon utilise provider.',
   'tool.role.effort': '"auto" = tu le choisis à chaque mission ; sinon un niveau fixé',
   'tool.role.enabled': 'false = le poste est gardé mais désactivé : son worker est masqué et injoignable',
   'tool.role.newName': 'Nouveau nom du poste (son worker doit dormir)',
@@ -628,7 +635,8 @@ const fr: Record<Key, string> = {
   'role.hubMode': 'comme les autres sessions',
   'role.line.description': '  description : {text}',
   'role.line.folders': '  dossiers : {list}',
-  'role.line.run': '  modèle {model} · effort {effort} · mode : {mode}',
+  'role.line.run': '  fournisseur {provider} · modèle {model} · effort {effort} · mode : {mode}',
+  'role.modelOf': 'C’est un modèle de {provider} : passe provider: "{provider}" avec.',
   'role.line.instructions': '  consignes permanentes :\n<post-instructions>\n{text}\n</post-instructions>',
   'role.created': 'Poste créé : {name} (worker "{session}"), endormi jusqu’à sa première mission.',
   'role.updated': 'Poste {name} modifié :',

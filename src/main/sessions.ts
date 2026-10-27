@@ -10,6 +10,7 @@ import { resolveTopicRepo } from '../shared/topicGroups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
+import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
@@ -61,6 +62,7 @@ import {
   masterPrompt,
   missionNote,
   PERMANENT_SLEEP_MIN,
+  postProvider,
   postUpdate,
   rosterBlock,
   rosterKey,
@@ -2330,6 +2332,8 @@ export class SessionManager extends EventEmitter {
       description: z.string().nullish().describe(t('tool.role.description')),
       instructions: z.string().nullish().describe(t('tool.role.instructions')),
       folders: z.array(z.string()).nullish().describe(t('tool.role.folders')),
+      provider: z.string().nullish().describe(t('tool.role.provider', { list: this.providerBadges().map((p) => `${p.id}${p.connected ? '' : ` (${t('provider.off')})`}`).join(', ') })),
+      account: z.string().nullish().describe(t('tool.role.account', { list: this.accountBadges().map((a) => a.name).join(', ') })),
       model: z.string().nullish().describe(t('tool.role.model')),
       effort: z
         .enum(['auto', ...EFFORTS] as [string, ...string[]])
@@ -2652,16 +2656,8 @@ export class SessionManager extends EventEmitter {
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
   private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
     const { cfg } = this.opts;
-    // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
-    const own = this.ownCatalog(account);
-    const listed = this.catalogOf(account).map((m) => m.value);
-    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && requested.model ? [requested.model.trim()] : []) : cfg.workerModels;
-    // The master may say "pro" or "flash" for DeepSeek's models.
-    if (own && requested.model && !allowed.some((m) => m.toLowerCase() === requested.model?.trim().toLowerCase())) {
-      const short = requested.model.trim().toLowerCase();
-      const hit = allowed.find((m) => m.toLowerCase().endsWith(`-${short}`));
-      if (hit) requested = { ...requested, model: hit };
-    }
+    const { allowed, model } = this.modelsFor(account, requested.model ?? '');
+    if (requested.model) requested = { ...requested, model };
     const choice = resolveChoice({
       requested,
       post: post ? { model: post.model, effort: post.effort } : null,
@@ -2671,6 +2667,19 @@ export class SessionManager extends EventEmitter {
     });
     if ('error' in choice) throw new Error(t('choice.badModel', { model: requested.model ?? '', allowed: allowed.join(', ') }));
     return choice;
+  }
+
+  /** The models a worker on this account may run, and the one asked as that list spells it (if it has it). */
+  private modelsFor(account: string, asked: string): { allowed: string[]; model: string; listed: boolean } {
+    // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
+    const own = this.ownCatalog(account);
+    const listed = this.catalogOf(account).map((m) => m.value);
+    const wanted = asked.trim();
+    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && wanted ? [wanted] : []) : this.opts.cfg.workerModels;
+    const lower = wanted.toLowerCase();
+    // The master may say "pro" or "flash" for DeepSeek's models.
+    const hit = allowed.find((m) => m.toLowerCase() === lower) ?? (own && lower ? allowed.find((m) => m.toLowerCase().endsWith(`-${lower}`)) : undefined);
+    return { allowed, model: hit ?? wanted, listed: !!hit };
   }
 
   private choiceNotes(notes: ChoiceNote[]): string[] {
@@ -2733,8 +2742,8 @@ export class SessionManager extends EventEmitter {
     cfg.team = before ? cfg.team.map((r) => (r.id === role.id ? role : r)) : [...cfg.team, role];
     const notes = s && before ? this.applyRun(s, before, role, by) : [];
     if (before && before.account !== role.account) {
-      // Changed by the user, the post's account replaces one picked by hand on its workers.
-      if (by === 'user') for (const w of [s, ...this.instances(role.id)]) if (w) Object.assign(w, { accountId: '', userAccount: false });
+      // Changed by the user, the post's account replaces one picked by hand on its workers; by the master, all but those.
+      for (const w of [s, ...this.instances(role.id)]) if (w && (by === 'user' || !w.userAccount)) Object.assign(w, { accountId: '', userAccount: false });
       this.accountsChanged();
     }
     this.teamChanged();
@@ -2849,7 +2858,7 @@ export class SessionManager extends EventEmitter {
       `- ${r.name} (${sessionNameOf(r)}) · ${state}`,
       t('role.line.description', { text: r.description }),
       t('role.line.folders', { list: r.folders.join(', ') }),
-      t('role.line.run', { model: r.model || 'auto', effort: r.effort || 'auto', mode: (r.mode || t('role.hubMode')) + (r.ultracode ? ' · ultracode' : '') }),
+      t('role.line.run', { provider: postProvider(this.opts.cfg, r), model: r.model || 'auto', effort: r.effort || 'auto', mode: (r.mode || t('role.hubMode')) + (r.ultracode ? ' · ultracode' : '') }),
       t('role.line.instructions', { text: inside(r.instructions) || t('report.none') }),
     ].join('\n');
   }
@@ -2859,17 +2868,36 @@ export class SessionManager extends EventEmitter {
     return team.length === 0 ? t('role.none') : team.map((r) => this.roleText(r)).join('\n\n');
   }
 
-  /** The master's fields for a post: "auto" (or empty) leaves the choice to it, a model must be an allowed one. */
-  private postValues(args: { model?: string | null; effort?: string | null; ultracode?: boolean | null }): Partial<TeamRole> {
+  /**
+   * The master's fields for a post: "auto" (or empty) leaves the choice to it. A provider (or an account) puts the post
+   * on it; a model must be one of the provider the post runs on (the allowed models for Anthropic). A post moved to a
+   * provider without the model it had goes back to auto; an effort its model does not take is left out.
+   */
+  private postValues(
+    args: { provider?: string | null; account?: string | null; model?: string | null; effort?: string | null; ultracode?: boolean | null },
+    before: Pick<TeamRole, 'account' | 'model'> | null,
+  ): Partial<TeamRole> {
     const { cfg } = this.opts;
     const out: Partial<TeamRole> = {};
-    if (args.model != null) {
-      const model = args.model.trim().toLowerCase();
-      const allowed = cfg.workerModels.find((a) => a.toLowerCase() === model);
-      if (model && model !== 'auto' && !allowed) throw new Error(t('choice.badModel', { model, allowed: cfg.workerModels.join(', ') }));
-      out.model = model === 'auto' ? '' : (allowed ?? '');
+    const moved = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : null;
+    if (moved !== null) out.account = moved;
+    const account = firstAccount(cfg.accounts, moved ?? before?.account, cfg.workerAccount);
+    const asked = args.model?.trim() ?? '';
+    if (asked && asked.toLowerCase() !== 'auto') {
+      const { allowed, model, listed } = this.modelsFor(account, asked);
+      if (!listed) {
+        // A model of another connected provider: the master forgot to name it.
+        const other = moved === null ? this.providerBadges().find((p) => p.connected && p.models.some((m) => m.value.toLowerCase() === asked.toLowerCase())) : undefined;
+        throw new Error(t('choice.badModel', { model: asked, allowed: allowed.join(', ') }) + (other ? ` ${t('role.modelOf', { provider: other.id })}` : ''));
+      }
+      out.model = model;
+    } else if (args.model != null) out.model = '';
+    else if (moved !== null && before?.model && !this.modelFits(account, before.model)) out.model = '';
+    const model = out.model ?? before?.model ?? '';
+    if (args.effort != null) {
+      const effort = args.effort === 'auto' ? '' : capEffort(args.effort as Effort, cfg.workerMaxEffort);
+      out.effort = effort && model && effortsFor(this.optionsOf(this.catalogOf(account)), model).length === 0 ? '' : effort;
     }
-    if (args.effort != null) out.effort = args.effort === 'auto' ? '' : capEffort(args.effort as Effort, cfg.workerMaxEffort);
     if (args.ultracode != null) out.ultracode = args.ultracode;
     return out;
   }
@@ -2881,6 +2909,8 @@ export class SessionManager extends EventEmitter {
       description?: string | null;
       instructions?: string | null;
       folders?: string[] | null;
+      provider?: string | null;
+      account?: string | null;
       model?: string | null;
       effort?: string | null;
       ultracode?: boolean | null;
@@ -2894,7 +2924,7 @@ export class SessionManager extends EventEmitter {
     const given = Object.fromEntries(
       Object.entries({ description: args.description, instructions: args.instructions, folders: args.folders, enabled: args.enabled }).filter(([, v]) => v != null),
     );
-    const raw = { ...base, ...given, ...this.postValues(args), id: '', name: args.name, mode: '' };
+    const raw = { ...base, ...given, ...this.postValues(args, null), id: '', name: args.name, mode: '' };
     const refused = await this.allowFolders(raw, args.name, signal);
     if (refused) return refused;
     const r = this.saveRole(raw, 'master');
@@ -2911,6 +2941,8 @@ export class SessionManager extends EventEmitter {
       instructions?: string | null;
       append_instructions?: string | null;
       folders?: string[] | null;
+      provider?: string | null;
+      account?: string | null;
       model?: string | null;
       effort?: string | null;
       ultracode?: boolean | null;
@@ -2920,7 +2952,7 @@ export class SessionManager extends EventEmitter {
   ): Promise<string> {
     const known = rosterKey(this.opts.cfg);
     const changes = (role: TeamRole): TeamRole => {
-      const next: TeamRole = { ...role, ...this.postValues(args) };
+      const next: TeamRole = { ...role, ...this.postValues(args, role) };
       if (args.new_name != null) next.name = args.new_name;
       if (args.description != null) next.description = args.description;
       if (args.instructions != null) next.instructions = args.instructions;
@@ -2942,6 +2974,7 @@ export class SessionManager extends EventEmitter {
     const changed = (['name', 'description', 'folders', 'model', 'effort', 'ultracode', 'enabled'] as const)
       .filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
       .map((k) => `- ${k}: ${JSON.stringify(before[k])} → ${JSON.stringify(after[k])}`);
+    if (before.account !== after.account) changed.unshift(`- provider: ${JSON.stringify(postProvider(this.opts.cfg, before))} → ${JSON.stringify(postProvider(this.opts.cfg, after))}`);
     // The former instructions in full: nothing the master replaces is lost.
     if (before.instructions !== after.instructions) changed.push(t('role.instructionsWere', { text: inside(before.instructions) || t('report.none') }));
     if (changed.length === 0) return t('role.unchanged', { name: after.name });
