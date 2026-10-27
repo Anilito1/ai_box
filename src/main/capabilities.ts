@@ -2,21 +2,25 @@ import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import {
   draftError,
   draftJson,
   GITHUB_URL,
+  listedMcp,
+  maskText,
   mcpReach,
   parseMcpGet,
   parseMcpList,
   PLUGIN_ID,
+  signInPage,
   SKILL_NAME,
   maskTarget,
   targetOf,
   transportOf,
   type Capabilities,
   type CapResult,
+  type ConnectResult,
   type McpDraft,
   type McpEntry,
   type McpSource,
@@ -45,6 +49,8 @@ const GET_MS = 60_000;
 /** How long a session's servers get to finish connecting. */
 const SESSION_MS = 60_000;
 const INSTALL_MS = 5 * 60_000;
+/** How long a sign-in waits for the user to finish it in the browser. */
+const SIGN_IN_MS = 5 * 60_000;
 const FILE_BYTES_MAX = 256 * 1024;
 const SKILL_BYTES_MAX = 100 * 1024;
 const PER_DIR_MAX = 300;
@@ -123,6 +129,7 @@ function entry(name: string, cfg: Obj, source: McpSource, extra: Partial<McpEntr
     plugin: '',
     state: 'unknown',
     reach: 'everywhere',
+    error: '',
     ...extra,
   };
 }
@@ -180,24 +187,49 @@ function run(exe: string, args: string[], cwd: string, env: Record<string, strin
   });
 }
 
-/**
- * Each server's state as a session started in `cwd` sees it, sign-ins included. No prompt is sent: nothing is
- * billed. Servers still connecting after SESSION_MS, or every server if Claude Code does not answer, are left out.
- */
-async function sessionStates(exe: string, cwd: string, env: Record<string, string>): Promise<Map<string, McpState>> {
-  let close = () => undefined as void;
+/** What the CLI answers to mcp_authenticate: the SDK sends it but leaves it out of its typings. */
+interface McpAuth {
+  authUrl?: string;
+  /** The CLI waits for the browser on its own localhost port; false for a claude.ai connector, signed in on claude.ai. */
+  callbackExpected?: boolean;
+}
+type AuthQuery = Query & { mcpAuthenticate?: (serverName: string) => Promise<McpAuth> };
+
+/** A Claude Code session that is sent no prompt: nothing is billed. `close` ends it. */
+function idleSession(exe: string, cwd: string, env: Record<string, string>): { q: AuthQuery; close: () => void } {
+  let end = () => undefined as void;
   const prompt: AsyncIterable<SDKUserMessage> = {
-    [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => (close = () => resolve({ value: undefined, done: true }))) }),
+    [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => (end = () => resolve({ value: undefined, done: true }))) }),
   };
-  const q = query({ prompt, options: { cwd, pathToClaudeCodeExecutable: exe, env, persistSession: false } });
-  const states = new Map<string, McpState>();
+  const q: AuthQuery = query({ prompt, options: { cwd, pathToClaudeCodeExecutable: exe, env, persistSession: false } });
+  let open = true;
+  return {
+    q,
+    close: () => {
+      if (!open) return;
+      open = false;
+      end();
+      q.close();
+    },
+  };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Each server's state as a session started in `cwd` sees it, sign-ins included, with the error of one that failed.
+ * Servers still connecting after SESSION_MS, or every server if Claude Code does not answer, are left out.
+ */
+async function sessionStates(exe: string, cwd: string, env: Record<string, string>): Promise<Map<string, { state: McpState; error: string }>> {
+  const { q, close } = idleSession(exe, cwd, env);
+  const states = new Map<string, { state: McpState; error: string }>();
   const deadline = Date.now() + SESSION_MS;
   const watch = async () => {
     for (;;) {
       const list = await q.mcpServerStatus();
-      for (const s of list) states.set(s.name, s.status);
+      for (const s of list) states.set(s.name, { state: s.status, error: s.status === 'failed' && s.error ? maskText(s.error) : '' });
       if (!list.some((s) => s.status === 'pending') || Date.now() > deadline) return;
-      await new Promise((r) => setTimeout(r, 2000));
+      await sleep(2000);
     }
   };
   const watching = watch();
@@ -209,11 +241,10 @@ async function sessionStates(exe: string, cwd: string, env: Record<string, strin
   } finally {
     clearTimeout(timer);
     close();
-    q.close();
     // Closing ends a status call still waiting: its failure is the expected end, not an error.
     watching.catch(() => undefined);
   }
-  for (const [name, state] of states) if (state === 'pending') states.delete(name);
+  for (const [name, s] of states) if (s.state === 'pending') states.delete(name);
   return states;
 }
 
@@ -232,11 +263,19 @@ export interface CapabilityDeps {
   env(): Record<string, string>;
   /** The same without any access or sign-in added: for npx. */
   toolEnv(): Record<string, string>;
+  /** Opens a page in the user's browser. */
+  openUrl(url: string): void;
+  /** The running sessions reconnect to a server: how many have it now, how many get it at their next start. */
+  reconnect(name: string): Promise<{ reached: number; missed: number }>;
 }
 
 export class CapabilityStore {
   /** State of each server by name, in the master's folder: as a session sees it, else as `claude mcp list` says. */
   private states = new Map<string, McpState>();
+  /** Masked error of each server that failed, in the master's folder. */
+  private errors = new Map<string, string>();
+  /** Sign-ins waiting for the browser, by server name: each one's cancel. */
+  private signIns = new Map<string, () => void>();
   /** Servers only Claude Code knows of (claude.ai connectors, managed ones): name and masked URL. */
   private listed: { name: string; target: string; state: McpState }[] = [];
   /** State of a repo's own server: key `repo path key\nname`. */
@@ -275,7 +314,7 @@ export class CapabilityStore {
       (samePath(repo, master) ? this.states.get(name) : this.repoStates.get(`${pathKey(repo)}\n${name}`)) ?? 'unknown';
 
     for (const [name, c] of serversOf(isObj(home?.mcpServers) ? { mcpServers: home.mcpServers } : null)) {
-      mcp.push(entry(name, c, 'user', { state: this.states.get(name) ?? 'unknown', reach: mcpReach('user', name, true) }));
+      mcp.push(entry(name, c, 'user', { state: this.states.get(name) ?? 'unknown', reach: mcpReach('user', name, true), error: this.errors.get(name) ?? '' }));
       known.add(name);
     }
     const repos = this.repos();
@@ -302,7 +341,8 @@ export class CapabilityStore {
       for (const [server, c] of servers) {
         const name = `plugin:${p.name}:${server}`;
         known.add(name);
-        mcp.push(entry(name, c, 'plugin', { plugin: p.id, state: p.enabled ? (this.states.get(name) ?? 'unknown') : 'disabled', reach: mcpReach('plugin', name, p.enabled) }));
+        const state = p.enabled ? (this.states.get(name) ?? 'unknown') : 'disabled';
+        mcp.push(entry(name, c, 'plugin', { plugin: p.id, state, reach: mcpReach('plugin', name, p.enabled), error: state === 'failed' ? (this.errors.get(name) ?? '') : '' }));
       }
       const own = pluginSkills(p);
       for (const s of own) {
@@ -313,7 +353,7 @@ export class CapabilityStore {
     for (const row of this.listed) {
       if (known.has(row.name)) continue;
       const source: McpSource = row.name.startsWith('claude.ai ') ? 'claude.ai' : 'other';
-      mcp.push(entry(row.name, {}, source, { target: row.target, state: row.state, reach: mcpReach(source, row.name, true) }));
+      mcp.push(entry(row.name, {}, source, { target: row.target, state: row.state, reach: mcpReach(source, row.name, true), error: this.errors.get(row.name) ?? '' }));
     }
 
     const add = (source: SkillEntry['source'], dir: string, project = '') => {
@@ -355,12 +395,13 @@ export class CapabilityStore {
     const master = masterCwd(this.deps.cfg);
     const [r, session] = await Promise.all([run(exe, ['mcp', 'list'], master, env, LIST_MS), sessionStates(exe, master, env)]);
     // `claude mcp list` reaches a claude.ai connector or a plugin's server a session is refused: the session has the last word.
-    const rows = parseMcpList(r.out).map((row) => ({ ...row, state: session.get(row.name) ?? row.state }));
+    const rows = parseMcpList(r.out).map((row) => ({ ...row, state: session.get(row.name)?.state ?? row.state }));
     if (r.code !== 0 && rows.length === 0) {
       this.checkError = 'failed';
       return;
     }
     this.states = new Map(rows.map((row) => [row.name, row.state]));
+    this.errors = new Map([...session].filter(([, s]) => s.error).map(([name, s]) => [name, s.error]));
     this.listed = rows.map((row) => ({ ...row, target: maskTarget(row.target) }));
     // A repo's own servers outside the master's folder: one `claude mcp get` each, in that repo, a few at a time.
     const others = this.inventory().mcp.filter((m) => (m.source === 'project' || m.source === 'local') && m.state !== 'disabled' && !samePath(m.project, master) && existsSync(m.project));
@@ -411,6 +452,101 @@ export class CapabilityStore {
     this.states.delete(m.name);
     this.listed = this.listed.filter((row) => row.name !== m.name);
     return this.result();
+  }
+
+  /** A server of the list some session can use; null when there is none of that name. */
+  private usable(name: unknown): McpEntry | null {
+    return this.inventory().mcp.find((e) => e.name === name && listedMcp(e) && e.reach !== 'nowhere' && !e.name.startsWith('-')) ?? null;
+  }
+
+  private connectResult(error: string, detail = '', outcome: ConnectResult['outcome'] = '', reach = { reached: 0, missed: 0 }): ConnectResult {
+    return { ...this.result(error, detail), outcome, ...reach };
+  }
+
+  private connected(m: McpEntry): void {
+    const master = masterCwd(this.deps.cfg);
+    if ((m.source === 'project' || m.source === 'local') && !samePath(m.project, master)) this.repoStates.set(`${pathKey(m.project)}\n${m.name}`, 'connected');
+    else this.states.set(m.name, 'connected');
+    this.errors.delete(m.name);
+    this.listed = this.listed.map((row) => (row.name === m.name ? { ...row, state: 'connected' } : row));
+  }
+
+  /**
+   * Signs in to a server as Claude Code's /mcp does: Claude Code gives the sign-in page, which opens in the browser,
+   * waits on its own localhost port for the browser to come back and keeps the tokens where it reads them. A claude.ai
+   * connector signs in on claude.ai: its page opens, and the panel checks again when the user says it is done. Once
+   * connected, the running sessions reconnect to it.
+   */
+  async connectMcp(name: unknown): Promise<ConnectResult> {
+    const m = this.usable(name);
+    if (!m) return this.connectResult('missing');
+    const exe = this.deps.executable();
+    if (!exe) return this.connectResult('no-claude');
+    const cwd = m.source === 'project' || m.source === 'local' ? m.project : masterCwd(this.deps.cfg);
+    if (!existsSync(cwd)) return this.connectResult('missing');
+    this.signIns.get(m.name)?.();
+    const s = idleSession(exe, cwd, this.deps.env());
+    let cancelled = false;
+    const cancel = () => {
+      cancelled = true;
+      s.close();
+    };
+    this.signIns.set(m.name, cancel);
+    try {
+      if (!s.q.mcpAuthenticate) return this.connectResult('sign-in');
+      const auth = await s.q.mcpAuthenticate(m.name);
+      const claudeAi = m.source === 'claude.ai';
+      const page = auth.authUrl || claudeAi ? signInPage(auth.authUrl, claudeAi) : '';
+      // Only an https page is opened.
+      if (auth.authUrl && !page) return this.connectResult('sign-in');
+      if (page) this.deps.openUrl(page);
+      if (claudeAi || (page && !auth.callbackExpected)) return this.connectResult('', '', 'browser');
+      // No page: Claude Code already holds valid tokens and only reconnects.
+      const end = await this.waitConnected(s.q, m.name, page ? SIGN_IN_MS : SESSION_MS, () => cancelled);
+      if (cancelled) return this.connectResult('', '', 'cancelled');
+      if (end.state !== 'connected') return this.connectResult(end.state === 'needs-auth' ? 'sign-in-timeout' : 'sign-in', end.error);
+      this.connected(m);
+      s.close();
+      return this.connectResult('', '', 'connected', await this.deps.reconnect(m.name));
+    } catch (err) {
+      if (cancelled) return this.connectResult('', '', 'cancelled');
+      return this.connectResult('sign-in', maskText(err instanceof Error ? err.message : String(err)));
+    } finally {
+      if (this.signIns.get(m.name) === cancel) this.signIns.delete(m.name);
+      s.close();
+    }
+  }
+
+  /** Ends a sign-in still waiting for the browser. */
+  cancelConnect(name: unknown): void {
+    if (isStr(name)) this.signIns.get(name)?.();
+  }
+
+  /** Asks the sign-in's session until the server leaves "needs sign-in": its state then, or "needs-auth" at the deadline. */
+  private async waitConnected(q: AuthQuery, name: string, ms: number, stopped: () => boolean): Promise<{ state: McpState; error: string }> {
+    const deadline = Date.now() + ms;
+    while (!stopped() && Date.now() < deadline) {
+      await sleep(1500);
+      if (stopped()) break;
+      const s = (await q.mcpServerStatus()).find((x) => x.name === name);
+      if (s && s.status !== 'needs-auth' && s.status !== 'pending') return { state: s.status, error: s.error ? maskText(s.error) : '' };
+    }
+    return { state: 'needs-auth', error: '' };
+  }
+
+  /**
+   * Checks a server again: a claude.ai connector signed in on claude.ai, a server that failed (Claude Code starts it
+   * anew). Once it is connected, the running sessions reconnect to it.
+   */
+  async restartMcp(name: unknown): Promise<ConnectResult> {
+    const m = this.usable(name);
+    if (!m) return this.connectResult('missing');
+    if (!this.deps.executable()) return this.connectResult('no-claude');
+    this.added = true;
+    await this.check();
+    const now = this.usable(m.name);
+    if (now?.state !== 'connected') return this.connectResult(this.checkError || 'still', now?.error ?? '');
+    return this.connectResult('', '', 'connected', await this.deps.reconnect(m.name));
   }
 
   /** Disables (to ~/.claude/skills-disabled, reversible) or enables back a skill of the user's. */

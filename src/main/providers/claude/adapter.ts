@@ -93,6 +93,18 @@ export class ClaudeProcess implements AgentProcess {
     return totalsOf(u.session.total_cost_usd, u.session.model_usage);
   }
 
+  async reconnectMcp(name: string): Promise<boolean | null> {
+    const server = (await this.q.mcpServerStatus()).find((s) => s.name === name);
+    if (!server || server.status === 'disabled') return null;
+    if (server.status === 'connected') return true;
+    try {
+      await this.q.reconnectMcpServer(name);
+    } catch {
+      return false;
+    }
+    return (await this.q.mcpServerStatus()).some((s) => s.name === name && s.status === 'connected');
+  }
+
   async rateLimits(): Promise<RateLimits | null> {
     const limits = (await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })).rate_limits;
     if (!limits) return null;

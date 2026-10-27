@@ -6,6 +6,7 @@ import {
   SKILL_NAME,
   type Capabilities,
   type CapResult,
+  type ConnectResult,
   type McpDraft,
   type McpEntry,
   type McpStatus,
@@ -14,7 +15,7 @@ import {
 } from '../shared/capabilities';
 import { parseAgentFile } from '../shared/team';
 import type { HubApi } from '../shared/types';
-import { ago, errorNote, folderName, h, icon, ICONS, openMenu } from './dom';
+import { ago, errorNote, folderName, h, icon, ICONS, openMenu, techDetails } from './dom';
 import { t, tn, type Key } from './i18n';
 
 type Kind = 'mcp' | 'skills';
@@ -127,6 +128,10 @@ export class CapsView {
   private expanded = new Set<string>();
   /** Whether each personal skill was off when the list was first drawn: flipping a switch does not move its row. */
   private sortedOff = new Map<string, boolean>();
+  /** Servers being signed in to (waiting for the browser) or restarted. */
+  private signing = new Map<string, 'auth' | 'restart'>();
+  /** claude.ai connectors whose page was opened: their button checks them again. */
+  private browserOpened = new Set<string>();
   private note: { text: string; tone: 'ok' | 'error'; detail?: string } | null = null;
   private noteTimer = 0;
   private mcpForm = emptyMcpForm();
@@ -226,6 +231,8 @@ export class CapsView {
     this.render();
     try {
       this.caps = await this.hub.checkCapabilities();
+      // A connector signed in on claude.ai: should it ask again later, its button signs in anew.
+      for (const m of this.caps.mcp) if (m.state === 'connected') this.browserOpened.delete(m.name);
     } finally {
       this.checking = false;
       if (!this.root.hidden) this.render();
@@ -284,6 +291,10 @@ export class CapsView {
       'skill-name': 'caps.err.skillName',
       format: 'caps.err.format',
       'skill-format': 'caps.err.pasteHeader',
+      'sign-in': 'caps.err.signIn',
+      'sign-in-timeout': 'caps.err.signInTimeout',
+      still: 'caps.err.still',
+      failed: 'caps.checkFailed',
     };
     return t(known[code] ?? 'caps.err.unexpected');
   }
@@ -630,7 +641,7 @@ export class CapsView {
     dot.title = t(`caps.state.${m.state}`);
     const name = h('span', 'caps-name', shownName(m));
     name.title = m.name;
-    const cells = [dot, name, h('span', 'caps-src', mcpSource(m))];
+    const cells = [dot, name, h('span', 'caps-src', mcpSource(m)), this.connectButton(m) ?? h('span')];
     const ask = () => {
       this.openKey = key;
       this.confirmKey = key;
@@ -648,6 +659,7 @@ export class CapsView {
     const fields: [string, HTMLElement | string][] = [[t('caps.d.state'), state]];
     const help = this.mcpHelp(m);
     if (help) fields.push(['', h('span', 'caps-help', help)]);
+    if (m.state === 'failed' && m.error) fields.push(['', techDetails(m.error)]);
     if (m.transport) fields.push([t('caps.d.type'), m.transport === 'stdio' ? t('caps.type.stdio') : m.transport.toUpperCase()]);
     if (m.target) fields.push([t(m.transport === 'stdio' ? 'caps.d.command' : 'caps.d.url'), h('code', 'caps-target', m.target)]);
     fields.push([t('caps.d.reach'), reachText(m.reach, m.project)]);
@@ -668,11 +680,77 @@ export class CapsView {
 
   /** What to do about a server that is not connected, in one line. */
   private mcpHelp(m: McpEntry): string {
-    if (m.state === 'needs-auth') return m.source === 'claude.ai' ? t('caps.help.claudeai') : t('caps.help.auth', { name: m.name });
+    if (this.signing.get(m.name) === 'auth') return t('caps.help.waiting');
+    if (m.state === 'needs-auth') return t(m.source === 'claude.ai' ? 'caps.help.claudeai' : 'caps.help.auth');
     if (m.state === 'pending') return t('caps.help.pending');
     if (m.state === 'failed') return t('caps.help.failed');
     if (m.state === 'disabled') return t('caps.help.disabled');
     return '';
+  }
+
+  /**
+   * A row's own action: sign in to a server that asks for it (Cancel while the browser is out; Refresh once claude.ai
+   * was opened for a connector), restart one that failed. Null for the others.
+   */
+  private connectButton(m: McpEntry): HTMLButtonElement | null {
+    const doing = this.signing.get(m.name);
+    if (!this.caps?.checkedAt || (m.state !== 'needs-auth' && m.state !== 'failed' && !doing)) return null;
+    const b = h('button', 'btn small caps-act');
+    b.dataset.focus = `act:${mcpKey(m)}`;
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (doing === 'auth') void this.hub.cancelConnectMcp(m.name);
+      else if (m.state === 'failed' || this.browserOpened.has(m.name)) void this.restart(m);
+      else void this.connect(m);
+    });
+    if (doing) b.append(h('span', 'setup-spin'));
+    if (doing === 'auth') {
+      b.append(h('span', '', t('caps.connect.cancel')));
+      b.title = t('caps.help.waiting');
+      return b;
+    }
+    b.disabled = doing === 'restart' || this.checking;
+    const label = m.state === 'failed' ? 'caps.connect.restart' : this.browserOpened.has(m.name) ? 'caps.connect.refresh' : 'caps.connect';
+    b.append(h('span', '', t(label)));
+    return b;
+  }
+
+  private async connect(m: McpEntry): Promise<void> {
+    this.openKey = mcpKey(m);
+    this.confirmKey = '';
+    await this.connectAction(m, 'auth', () => this.hub.connectMcp(m.name));
+  }
+
+  private async restart(m: McpEntry): Promise<void> {
+    await this.connectAction(m, 'restart', () => this.hub.restartMcp(m.name));
+  }
+
+  /** Runs a sign-in or a restart; the list comes back with its result, and a note says how it ended. */
+  private async connectAction(m: McpEntry, kind: 'auth' | 'restart', task: () => Promise<ConnectResult>): Promise<void> {
+    this.signing.set(m.name, kind);
+    this.setNote(null);
+    this.render();
+    let r: ConnectResult | null = null;
+    try {
+      r = await task();
+    } catch (e) {
+      this.setNote({ text: t('caps.err.unexpected'), tone: 'error', detail: String(e) });
+    } finally {
+      this.signing.delete(m.name);
+    }
+    if (r) {
+      this.caps = r;
+      const name = shownName(m);
+      if (r.outcome === 'browser') {
+        this.browserOpened.add(m.name);
+        this.setNote({ text: t('caps.connect.browser', { name }), tone: 'ok' });
+      } else if (r.outcome === 'connected') {
+        this.browserOpened.delete(m.name);
+        const text = r.missed > 0 ? tn('caps.connect.next', r.missed, { name }) : r.reached > 0 ? tn('caps.connect.live', r.reached, { name }) : t('caps.connect.done', { name });
+        this.setNote({ text, tone: 'ok' });
+      } else if (!r.ok) this.setNote({ text: this.errorText(r.error), tone: 'error', detail: r.detail });
+    }
+    if (!this.root.hidden) this.render();
   }
 
   private mcpErrors(c: Capabilities): Partial<Record<'name' | 'command' | 'url' | 'project' | 'extra', string>> {

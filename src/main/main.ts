@@ -322,6 +322,8 @@ class Hub {
       executable: () => this.executable,
       env: () => this.mgr.environment(OWN_ACCOUNT),
       toolEnv: () => this.mgr.toolEnv(),
+      openUrl: (url) => void shell.openExternal(url),
+      reconnect: (name) => this.mgr.reconnectMcp(name),
     });
     this.updater = new Updater({
       dataDir: this.dataDir,
@@ -966,6 +968,9 @@ class Hub {
     });
     handle('caps:mcp-add', (draft) => this.caps.addMcp(draft));
     handle('caps:mcp-remove', (name, source, project) => this.caps.removeMcp(name, source, project));
+    handle('caps:mcp-connect', (name) => this.caps.connectMcp(name));
+    handle('caps:mcp-connect-cancel', (name) => this.caps.cancelConnect(name));
+    handle('caps:mcp-restart', (name) => this.caps.restartMcp(name));
     handle('caps:skill-move', (dir, enable) => this.caps.moveSkill(dir, enable));
     handle('caps:skill-delete', (dir, disabled) => this.caps.deleteSkill(dir, disabled));
     handle('caps:skill-paste', (name, text) => this.caps.pasteSkill(name, text));

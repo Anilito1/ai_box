@@ -2167,6 +2167,19 @@ export class SessionManager extends EventEmitter {
     this.tellKept(s);
   }
 
+  /**
+   * The running sessions that have an MCP server connect to it again, without a restart: how many have it now, how
+   * many could not (they get it at their next start). A session that has no such server, or answers too late, is left out.
+   */
+  async reconnectMcp(name: string): Promise<{ reached: number; missed: number }> {
+    const live = [...this.sessions.values()].flatMap((s) => (s.query?.reconnectMcp ? [s.query.reconnectMcp(name)] : []));
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<null>((r) => (timer = setTimeout(() => r(null), 60_000)));
+    const ends = await Promise.all(live.map((p) => Promise.race([p.catch(() => false), late])));
+    clearTimeout(timer);
+    return { reached: ends.filter((e) => e === true).length, missed: ends.filter((e) => e === false).length };
+  }
+
   /** Idle workers are closed, permanent ones sooner: their conversation stays on disk and the next message resumes them. */
   private closeIdle(): void {
     for (const s of this.sessions.values()) {

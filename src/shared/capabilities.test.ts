@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { capabilitiesText, draftError, draftJson, maskArgs, maskTarget, maskUrl, mcpReach, parseMcpGet, parseMcpList, type Capabilities, type McpDraft, type McpEntry } from './capabilities';
+import { capabilitiesText, CONNECTORS_URL, draftError, draftJson, maskArgs, maskTarget, maskText, maskUrl, mcpReach, parseMcpGet, parseMcpList, signInPage, type Capabilities, type McpDraft, type McpEntry } from './capabilities';
 
 const draft = (over: Partial<McpDraft> = {}): McpDraft => ({
   name: 'my-server',
@@ -93,7 +93,7 @@ test('mcpReach: off plugin nowhere, repo servers per repo, denied connectors mas
 });
 
 test('capabilitiesText lists what can be used and only counts what is off', () => {
-  const base: McpEntry = { name: '', source: 'user', transport: 'stdio', target: '', project: '', plugin: '', state: 'connected', reach: 'everywhere' };
+  const base: McpEntry = { name: '', source: 'user', transport: 'stdio', target: '', project: '', plugin: '', state: 'connected', reach: 'everywhere', error: '' };
   const skill = { name: '', dir: '', description: '', source: 'user', project: '', plugin: '', reach: 'everywhere' } as const;
   const c: Capabilities = {
     mcp: [
@@ -121,4 +121,23 @@ test('capabilitiesText lists what can be used and only counts what is off', () =
   assert.ok(text.indexOf('repo-db') < text.indexOf('Gmail') && text.indexOf('Gmail') < text.indexOf('broken'));
   assert.doesNotMatch(text, /plugin:x:y|old/);
   assert.match(text, /2 more installed but off/);
+});
+
+test('signInPage opens only an https page, and for a claude.ai connector only a claude.ai one', () => {
+  assert.equal(signInPage('https://clerk.context7.com/oauth/authorize?state=x', false), 'https://clerk.context7.com/oauth/authorize?state=x');
+  assert.equal(signInPage('http://evil.test/authorize', false), '');
+  assert.equal(signInPage('file:///C:/x', false), '');
+  assert.equal(signInPage('not a url', false), '');
+  assert.equal(signInPage(undefined, false), '');
+  assert.equal(signInPage('https://claude.ai/api/organizations/o/mcp/start-auth/s', true), 'https://claude.ai/api/organizations/o/mcp/start-auth/s');
+  assert.equal(signInPage('https://claude.ai.evil.test/x', true), CONNECTORS_URL);
+  assert.equal(signInPage(undefined, true), CONNECTORS_URL);
+});
+
+test('maskText keeps a server error readable on one line, its tokens and URL secrets masked', () => {
+  const text = maskText('Connection failed:\n  spawn npx ENOENT https://api.test/mcp?api_key=abc123 Bearer sk-ant-0123456789abcdef');
+  assert.ok(text.startsWith('Connection failed: spawn npx ENOENT https://api.test/mcp?api_key=•••'));
+  assert.ok(!text.includes('abc123') && !text.includes('sk-ant'));
+  assert.ok(!maskText('redirect failed ("https://a.test/cb?code=s3cr3t")').includes('s3cr3t'));
+  assert.ok(maskText('x'.repeat(2000)).length <= 600);
 });

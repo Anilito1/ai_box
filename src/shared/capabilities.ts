@@ -24,6 +24,8 @@ export interface McpEntry {
   plugin: string;
   state: McpState;
   reach: Reach;
+  /** What Claude Code said of a server that could not connect, masked; '' otherwise. */
+  error: string;
 }
 
 export type SkillSource = 'user' | 'disabled' | 'project' | 'plugin';
@@ -74,6 +76,27 @@ export interface McpDraft {
 
 export type CapResult = Capabilities & { ok: boolean; error: string; detail: string };
 
+/**
+ * How a sign-in from the MCP panel ended: connected, left to finish in the browser (a claude.ai connector), or
+ * cancelled. `reached`: the running sessions that took the server at once; `missed`: those that get it at their next start.
+ */
+export type ConnectResult = CapResult & { outcome: 'connected' | 'browser' | 'cancelled' | ''; reached: number; missed: number };
+
+/** Where claude.ai connectors are managed: where a connector's sign-in goes when Claude Code gives no address. */
+export const CONNECTORS_URL = 'https://claude.ai/settings/connectors';
+
+/** The page a sign-in opens: Claude Code's https address ('' for any other); for a claude.ai connector, only one on claude.ai. */
+export function signInPage(url: string | undefined, claudeAi: boolean): string {
+  let u: URL | null = null;
+  try {
+    u = url ? new URL(url) : null;
+  } catch {
+    u = null;
+  }
+  if (claudeAi) return u?.origin === 'https://claude.ai' ? u.toString() : CONNECTORS_URL;
+  return u?.protocol === 'https:' ? u.toString() : '';
+}
+
 /** Connectors a worker never needs: their tool schemas would weigh on each of its turns. */
 export const WORKER_DENIED_MCP = ['higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs'];
 
@@ -116,7 +139,8 @@ export function maskUrl(raw: string): string {
     .split('/')
     .map((part) => (looksSecret(decoded(part)) && /\d/.test(part) && part.length >= 24 ? MASK : part))
     .join('/');
-  for (const [k, v] of [...url.searchParams]) if (SECRET_KEY.test(k) || looksSecret(v)) url.searchParams.set(k, MASK);
+  // An OAuth redirect carries its one-time code and state in the query.
+  for (const [k, v] of [...url.searchParams]) if (SECRET_KEY.test(k) || /^(?:code|state)$/i.test(k) || looksSecret(v)) url.searchParams.set(k, MASK);
   return url.toString().replaceAll(encodeURIComponent(MASK), MASK);
 }
 
@@ -132,6 +156,12 @@ export function maskArgs(args: string[]): string[] {
     return looksSecret(arg) ? MASK : arg;
   });
 }
+
+/** A message of Claude Code's (a server's error) on one short line, its URLs and secret-looking words masked. */
+export const maskText = (text: string) =>
+  maskArgs(text.replace(/[a-z][\w+.-]*:\/\/[^\s"'<>()[\]]+/gi, (url) => maskUrl(url)).replace(/\s+/g, ' ').trim().split(' '))
+    .join(' ')
+    .slice(0, 600);
 
 /** Claude Code's words for a server's state ("✔ Connected", "! Needs authentication", "⏸ Pending approval"…). */
 export function stateOf(text: string): McpState {

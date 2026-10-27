@@ -159,6 +159,11 @@ export interface AgentProcess {
   totals(): Promise<Totals>;
   /** The plan limits of the account, null when the program has none to tell. */
   rateLimits(): Promise<RateLimits | null>;
+  /**
+   * Connects the running process again to one of its MCP servers (just signed in to, or restarted): true once it is,
+   * false when it could not, null when the process has no server of that name. Absent: the program cannot.
+   */
+  reconnectMcp?(name: string): Promise<boolean | null>;
 }
 
 /** A message of a stored conversation, as the program kept it. */

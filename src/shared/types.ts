@@ -1,4 +1,4 @@
-import type { Capabilities, CapResult, McpDraft, McpSource } from './capabilities';
+import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { TurnRecord } from './costs';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
@@ -750,6 +750,11 @@ export interface HubApi {
   checkCapabilities(): Promise<Capabilities>;
   addMcp(draft: McpDraft): Promise<CapResult>;
   removeMcp(name: string, source: McpSource, project: string): Promise<CapResult>;
+  /** Signs in to a server in the browser, as /mcp does; answers once connected, cancelled, or left to claude.ai. */
+  connectMcp(name: string): Promise<ConnectResult>;
+  cancelConnectMcp(name: string): Promise<void>;
+  /** Checks a server again (it is started anew), then the running sessions reconnect to it. */
+  restartMcp(name: string): Promise<ConnectResult>;
   /** Disables a skill of the user's (moved to ~/.claude/skills-disabled), or enables it back. */
   moveSkill(dir: string, enable: boolean): Promise<CapResult>;
   deleteSkill(dir: string, disabled: boolean): Promise<CapResult>;
