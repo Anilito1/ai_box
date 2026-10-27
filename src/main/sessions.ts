@@ -7,6 +7,7 @@ import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { resolveTopicRepo } from '../shared/topicGroups';
+import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from '../shared/groups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
@@ -46,14 +47,17 @@ import {
   type RateLimits,
   type Role,
   type SessionView,
+  type TeamGroup,
   type TeamRole,
 } from '../shared/types';
-import { mainRepoPath, masterCwd, prepareRole, type HubConfig } from './config';
+import { mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, type HubConfig } from './config';
 import type { CostLog } from './costLog';
 import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
 import {
   defaultMasterName,
+  groupInfo,
+  groupsText,
   handoffBlock,
   handoffRequest,
   IDLE_CLOSE_MIN,
@@ -106,7 +110,7 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -153,6 +157,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   effortResolved: boolean;
   /** The master wrote to this worker and has not heard back yet. */
   owesReport: boolean;
+  /** Session id of the group lead whose message it works on: its report and its silence go there. Null: the master. */
+  reportTo: string | null;
   /** The master closed it mid-turn: it closes once the turn and its background tasks are over. */
   closeWhenDone: boolean;
   /** Last message, turn or prompt: the idle timer runs from here. */
@@ -237,6 +243,7 @@ type Persisted = {
   | 'userUltracode'
   | 'ultracode'
   | 'instanceOf'
+  | 'reportTo'
   | 'tree'
   | 'readOnly'
   | 'accountId'
@@ -584,6 +591,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
+    if (!s.instanceOf) this.dropFromGroups(s.name);
     this.changed();
     // Its work may have been pushed since it closed: removed now if nothing would be lost. Kept, the master's
     // conversation says which branch stays on disk (the git panel shows its worktree).
@@ -1263,6 +1271,7 @@ export class SessionManager extends EventEmitter {
         role: s.role,
         post: s.roleId ? { id: s.roleId, order: team.findIndex((r) => r.id === s.roleId), description: this.roleOf(s)?.description ?? '' } : null,
         instance: s.instanceOf ? { postId: s.instanceOf, post: this.postOf(s)?.name ?? '', topic: this.topicOf(s) } : null,
+        ...this.groupBadges(s),
         tree: s.tree ? { branch: s.tree.branch, state: s.tree.state, kept: s.tree.kept, install: s.installing ? 'running' : s.installFailed ? 'failed' : '' } : null,
         name: s.name,
         mission: s.mission,
@@ -1416,7 +1425,9 @@ export class SessionManager extends EventEmitter {
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
     // never the copy recorded with the conversation. Changes made while they run come with their next message.
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
-    const base = isMaster ? masterPrompt(cfg) : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined);
+    const base = isMaster
+      ? masterPrompt(cfg)
+      : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)));
     // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
     const append = harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message');
     // What the session asked for, if its account has it (a fallback step's own model first).
@@ -2150,6 +2161,13 @@ export class SessionManager extends EventEmitter {
     // A random tag the worker's text cannot guess: nothing inside it can pass for the hub's own words.
     const tag = `worker-output-${randomTag()}`;
     const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
+    // Set to work by its lead: the lead hears it, as the master would.
+    const lead = this.reportLead(s);
+    if (lead) {
+      const note = t('hub.silentLead.note', { name: s.name, tag, last });
+      this.deliver(lead, { text: `${tags().hub} ${t('hub.silent', { name: s.name })}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: 'hub' });
+      return;
+    }
     this.notifyMaster(t('hub.silent', { name: displayName(s) }), t('hub.silent.note', { name: s.name, tag, last }), s);
   }
 
@@ -2328,7 +2346,29 @@ export class SessionManager extends EventEmitter {
         { to: z.string().describe(t('tool.sendMessage.to')), message: z.string().describe(t('tool.sendMessage.message')) },
         ({ to, message }) => run(() => this.sendPeer(s, String(to), String(message))),
       );
-      return [listWorkers, listRepos, listCapabilities, toMaster,...(harness === 'claude' ? [] : [sendMessage])];
+      // A group's lead drives its members with the master's tools, limited to them; a member reports to its lead.
+      // Given at launch: a change of the groups puts the idle ones to sleep, the next message starts them with it.
+      const lead = this.groupsLed(s).length > 0;
+      const leadTools = lead
+        ? [
+            tool('list_workers', t('tool.lead.listWorkers'), {}, () => run(() => this.listWorkers(s))),
+            tool(
+              'message_worker',
+              t('tool.lead.message'),
+              {
+                name: byName,
+                message: z.string().describe(t('tool.message.message')),
+                interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
+              },
+              (args) => run(() => this.messageWorker(args, s)),
+            ),
+            tool('worker_report', t('tool.lead.report'), { name: byName }, ({ name }) => run(() => this.workerReport(name, s))),
+          ]
+        : [listWorkers];
+      const toLead = this.groupOf(s)
+        ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }) => run(() => this.messageLead(s, message)))]
+        : [];
+      return [...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -2448,6 +2488,37 @@ export class SessionManager extends EventEmitter {
           (args, extra) => run(() => this.updateRole(args, signalOf(extra))),
         ),
         tool('delete_role', t('tool.deleteRole'), { name: byPost }, ({ name }, extra) => run(() => this.deleteAsked(name, signalOf(extra)))),
+        tool('list_groups', t('tool.listGroups'), {}, () => run(() => this.listGroups())),
+        tool(
+          'create_group',
+          t('tool.createGroup'),
+          {
+            name: z.string().describe(t('tool.group.name')),
+            lead: z.string().describe(t('tool.group.lead')),
+            members: z.array(z.string()).describe(t('tool.group.members')),
+          },
+          (args) => run(() => this.groupAsked(null, args)),
+        ),
+        tool(
+          'update_group',
+          t('tool.updateGroup'),
+          {
+            name: z.string().describe(t('tool.group.name')),
+            new_name: z.string().nullish().describe(t('tool.group.newName')),
+            lead: z.string().nullish().describe(t('tool.group.lead')),
+            members: z.array(z.string()).nullish().describe(t('tool.group.members')),
+          },
+          (args) => run(() => this.groupAsked(this.findGroup(args.name), { name: args.new_name ?? undefined, lead: args.lead, members: args.members })),
+        ),
+        tool('delete_group', t('tool.deleteGroup'), { name: z.string().describe(t('tool.group.name')) }, ({ name }) =>
+          run(() => {
+            const g = this.findGroup(name);
+            const known = rosterKey(this.opts.cfg);
+            this.deleteGroup(g.id);
+            this.masterSaw(known);
+            return t('group.deleted', { name: g.name });
+          }),
+        ),
         tool(
           'topic',
           topicSpec.description,
@@ -2612,8 +2683,9 @@ export class SessionManager extends EventEmitter {
     ultracode?: boolean | null;
     account?: string | null;
     provider?: string | null;
-  }): Promise<string> {
-    const s = this.findWorker(args.name);
+  }, by?: Session): Promise<string> {
+    // From a group's lead: one of its members only, with what the lead may give (no model, account or Ultracode).
+    const s = by ? this.memberNamed(by, args.name) : this.findWorker(args.name);
     const message = args.message.trim();
     if (!message) throw new Error(t('message.empty'));
     const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : null;
@@ -2646,8 +2718,11 @@ export class SessionManager extends EventEmitter {
           ? t('account.locked', { name: s.name, account: this.accountName(this.accountOf(s)) })
           : this.setAccount(s.id, accountId, false);
     s.owesReport = true;
+    // Its report goes to whoever wrote last: the lead, or the master (who may reach a member directly).
+    s.reportTo = by?.id ?? null;
     s.closeWhenDone = false;
-    this.deliver(s, { text: `${newMission ? tags().mission(s.name) : tags().master}\n${message}`, images: [], from: masterName() });
+    const head = by ? (newMission ? tags().leadMission(by.name, s.name) : tags().lead(by.name)) : newMission ? tags().mission(s.name) : tags().master;
+    this.deliver(s, { text: `${head}\n${message}`, images: [], from: by?.name ?? masterName() });
     const state = wasClosed
       ? t(s.roleId ? 'message.woken' : 'message.wasClosed', { name: s.name })
       : args.interrupt && wasWorking
@@ -2835,6 +2910,7 @@ export class SessionManager extends EventEmitter {
     if (s?.inbox) this.stop(id);
     cfg.team = cfg.team.filter((r) => r.id !== id);
     this.teamChanged();
+    this.dropFromGroups(id);
     return true;
   }
 
@@ -3227,16 +3303,23 @@ export class SessionManager extends EventEmitter {
     return t('workers.tree', { branch: tree.branch, state: t(`tree.state.${tree.state}`) }) + kept + install;
   }
 
-  private listWorkers(): string {
-    const workers = this.visible().filter((s) => s.role === 'worker');
+  /** Every worker for the master (and the workers that coordinate); a lead's own tool shows its groups only. */
+  private listWorkers(lead?: Session): string {
     const { cfg } = this.opts;
-    const accounts = cfg.accounts.length > 0 ? t('workers.accounts', { list: this.accountBadges().map((a) => a.name).join(', '), usual: this.accountName(firstAccount(cfg.accounts, cfg.workerAccount)) }) : '';
+    const all = this.visible().filter((s) => s.role === 'worker');
+    const workers = lead ? all.filter((w) => w === lead || leads(cfg.groups, lead, w)) : all;
+    const outside = lead ? all.length - workers.length : 0;
+    const accounts = lead ? '' : cfg.accounts.length > 0 ? t('workers.accounts', { list: this.accountBadges().map((a) => a.name).join(', '), usual: this.accountName(firstAccount(cfg.accounts, cfg.workerAccount)) }) : '';
     if (workers.length === 0) return [t('workers.none'), accounts].filter(Boolean).join('\n');
     const block = (s: Session) => {
       const post = this.roleOf(s);
       const lines = [`${s.instanceOf ? '  ↳ ' : '- '}${this.workerLine(s)}`];
       if (post) lines.push(t('workers.post', { text: oneLine(post.description, 160), model: post.model || 'auto', effort: post.effort || 'auto' }));
       if (s.instanceOf) lines.push(t('workers.instance', { post: this.postOf(s)?.name ?? '' }));
+      const member = this.groupOf(s);
+      if (member) lines.push(t('workers.member', { group: member.name, lead: `hub-${refName(cfg.team, member.lead)}` }));
+      const led = this.groupsLed(s);
+      if (led.length > 0) lines.push(t('workers.leads', { list: led.map((g) => g.name).join(', ') }));
       const tree = this.treeLine(s);
       if (tree) lines.push(tree);
       if (s.mission) lines.push(t('workers.mission', { text: oneLine(s.mission, 160) }));
@@ -3252,15 +3335,17 @@ export class SessionManager extends EventEmitter {
     const adhoc = workers.filter((s) => !s.roleId && !(s.instanceOf && posts.some((p) => p.roleId === s.instanceOf)));
     return [
       accounts,
+      lead ? '' : groupsText(cfg),
       posts.length > 0 ? `${t('workers.team')}\n${posts.flatMap((p) => [p, ...under(p)]).map(block).join('\n')}` : '',
       adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
+      outside > 0 ? t('workers.notMine', { n: outside }) : '',
     ]
       .filter(Boolean)
       .join('\n\n');
   }
 
-  private async workerReport(name: string): Promise<string> {
-    const s = this.findWorker(name);
+  private async workerReport(name: string, lead?: Session): Promise<string> {
+    const s = lead ? this.memberNamed(lead, name) : this.findWorker(name);
     if (!s.inbox && s.started) await this.loadHistory(s);
     const steps = [...s.items.values()]
       .map((i): string | null => {
@@ -3292,6 +3377,156 @@ export class SessionManager extends EventEmitter {
     ]
       .filter(Boolean)
       .join('\n');
+  }
+
+  // ---------- groups ----------
+
+  /** The group a worker is a member of. */
+  private groupOf(s: Session): TeamGroup | null {
+    return s.role === 'worker' ? memberOf(this.opts.cfg.groups, s) : null;
+  }
+
+  /** The groups a worker leads. */
+  private groupsLed(s: Session): TeamGroup[] {
+    return s.role === 'worker' ? ledBy(this.opts.cfg.groups, s) : [];
+  }
+
+  /** A group's lead: its post's own worker, or the ad-hoc worker; a disabled post's cannot be reached. */
+  private leadOf(g: TeamGroup): Session | undefined {
+    return this.visible().find((x) => x.role === 'worker' && (isPostRef(g.lead) ? x.roleId === g.lead : !x.roleId && x.name === g.lead));
+  }
+
+  /** The lead a worker's report goes to: the one that wrote to it last, if it still leads its group. */
+  private reportLead(s: Session): Session | undefined {
+    const lead = s.reportTo ? this.sessions.get(s.reportTo) : undefined;
+    return lead && !this.ended(lead) && this.visible().includes(lead) && leads(this.opts.cfg.groups, lead, s) ? lead : undefined;
+  }
+
+  /** A member of the groups a lead leads, by its session name. */
+  private memberNamed(lead: Session, name: string): Session {
+    const s = this.findWorker(name);
+    if (!leads(this.opts.cfg.groups, lead, s)) throw new Error(t('group.notMember', { name: s.name }));
+    return s;
+  }
+
+  /** What the sidebar shows of a worker's groups: the one it is a member of (under its lead), the ones it leads. */
+  private groupBadges(s: Session): Pick<SessionView, 'group' | 'leads'> {
+    const member = this.groupOf(s);
+    const lead = member ? this.leadOf(member) : undefined;
+    return { group: member && lead ? { name: member.name, leadId: lead.id } : null, leads: this.groupsLed(s).map((g) => g.name) };
+  }
+
+  /**
+   * A member writes to its group's lead: delivered as a hub message, the member's words between random tags the
+   * lead reads as data. A sleeping lead is woken. It answers the report owed for a turn the lead started.
+   */
+  private messageLead(s: Session, message: string): string {
+    const text = message.trim();
+    if (!text) throw new Error(t('message.empty'));
+    const group = this.groupOf(s);
+    const lead = group ? this.leadOf(group) : undefined;
+    if (!group || !lead || this.ended(lead)) throw new Error(t('lead.unreachable'));
+    if (s.reportTo === lead.id) s.owesReport = false;
+    const tag = `worker-output-${randomTag()}`;
+    const note = t('hub.memberMessage', { tag, text: inside(text.slice(0, 20_000)) });
+    this.deliver(lead, { text: `${tags().member(s.name, group.name)}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: s.name, shown: text });
+    return t('lead.delivered', { name: lead.name });
+  }
+
+  /** A post, or an ad-hoc worker, named by the master, as a group holds it: the post's id, or the worker's session name. */
+  private groupRef(name: string): string {
+    const wanted = name.trim().toLowerCase().replace(/^hub-/, '');
+    const post = this.opts.cfg.team.find((r) => r.name === wanted);
+    if (post) return post.id;
+    const s = this.visible().find((x) => x.role === 'worker' && !x.roleId && !x.instanceOf && x.name === `hub-${wanted}`);
+    if (s) return s.name;
+    throw new Error(t('group.unknownWorker', { name }));
+  }
+
+  /** A live ad-hoc worker by its session name (an instance goes through its post). */
+  private adhocNamed(name: string): boolean {
+    return [...this.sessions.values()].some((x) => x.role === 'worker' && !x.roleId && !x.instanceOf && x.name === name);
+  }
+
+  private findGroup(name: string): TeamGroup {
+    const wanted = slugify(name, 40);
+    const g = this.opts.cfg.groups.find((x) => x.name === wanted);
+    if (!g) throw new Error(t('group.notFound', { name }));
+    return g;
+  }
+
+  private groupText(g: TeamGroup): string {
+    const { team } = this.opts.cfg;
+    const name = (ref: string) => `hub-${refName(team, ref)}`;
+    return t('group.line', { name: g.name, lead: name(g.lead), members: g.members.map(name).join(', ') });
+  }
+
+  private listGroups(): string {
+    const { groups } = this.opts.cfg;
+    return groups.length === 0 ? t('group.none') : groups.map((g) => this.groupText(g)).join('\n');
+  }
+
+  /** The master's create_group (no group yet) and update_group: names become references, the rest is saveGroup's. */
+  private groupAsked(before: TeamGroup | null, args: { name?: string | null; lead?: string | null; members?: string[] | null }): string {
+    const known = rosterKey(this.opts.cfg);
+    const raw = {
+      id: before?.id ?? '',
+      name: args.name || before?.name || '',
+      lead: args.lead ? this.groupRef(args.lead) : (before?.lead ?? ''),
+      members: args.members ? args.members.map((m) => this.groupRef(m)) : (before?.members ?? []),
+    };
+    const r = this.saveGroup(raw);
+    if ('error' in r) throw new Error(t('group.invalid', { field: r.error.field, problem: t(`group.problem.${r.error.problem}`) }));
+    this.masterSaw(known);
+    return `${t(before ? 'group.updated' : 'group.created', { text: this.groupText(r.group) })}\n${t('group.later')}`;
+  }
+
+  /** Creates (no known id) or replaces a group, from the settings or the master's tools. */
+  saveGroup(raw: unknown): GroupCheck {
+    const { cfg } = this.opts;
+    const check = prepareGroup(cfg, raw, (ref) => this.adhocNamed(ref));
+    if ('error' in check) return check;
+    const before = cfg.groups.find((g) => g.id === check.group.id) ?? null;
+    cfg.groups = before ? cfg.groups.map((g) => (g.id === check.group.id ? check.group : g)) : [...cfg.groups, check.group];
+    this.groupsChanged([before, check.group]);
+    return check;
+  }
+
+  deleteGroup(id: string): boolean {
+    const { cfg } = this.opts;
+    const g = cfg.groups.find((x) => x.id === id);
+    if (!g) return false;
+    cfg.groups = cfg.groups.filter((x) => x.id !== id);
+    this.groupsChanged([g]);
+    return true;
+  }
+
+  /** A post or an ad-hoc worker that is gone leaves its groups (a group without lead or members goes too). */
+  private dropFromGroups(ref: string | null): void {
+    const { cfg } = this.opts;
+    const before = cfg.groups;
+    const kept = withoutPosts(before, cfg.team)
+      .map((g) => ({ ...g, members: g.members.filter((m) => m !== ref) }))
+      .filter((g) => g.lead !== ref && g.members.length > 0);
+    if (JSON.stringify(kept) === JSON.stringify(before)) return;
+    cfg.groups = kept;
+    this.groupsChanged(before.filter((g) => !kept.some((k) => JSON.stringify(k) === JSON.stringify(g))));
+  }
+
+  /**
+   * A lead's tools and its members' prompts are set at launch: the posts of the groups touched that wait for work go
+   * to sleep (the next message starts them with the change); those at work, and ad-hoc workers, get it at their next launch.
+   */
+  private groupsChanged(touched: (TeamGroup | null)[]): void {
+    const refs = new Set(touched.flatMap((g) => (g ? [g.lead, ...g.members] : [])));
+    for (const s of this.sessions.values()) {
+      // A post's worker only: closing an ad-hoc worker or an instance would retire its worktree.
+      if (!s.roleId || !s.inbox || !refsOf(s).some((r) => refs.has(r))) continue;
+      if (this.settled(s) && !s.owesReport) this.stop(s.id);
+    }
+    this.opts.persist();
+    this.changed();
+    this.emit('team', this.opts.cfg.team);
   }
 
   /** A worker by its session name, with or without "hub-"; a disabled post's worker cannot be reached. */
@@ -3473,6 +3708,7 @@ export class SessionManager extends EventEmitter {
       noteSending: false,
       noteDue: false,
       instanceOf: null,
+      reportTo: null,
       tree: null,
       readOnly: false,
       installing: null,
@@ -3587,6 +3823,7 @@ export class SessionManager extends EventEmitter {
       fallbackMark: s.fallbackMark,
       fallbackModel: s.fallbackModel,
       convs: s.convs,
+      reportTo: s.reportTo,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),

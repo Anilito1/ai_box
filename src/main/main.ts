@@ -959,6 +959,14 @@ class Hub {
       if (isStr(id) && (delta === -1 || delta === 1)) mgr.moveRole(id, delta);
       return this.view();
     });
+    handle('group:save', (group) => {
+      const r = mgr.saveGroup(group);
+      return 'error' in r ? { ...this.view(), ok: false, error: r.error.problem, field: r.error.field } : { ...this.view(), ok: true, error: '', field: '' };
+    });
+    handle('group:delete', (id) => {
+      const ok = isStr(id) && mgr.deleteGroup(id);
+      return { ...this.view(), ok, error: '' };
+    });
     handle('team:agents', () => agentFiles(this.cfg));
     // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
     handle('caps:get', () => this.caps.inventory());

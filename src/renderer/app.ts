@@ -125,15 +125,29 @@ function renderActions(c: Card, s: SessionView): void {
   if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
 }
 
-/** Who goes where in the sidebar: each post with its instances at work, the other active workers, the closed ones. */
+/**
+ * Who goes where in the sidebar: each post with its instances at work, the posts of its groups under a lead, the
+ * other active workers, the closed ones.
+ */
 function layout(sessions: SessionView[]): { team: SessionView[]; active: SessionView[]; closed: SessionView[] } {
   const posts = sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
   const under = (p: SessionView) => sessions.filter((s) => s.instance && s.instance.postId === p.post?.id && !isClosed(s));
-  const team = posts.flatMap((p) => [p, ...under(p)]);
+  const placed = new Set<SessionView>();
+  const block = (p: SessionView): SessionView[] => {
+    if (placed.has(p)) return [];
+    placed.add(p);
+    return [p, ...under(p), ...posts.filter((m) => m.group?.leadId === p.id).flatMap(block)];
+  };
+  const top = posts.filter((p) => !inGroup(p));
+  // A lead that is itself a member goes with its own lead; what a loop would leave out comes last.
+  const team = [...top.flatMap(block), ...posts.flatMap(block)];
   const rest = sessions.filter((s) => s.role === 'worker' && !team.includes(s));
   // Newest first: the latest missions are the ones worth a look.
   return { team, active: rest.filter((s) => !isClosed(s)), closed: rest.filter(isClosed).reverse() };
 }
+
+/** A post shown under its group's lead, when the lead is a post too. */
+const inGroup = (s: SessionView) => !!s.post && !!s.group && snapshot.sessions.some((l) => l.id === s.group?.leadId && l.post && l.id !== s.id);
 
 /** Nested under its post: an instance at work, its card in the team list. */
 const nested = (s: SessionView) => !!s.instance && !isClosed(s) && snapshot.sessions.some((p) => p.post?.id === s.instance?.postId);
@@ -215,6 +229,7 @@ function renderCard(s: SessionView): void {
   // Under its post the job is enough ("agenda"); elsewhere the post goes with it ("brain · agenda").
   const inTeam = nested(s);
   c.root.classList.toggle('instance', inTeam);
+  c.root.classList.toggle('member', inGroup(s));
   c.avatar.update(s, last, sessionMascot(s, snapshot.accounts), s.role === 'master' ? workersBusy() : 0);
   c.tree.hidden = s.tree?.state !== 'active';
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
@@ -227,7 +242,9 @@ function renderCard(s: SessionView): void {
   setText(c.sub, sub.text);
   c.sub.className = `card-sub ${sub.cls}`;
   // A worktree is named by its branch, never by its path.
-  const tip = s.instance && s.tree ? t('card.instanceTip', { post: s.instance.post, branch: s.tree.branch }) : s.tree ? t('card.treeTip', { branch: s.tree.branch }) : s.cwd;
+  const where = s.instance && s.tree ? t('card.instanceTip', { post: s.instance.post, branch: s.tree.branch }) : s.tree ? t('card.treeTip', { branch: s.tree.branch }) : s.cwd;
+  const groups = [s.leads?.length > 0 ? t('card.leadOf', { list: s.leads.join(', ') }) : '', s.group ? t('card.memberOf', { name: s.group.name }) : ''].filter(Boolean);
+  const tip = groups.length > 0 ? `${groups.join(' · ')}\n${where}` : where;
   if (c.root.title !== tip && c.root.dataset.tip !== tip) c.root.title = tip;
   renderActions(c, s);
 }

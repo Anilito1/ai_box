@@ -6,9 +6,10 @@ import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccou
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
+import { checkGroup, GROUP_ID, GROUPS_MAX, normalizeGroup, withoutPosts, type GroupError } from '../shared/groups';
 import { isGroupPrefs } from '../shared/topicGroups';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
-import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamRole } from '../shared/types';
+import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamGroup, type TeamRole } from '../shared/types';
 import { UPDATE_MODES, type UpdateMode } from '../shared/update';
 
 export type HubConfig = HubSettings;
@@ -45,6 +46,7 @@ function defaults(lang: Lang): HubConfig {
     workerModels: ['opus', 'sonnet'],
     workerMaxEffort: 'xhigh',
     team: [],
+    groups: [],
     accounts: [],
     masterAccount: DEFAULT_ACCOUNT,
     workerAccount: DEFAULT_ACCOUNT,
@@ -125,6 +127,14 @@ function mergeOwn(cfg: HubConfig, raw: Raw): void {
       if (ROLE_ID.test(role.id) && !team.some((o) => o.id === role.id) && !checkRole(role, team)) team.push(role);
     }
     cfg.team = team;
+  }
+  // Group by group too, once the team is known: a group naming a post that is gone loses it.
+  if (Array.isArray(raw.groups)) {
+    const groups: TeamGroup[] = [];
+    for (const g of withoutPosts(raw.groups.slice(0, GROUPS_MAX).map(normalizeGroup), cfg.team)) {
+      if (GROUP_ID.test(g.id) && !groups.some((o) => o.id === g.id) && !checkGroup(g, groups)) groups.push(g);
+    }
+    cfg.groups = groups;
   }
   if (typeof raw.anthropicActive === 'string') cfg.anthropicActive = raw.anthropicActive;
   // Read account by account too.
@@ -244,6 +254,24 @@ export function prepareRole(cfg: HubConfig, raw: unknown): RoleCheck {
   if (role.account && !isBuiltinAccount(role.account) && !cfg.accounts.some((a) => a.id === role.account)) return { error: { field: 'account', problem: 'format' } };
   if (!role.id) role.id = `r-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
   return { role };
+}
+
+export type GroupCheck = { group: TeamGroup } | { error: GroupError };
+
+/**
+ * A group to save, normalized and checked against the others; a new one (no id, or one unknown) gets a fresh id. Its
+ * posts must exist; `known` tells whether an ad-hoc worker does.
+ */
+export function prepareGroup(cfg: HubConfig, raw: unknown, known: (worker: string) => boolean): GroupCheck {
+  const group = normalizeGroup(raw);
+  if (!cfg.groups.some((g) => g.id === group.id)) group.id = '';
+  const error = checkGroup(group, cfg.groups);
+  if (error) return { error };
+  const exists = (ref: string) => cfg.team.some((r) => r.id === ref) || known(ref);
+  if (!exists(group.lead)) return { error: { field: 'lead', problem: 'format' } };
+  if (!group.members.every(exists)) return { error: { field: 'members', problem: 'format' } };
+  if (!group.id) group.id = `g-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
+  return { group };
 }
 
 /** The master's folder: the first working folder. */

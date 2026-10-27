@@ -90,6 +90,20 @@ export interface TeamRole {
 }
 
 /**
+ * Workers under a lead: the lead drives its members (its hub tools reach them only), a member reports to the lead
+ * that wrote to it, the lead reports to the master. The master still sees and drives everyone.
+ */
+export interface TeamGroup {
+  /** Stable id, made by the main process ("g-" + 8 characters). */
+  id: string;
+  /** Lowercase letters, digits and dashes. */
+  name: string;
+  /** A post's id, or an ad-hoc worker's session name ("hub-…"). */
+  lead: string;
+  members: string[];
+}
+
+/**
  * An account sessions can run on, besides the Claude access of Settings › Claude ("default"). `claude`: a Claude
  * account signed in through Claude Code's own sign-in, in a Claude Code folder of its own; `anthropic-key`: an
  * Anthropic API key; `openai`: an OpenAI API key, or any OpenAI-compatible server, reached through the hub's bridge;
@@ -147,6 +161,12 @@ export interface RoleBadge {
   description: string;
 }
 
+/** A member's group: its name and its lead's session id. */
+export interface GroupBadge {
+  name: string;
+  leadId: string;
+}
+
 /** An extra instance of a post, started for one parallel job. */
 export interface InstanceBadge {
   postId: string;
@@ -171,6 +191,10 @@ export interface SessionView {
   /** Set for a permanent worker. */
   post: RoleBadge | null;
   instance: InstanceBadge | null;
+  /** The group it is a member of: shown under its lead. */
+  group: GroupBadge | null;
+  /** Names of the groups it leads. */
+  leads: string[];
   tree: TreeBadge | null;
   name: string;
   mission: string;
@@ -543,6 +567,8 @@ export interface HubSettings {
   workerMaxEffort: Effort;
   /** Permanent workers, in the order the settings show them. */
   team: TeamRole[];
+  /** Groups of workers under a lead; changed one at a time (saveGroup), never a patch. */
+  groups: TeamGroup[];
   /** Accounts besides the Claude access above ("default"); changed through their own calls, never a patch. */
   accounts: Account[];
   /** Account the master runs on, and the one workers run on unless their post or the user picks another. */
@@ -588,7 +614,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'accounts' | 'anthropicActive'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive'>> & {
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -742,6 +768,9 @@ export interface HubApi {
   /** `error` is "working" when its worker is in the middle of a turn. */
   deleteRole(id: string): Promise<SettingsView & Result>;
   moveRole(id: string, delta: -1 | 1): Promise<SettingsView>;
+  /** Creates a group (empty id) or replaces the one with this id; `field` names the field refused. */
+  saveGroup(group: TeamGroup): Promise<SettingsView & Result & { field: string }>;
+  deleteGroup(id: string): Promise<SettingsView & Result>;
   /** Subagent files of ~/.claude/agents and of the followed repos. */
   agentFiles(): Promise<AgentFile[]>;
   /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */

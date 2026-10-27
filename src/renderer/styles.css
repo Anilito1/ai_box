@@ -1345,6 +1345,22 @@ kbd,
   margin-top: 2px;
   -webkit-line-clamp: 1;
 }
+/* A post of a group: its card tucked under its lead's, hooked to it by a thin line. */
+.card.member {
+  margin-left: 20px;
+}
+.card.member::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -11px;
+  width: 8px;
+  height: 28px;
+  border-bottom: 1px solid var(--line-strong);
+  border-left: 1px solid var(--line-strong);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
 /* An extra instance of a post at work: a compact card tucked under its post, hooked to it by a thin line. */
 .card.instance {
   grid-template-columns: 32px minmax(0, 1fr);
@@ -5217,6 +5233,21 @@ kbd,
 .team-row.off .team-row-title b,
 .team-row.off .team-row-desc {
   color: var(--text-3);
+}
+.group-list {
+  align-self: stretch;
+  margin: var(--sp-2) 0;
+}
+/* a group's form, in its place in the groups list */
+.group-editor {
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+.group-editor:last-child {
+  border-bottom: 0;
+}
+.group-error {
+  color: var(--danger);
 }
 .team-tags {
   display: flex;

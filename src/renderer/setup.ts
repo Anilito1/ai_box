@@ -5,6 +5,7 @@ import { DEFAULT_ACCOUNT } from '../shared/accounts';
 import { ProvidersPanel } from './providers';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
+import { checkGroup, GROUP_LIMITS, GROUPS_MAX, isPostRef, normalizeGroup, refName, type GroupError } from '../shared/groups';
 import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
   APP_NAME,
@@ -22,6 +23,7 @@ import {
   type ModelOption,
   type SettingsPatch,
   type SettingsView,
+  type TeamGroup,
   type TeamRole,
 } from '../shared/types';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
@@ -124,6 +126,9 @@ export class SetupView {
   private olderModels = false;
   /** Post whose deletion waits for the confirmation shown in its row. */
   private confirmDelete = '';
+  /** Group being edited in the team list (a copy; empty id for a new one), its refused field and text. */
+  private groupDraft: TeamGroup | null = null;
+  private groupError: { field: string; text: string } | null = null;
   /** Subagent files offered for import: null = list closed, [] = loading or none. */
   private agents: AgentFile[] | null = null;
   /** `detail`: the raw words behind an error, folded under "Details". */
@@ -1148,8 +1153,9 @@ export class SetupView {
     const team = v.settings.team;
     const list = h('div', 'team-list');
     if (team.length === 0) list.append(h('p', 'setup-hint team-empty', t('team.empty')));
-    team.forEach((role, i) => list.append(this.postRow(role, i, team.length)));
+    team.forEach((role, i) => list.append(this.postRow(role, i, team.length, v.settings.groups)));
     el.append(list);
+    el.append(this.groups(v.settings));
 
     const add = this.field(t('team.add'), team.length >= TEAM_MAX ? t('team.full', { max: TEAM_MAX }) : t('team.add.hint'));
     const row = h('div', 'setup-row team-templates');
@@ -1189,7 +1195,142 @@ export class SetupView {
     return grid;
   }
 
-  private postRow(role: TeamRole, index: number, count: number): HTMLElement {
+  /**
+   * The groups: a lead (a post) that drives its members (posts) with the master's tools limited to them; their reports
+   * go to it. An ad-hoc worker the master put in a group is shown by its name.
+   */
+  private groups(s: HubSettings): HTMLElement {
+    const f = this.field(t('group.title'), t('group.hint'));
+    const list = h('div', 'team-list group-list');
+    const name = (ref: string) => refName(s.team, ref);
+    for (const g of s.groups) {
+      if (this.groupDraft?.id === g.id) {
+        list.append(this.groupEditor(s, this.groupDraft));
+        continue;
+      }
+      const row = h('div', 'team-row group-row');
+      const text = h('div', 'team-row-text');
+      const title = h('div', 'team-row-title');
+      title.append(h('b', '', g.name), h('span', 'team-row-session', t('group.leadIs', { name: name(g.lead) })));
+      text.append(title, h('div', 'team-row-desc', t('group.membersAre', { list: g.members.map(name).join(', ') })));
+      const actions = h('div', 'team-row-actions');
+      actions.append(
+        this.button(t('team.edit'), 'btn ghost small', () => this.editGroup(structuredClone(g)), !!this.groupDraft),
+        this.button(t('team.delete'), 'btn ghost small', () => void this.deleteGroup(g)),
+      );
+      row.append(text, actions);
+      list.append(row);
+    }
+    if (this.groupDraft && !this.groupDraft.id) list.append(this.groupEditor(s, this.groupDraft));
+    if (list.children.length > 0) f.append(list);
+    const posts = s.team.length;
+    const full = s.groups.length >= GROUPS_MAX;
+    if (!this.groupDraft) {
+      f.append(
+        this.button(t('group.add'), 'btn ghost small', () => this.editGroup({ id: '', name: '', lead: s.team[0]?.id ?? '', members: [] }), posts < 2 || full),
+      );
+    }
+    if (posts < 2) f.append(h('div', 'setup-hint', t('group.needPosts')));
+    return f;
+  }
+
+  private editGroup(g: TeamGroup | null): void {
+    this.groupDraft = g;
+    this.groupError = null;
+    this.render();
+  }
+
+  /** A group's form, in its place in the list: name, lead (a post), members (the other posts). */
+  private groupEditor(s: HubSettings, d: TeamGroup): HTMLElement {
+    const box = h('div', 'group-editor');
+    const mark = (field: string, el: HTMLElement) => el.classList.toggle('invalid', this.groupError?.field === field);
+    const nameField = this.field(t('group.name'));
+    const nameIn = this.input(d.name, t('group.name.placeholder'));
+    nameIn.maxLength = GROUP_LIMITS.name + 10;
+    nameIn.setAttribute('aria-label', t('group.name'));
+    nameIn.addEventListener('input', () => (d.name = nameIn.value));
+    mark('name', nameField);
+    nameField.append(nameIn);
+
+    const leadField = this.field(t('group.lead'), t('group.lead.hint'));
+    const lead = h('select', 'setup-select');
+    lead.setAttribute('aria-label', t('group.lead'));
+    for (const r of s.team) lead.append(new Option(r.name, r.id));
+    // An ad-hoc worker the master made lead stays as it is.
+    if (d.lead && !isPostRef(d.lead)) lead.append(new Option(refName(s.team, d.lead), d.lead));
+    lead.value = d.lead;
+    lead.addEventListener('change', () => {
+      d.lead = lead.value;
+      d.members = d.members.filter((m) => m !== d.lead);
+      this.render();
+    });
+    mark('lead', leadField);
+    leadField.append(lead);
+
+    const membersField = this.field(t('group.members'), t('group.members.hint'));
+    const boxes = h('div', 'setup-checks');
+    mark('members', membersField);
+    const elsewhere = (ref: string) => s.groups.some((g) => g.id !== d.id && g.members.includes(ref));
+    const refs = [...s.team.map((r) => r.id), ...d.members.filter((m) => !isPostRef(m))];
+    for (const ref of refs) {
+      if (ref === d.lead) continue;
+      const label = h('label', 'setup-check');
+      const box = h('input');
+      box.type = 'checkbox';
+      box.checked = d.members.includes(ref);
+      box.disabled = elsewhere(ref) && !box.checked;
+      box.addEventListener('change', () => (d.members = box.checked ? [...d.members, ref] : d.members.filter((m) => m !== ref)));
+      label.append(box, h('span', '', refName(s.team, ref) + (box.disabled ? ` (${t('group.inOther')})` : '')));
+      boxes.append(label);
+    }
+    membersField.append(boxes);
+
+    const actions = h('div', 'setup-row');
+    actions.append(
+      this.button(t('group.save'), 'btn primary small', () => void this.saveGroup(s)),
+      this.button(t('setup.cancel'), 'btn ghost small', () => this.editGroup(null)),
+    );
+    box.append(nameField, leadField, membersField);
+    if (this.groupError) box.append(h('div', 'setup-hint group-error', this.groupError.text));
+    box.append(actions);
+    return box;
+  }
+
+  private groupErrorText(e: { field: string; problem: string }): string {
+    return t('group.err', { field: t(`group.field.${e.field}` as Key), problem: t(`group.problem.${e.problem}` as Key) });
+  }
+
+  private async saveGroup(s: HubSettings): Promise<void> {
+    const d = this.groupDraft;
+    if (!d) return;
+    const group = normalizeGroup(d);
+    const error: GroupError | null = checkGroup(group, s.groups);
+    if (error) {
+      this.groupError = { field: error.field, text: this.groupErrorText(error) };
+      this.render();
+      return;
+    }
+    const r = await this.run(() => this.hub.saveGroup(group));
+    this.view = r;
+    if (!r.ok) {
+      this.groupError = { field: r.field, text: this.groupErrorText({ field: r.field, problem: r.error }) };
+      this.render();
+      return;
+    }
+    this.groupDraft = null;
+    this.groupError = null;
+    this.flash(t('group.saved', { name: group.name }), 'ok');
+    this.render();
+  }
+
+  private async deleteGroup(g: TeamGroup): Promise<void> {
+    const r = await this.run(() => this.hub.deleteGroup(g.id));
+    this.view = r;
+    this.flash(t('group.deleted', { name: g.name }), r.ok ? 'ok' : 'error');
+    this.render();
+  }
+
+  private postRow(role: TeamRole, index: number, count: number, groups: TeamGroup[] = []): HTMLElement {
     const row = h('div', `team-row${role.enabled ? '' : ' off'}`);
     const text = h('div', 'team-row-text');
     const title = h('div', 'team-row-title');
@@ -1200,6 +1341,9 @@ export class SetupView {
     tag(this.runLabel(role));
     if (role.mode) tag(t(`setup.mode.${role.mode}` as Key));
     if (!role.enabled) tag(t('team.off'));
+    for (const g of groups) if (g.lead === role.id) tag(t('group.tag.lead', { name: g.name }));
+    const member = groups.find((g) => g.members.includes(role.id));
+    if (member) tag(t('group.tag.member', { name: member.name }));
     text.append(title, h('div', 'team-row-desc', role.description), tags);
     row.append(text);
 
