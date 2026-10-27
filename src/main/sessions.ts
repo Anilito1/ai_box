@@ -1696,6 +1696,9 @@ export class SessionManager extends EventEmitter {
         void this.refreshUsage(s, q);
         break;
       }
+      case 'context':
+        this.setContext(s, ev.tokens, ev.size);
+        break;
       case 'activity':
         break;
     }

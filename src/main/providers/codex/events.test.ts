@@ -54,7 +54,9 @@ test('reasoning summaries are thinking blocks; empty ones are only activity', ()
 
 test('token usage: cached tokens are counted apart from the input, the context is the last request', () => {
   const s = stream();
-  s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50, cacheWriteInputTokens: 0 }, last: { inputTokens: 400 }, modelContextWindow: 258400 } });
+  const usage = s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50, cacheWriteInputTokens: 0 }, last: { inputTokens: 400 }, modelContextWindow: 258400 } });
+  // Said at once: a long turn moves the meter before it ends.
+  assert.deepEqual(usage, [{ type: 'context', tokens: 400, size: 258400 }]);
   assert.deepEqual(s.usage.models['gpt-5.6-luna'], { cost: 0, input: 400, output: 50, cacheRead: 600, cacheWrite: 0 });
   assert.equal(s.contextTokens, 400);
   assert.equal(s.contextSize, 258400);

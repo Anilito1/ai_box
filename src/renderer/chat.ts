@@ -19,7 +19,7 @@ import { isProviderId } from '../shared/providers';
 import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { cliUpdateBox } from './cliUpdate';
-import { copyButton, displayName, failed, fmtCost, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
+import { copyButton, displayName, failed, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { mascotMark, sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
@@ -99,7 +99,6 @@ export class ChatView {
   private readonly modeBtn: HTMLButtonElement;
   private readonly modelBtn: HTMLButtonElement;
   private readonly ctx: { root: HTMLSpanElement; arc: SVGCircleElement; text: HTMLSpanElement };
-  private readonly cost: HTMLSpanElement;
   private readonly sendBtn: HTMLButtonElement;
   private readonly attachStrip = h('div', 'attachments');
   private readonly attachNote = h('div', 'attach-note');
@@ -294,13 +293,11 @@ export class ChatView {
     ctxRoot.append(ring, ctxText);
     this.ctx = { root: ctxRoot, arc, text: ctxText };
 
-    this.cost = h('span', 'cost');
-    this.cost.title = t('chat.cost');
     this.sendBtn = h('button', 'send');
     this.sendBtn.addEventListener('click', () => (this.isBusy() && !this.hasContent() ? this.interrupt() : this.submit()));
 
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.cost, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, this.sendBtn);
     const box = h('div', 'composer-box');
     box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, this.input, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
@@ -481,7 +478,6 @@ export class ChatView {
     this.ctx.root.className = `ctx ${level(pct)}`;
     this.ctx.text.textContent = fmtPct(pct);
     this.ctx.root.title = m && m.contextSize ? t('chat.context', { used: fmtTokens(m.contextTokens), size: fmtTokens(m.contextSize) }) : t('chat.contextShort');
-    this.cost.textContent = fmtCost(m?.costUsd);
     this.syncSend();
   }
 

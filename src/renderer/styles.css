@@ -1273,7 +1273,6 @@ kbd,
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.card-cost,
 .card-pct {
   color: var(--text-2);
   font-size: var(--fs-sm);
@@ -1779,8 +1778,7 @@ kbd,
   }
 }
 @container (max-width: 540px) {
-  .composer-bar .cbtn-provider,
-  .composer-bar .cost {
+  .composer-bar .cbtn-provider {
     display: none;
   }
 }
@@ -2626,13 +2624,6 @@ kbd,
 }
 .ctx.danger .ring-arc {
   stroke: var(--danger);
-}
-.cost {
-  padding: 0 var(--sp-2) 0 var(--sp-1);
-  color: var(--text);
-  font-size: var(--fs-sm);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
 }
 .send {
   display: grid;

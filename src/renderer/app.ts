@@ -71,7 +71,6 @@ interface Card {
   /** Branch mark of a worker in its own worktree. */
   tree: HTMLSpanElement;
   name: HTMLSpanElement;
-  cost: HTMLSpanElement;
   model: HTMLSpanElement;
   pct: HTMLSpanElement;
   fill: HTMLDivElement;
@@ -161,8 +160,7 @@ function ensureCard(s: SessionView): Card {
   tree.setAttribute('aria-hidden', 'true');
   tree.hidden = true;
   const name = h('span', 'card-name');
-  const cost = h('span', 'card-cost');
-  row.append(tree, name, cost);
+  row.append(tree, name);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -178,7 +176,7 @@ function ensureCard(s: SessionView): Card {
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, tree, name, cost, model, pct, fill, sub, actions, actionsKey: '' };
+  const card = { root, avatar, tree, name, model, pct, fill, sub, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -220,7 +218,6 @@ function renderCard(s: SessionView): void {
   c.avatar.update(s, last, sessionMascot(s, snapshot.accounts), s.role === 'master' ? workersBusy() : 0);
   c.tree.hidden = s.tree?.state !== 'active';
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
-  setText(c.cost, fmtCost(m?.costUsd));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
   setText(c.pct, fmtPct(m?.contextPct));
   // A scale on the compositor rather than a width: the meter moves without a layout.

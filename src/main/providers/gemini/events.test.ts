@@ -57,7 +57,7 @@ test('tools: the hub’s own are named as Claude Code names them; the others go 
 
 test('usage: the context is the last update, the tokens are summed per model across turns', () => {
   const s = stream();
-  s.handle({ sessionUpdate: 'usage_update', used: 1200, size: 1_000_000 });
+  assert.deepEqual(s.handle({ sessionUpdate: 'usage_update', used: 1200, size: 1_000_000 }), [{ type: 'context', tokens: 1200, size: 1_000_000 }]);
   assert.equal(s.contextTokens, 1200);
   s.turn({ stopReason: 'end_turn', _meta: { quota: { model_usage: [{ model: 'gemini-2.5-pro', token_count: { input_tokens: 100, output_tokens: 20 } }, { model: 'gemini-3.8-flash', token_count: { input_tokens: 5, output_tokens: 1 } }] } } });
   const events = s.turn({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2 } });

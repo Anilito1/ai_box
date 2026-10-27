@@ -84,6 +84,8 @@ export type AgentEvent =
   | { type: 'compacted'; before: number; after?: number }
   | { type: 'commands'; commands: AgentCommand[] }
   | { type: 'compacting'; on: boolean }
+  /** The context in use and the model's window, said during a turn by a program whose replies do not carry it. */
+  | { type: 'context'; tokens: number; size: number }
   | { type: 'retry' }
   /** Level signal: the background tasks running now (their descriptions). */
   | { type: 'background'; tasks: string[] }

@@ -221,7 +221,7 @@ export class CodexStream {
         };
         this.contextTokens = num(last.inputTokens);
         this.contextSize = num(usage.modelContextWindow) || this.contextSize;
-        return ACTIVITY;
+        return [{ type: 'context', tokens: this.contextTokens, size: this.contextSize }];
       }
       case 'thread/compacted':
         return [{ type: 'compacted', before: this.contextTokens }];

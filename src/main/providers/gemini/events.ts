@@ -156,7 +156,7 @@ export class GeminiStream {
       case 'usage_update':
         this.contextTokens = num(update.used);
         this.contextSize = num(update.size) || this.contextSize;
-        return ACTIVITY;
+        return [{ type: 'context', tokens: this.contextTokens, size: this.contextSize }];
       default:
         // Plans, command lists, mode changes: the session is alive, nothing more.
         return ACTIVITY;
