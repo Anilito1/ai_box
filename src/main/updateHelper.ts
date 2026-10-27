@@ -82,7 +82,7 @@ async function install(job: UpdateJob): Promise<UpdateResult> {
   // directly, so it is fetched here, by the installer of the electron package npm just installed.
   const electronInstaller = join(job.root, 'node_modules', 'electron', 'install.js');
   const ci = async () => {
-    const r = await npm(['ci', '--no-audit', '--no-fund', '--prefer-offline'], 15 * 60_000);
+    const r = await npm(['ci', '--ignore-scripts', '--no-audit', '--no-fund', '--prefer-offline'], 15 * 60_000);
     if (r.code !== 0 || existsSync(job.relaunch.exe) || !existsSync(electronInstaller)) return r;
     const e = await run(process.execPath, [electronInstaller], job.root, ENV, 10 * 60_000);
     log(`electron install: ${e.code}`);
