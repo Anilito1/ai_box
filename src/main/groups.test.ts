@@ -46,7 +46,7 @@ async function hub() {
   mkdirSync(work);
   const cfg = loadConfig(dir, 'en');
   cfg.workspaces = [work];
-  cfg.accounts = [{ id: CODEX, kind: 'codex', name: 'OpenAI (ChatGPT)', baseUrl: '', model: '', smallModel: '', isolated: true }];
+  cfg.accounts = [{ id: CODEX, kind: 'codex', name: 'OpenAI (ChatGPT)', baseUrl: '', model: '', smallModel: '', slug: '', models: [], isolated: true }];
   const m = new SessionManager({
     cfg,
     dataDir: dir,

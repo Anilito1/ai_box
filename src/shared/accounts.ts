@@ -21,6 +21,41 @@ export const OPENAI_URL = 'https://api.openai.com/v1';
 /** A model as OpenAI and compatible servers write it ("gpt-5", "openai/gpt-5", "qwen2.5-coder:14b"); never a leading dash. */
 const MODEL = /^\w[\w.:/@+-]{0,119}$/;
 const URL_RE = /^https?:\/\/[^\s/?#@]+(\/[^\s?#]*)?$/i;
+/** This computer, the one place a server may be reached without TLS. */
+const LOOPBACK = /^(localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/i;
+/** The id of a provider the user adds ("venice", "my-llm"): what the master and the menus know it by. */
+export const CUSTOM_SLUG = /^[a-z][a-z0-9-]{0,22}[a-z0-9]$/;
+/** Ids a provider the user adds cannot take: the built-in providers', their aliases, the accounts that are always there. */
+const RESERVED_SLUGS = ['anthropic', 'openai', 'deepseek', 'gemini', 'claude', 'codex', 'chatgpt', 'google', 'default', 'own', 'main', 'principal'];
+export const CUSTOM_MODELS_MAX = 100;
+
+/** A server's address: https, or plain http to this computer only (a local model). No user, query or fragment. */
+export function isServerUrl(url: string): boolean {
+  if (url.length > ACCOUNT_LIMITS.baseUrl || !URL_RE.test(url)) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
+/** A readable id for a provider the user adds, made from its name once and kept: "Venice.ai" → "venice-ai". */
+export function customSlug(name: string, taken: string[]): string {
+  const base =
+    name
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^[^a-z]+/, '')
+      .slice(0, 20)
+      .replace(/-+$/, '') || 'custom';
+  const used = new Set([...RESERVED_SLUGS, ...taken]);
+  let slug = base.length < 2 ? `${base}-ai` : base;
+  for (let n = 2; used.has(slug); n++) slug = `${base}-${n}`;
+  return slug;
+}
 
 export const isAccountRef = (v: unknown): v is string => typeof v === 'string' && (isBuiltinAccount(v) || ACCOUNT_ID.test(v));
 /** The account runs Claude models: Claude Code talks to Anthropic itself, no bridge in between. */
@@ -43,19 +78,24 @@ export function normalizeAccount(raw: unknown): Account {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const kind = ACCOUNT_KINDS.includes(o.kind as AccountKind) ? (o.kind as AccountKind) : 'claude';
   const server = hasServer(kind);
+  const slug = kind === 'openai' ? str(o.slug).trim().toLowerCase() : '';
+  const models = slug && Array.isArray(o.models) ? [...new Set(o.models.map((m) => str(m).trim()).filter(Boolean))] : [];
   return {
     id: str(o.id),
     kind,
     name: str(o.name).trim().replace(/\s+/g, ' '),
     baseUrl: server ? str(o.baseUrl).trim().replace(/\/+$/, '') || (kind === 'openai' ? OPENAI_URL : '') : '',
-    model: server ? str(o.model).trim() : '',
-    smallModel: server ? str(o.smallModel).trim() : '',
+    // A provider the user added runs its first model unless a session picks another.
+    model: slug ? (models[0] ?? '') : server ? str(o.model).trim() : '',
+    smallModel: server && !slug ? str(o.smallModel).trim() : '',
+    slug,
+    models,
     // A Gemini account always has a folder of its own: its sign-in and its conversations live there.
     isolated: kind === 'gemini' || kind === 'gemini-key' || (kind === 'codex' && o.isolated === true),
   };
 }
 
-export type AccountField = 'name' | 'baseUrl' | 'model' | 'smallModel' | 'key' | 'accounts';
+export type AccountField = 'name' | 'baseUrl' | 'model' | 'smallModel' | 'models' | 'key' | 'accounts';
 export type AccountProblem = 'required' | 'tooLong' | 'format' | 'taken' | 'tooMany' | 'reserved';
 export interface AccountError {
   field: AccountField;
@@ -73,7 +113,16 @@ export function checkAccount(a: Account, others: Account[]): AccountError | null
   if (a.name.toLowerCase() === DEFAULT_ACCOUNT || a.name.toLowerCase() === OWN_ACCOUNT) return fail('name', 'reserved');
   if (rest.some((o) => o.name.toLowerCase() === a.name.toLowerCase())) return fail('name', 'taken');
   if (!hasServer(a.kind)) return null;
-  if (a.baseUrl.length > ACCOUNT_LIMITS.baseUrl || !URL_RE.test(a.baseUrl)) return fail('baseUrl', 'format');
+  // A provider the user adds: https, or http to this computer only. An older account keeps the looser rule it was saved
+  // under (a server on the local network): the config would otherwise drop it at start.
+  if (a.slug ? !isServerUrl(a.baseUrl) : a.baseUrl.length > ACCOUNT_LIMITS.baseUrl || !URL_RE.test(a.baseUrl)) return fail('baseUrl', 'format');
+  if (a.slug) {
+    if (!CUSTOM_SLUG.test(a.slug) || RESERVED_SLUGS.includes(a.slug)) return fail('name', 'reserved');
+    if (rest.some((o) => o.slug === a.slug)) return fail('name', 'taken');
+    if (a.models.length === 0) return fail('models', 'required');
+    if (a.models.length > CUSTOM_MODELS_MAX) return fail('models', 'tooMany');
+    if (a.models.some((m) => !MODEL.test(m))) return fail('models', 'format');
+  }
   // An Anthropic-compatible server maps Claude's names itself: a model is optional there.
   if (!a.model && a.kind === 'openai') return fail('model', 'required');
   if (a.model && !MODEL.test(a.model)) return fail('model', 'format');

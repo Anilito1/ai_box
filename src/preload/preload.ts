@@ -60,6 +60,7 @@ const api: HubApi = {
   disconnectProvider: (provider, method) => ipcRenderer.invoke('providers:disconnect', provider, method),
   installProvider: (provider) => ipcRenderer.invoke('providers:install', provider),
   anthropicAccount: (action, id) => ipcRenderer.invoke('providers:anthropicAccount', action, id),
+  customProvider: (action, draft, key) => ipcRenderer.invoke('providers:custom', action, draft, key),
   saveAccount: (account, key) => ipcRenderer.invoke('accounts:save', account, key),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   checkAccount: (id) => ipcRenderer.invoke('accounts:check', id),

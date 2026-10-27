@@ -42,15 +42,18 @@ const host = (url: string) => {
 };
 
 /** The provider an account belongs to, null for an account none of the blocks stands for (an older, hand-made one). */
-export function providerOfAccount(a: Pick<Account, 'kind' | 'baseUrl'> | typeof DEFAULT_ACCOUNT | 'own'): ProviderId | null {
+export function providerOfAccount(a: (Pick<Account, 'kind' | 'baseUrl'> & Partial<Pick<Account, 'slug'>>) | typeof DEFAULT_ACCOUNT | 'own'): string | null {
   if (typeof a === 'string') return 'anthropic';
   const kind: AccountKind = a.kind;
   if (kind === 'claude' || kind === 'anthropic-key') return 'anthropic';
   if (kind === 'codex') return 'openai';
   if (kind === 'gemini' || kind === 'gemini-key') return 'gemini';
-  if (kind === 'openai') return host(a.baseUrl) === host(OPENAI_URL) ? 'openai' : null;
+  if (kind === 'openai') return a.slug || (host(a.baseUrl) === host(OPENAI_URL) ? 'openai' : null);
   return host(a.baseUrl) === host(DEEPSEEK_URL) ? 'deepseek' : null;
 }
+
+/** An account that stands for a provider the user added (any OpenAI-compatible server), reached through the bridge. */
+export const isCustomAccount = (a: Pick<Account, 'kind' | 'slug'>) => a.kind === 'openai' && a.slug !== '';
 
 /** The method an account of a provider stands for. */
 export function methodOfAccount(a: Pick<Account, 'kind'> | typeof DEFAULT_ACCOUNT | 'own'): ProviderMethod {
@@ -88,10 +91,11 @@ export interface ProviderState {
  * The account a provider's sessions run on, or why there is none: `unknown` provider, `disconnected`. A provider that
  * has not been checked yet is not connected, except Anthropic, whose usual access is there from the start.
  */
-export function resolveProvider(states: Partial<Record<ProviderId, ProviderState>>, id: unknown): { account: string } | { error: 'unknown' | 'disconnected' } {
+export function resolveProvider(states: Record<string, ProviderState>, id: unknown): { account: string } | { error: 'unknown' | 'disconnected' } {
   const key = typeof id === 'string' ? id.trim().toLowerCase() : '';
   const alias: Record<string, ProviderId> = { claude: 'anthropic', codex: 'openai', chatgpt: 'openai', google: 'gemini' };
-  const provider = isProviderId(key) ? key : alias[key];
+  // A provider the user added is known by the state the main process gave it.
+  const provider = isProviderId(key) ? key : Object.hasOwn(alias, key) ? alias[key] : Object.hasOwn(states, key) ? key : undefined;
   if (!provider) return { error: 'unknown' };
   const state = states[provider] ?? (provider === 'anthropic' ? { connected: true, accountId: DEFAULT_ACCOUNT, method: 'cli' as const } : null);
   return state?.connected && state.accountId ? { account: state.accountId } : { error: 'disconnected' };

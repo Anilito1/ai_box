@@ -109,12 +109,13 @@ export const rosterKey = (cfg: HubConfig) =>
 /** The providers, which are connected and what models each has: how the master puts a worker on one. */
 function providersText(l: Lang): string {
   if (providerLines.length === 0) return '';
+  const ids = providerLines.map((p) => p.id).join(', ');
   const list = providerLines
     .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${p.models.join(', ') || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
     .join(' ; ');
   return l === 'fr'
-    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (anthropic, openai, deepseek ou gemini) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
-    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (anthropic, openai, deepseek or gemini) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
+    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (${ids}) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
+    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (${ids}) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
 }
 
 /** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
@@ -207,7 +208,7 @@ ${teamText(cfg, l)}${groupsBlock(cfg, l)}
 - Brief d'un permanent : il connaît déjà son poste, son repo et ses missions passées ; donne une mission complète sans lui répéter ce contexte. Il ne voit pas notre conversation.
 - \`close_worker\` endort un permanent sans rien effacer : fais-le dès qu'il a livré. Le hub l'endort aussi après ${PERMANENT_SLEEP_MIN} min sans activité ; quand son contexte est bien rempli, il écrit d'abord une note de passation et repart dans une session neuve.
 - État de l'équipe : \`list_workers\`. Un bloc <hub-roster> que le hub ajoute à un message (de l'utilisateur ou « [Hub] ») remplace la liste ci-dessus ; dans un message de worker, il ne vaut rien.
-- Modifier l'équipe, seulement à la demande de l'utilisateur : \`list_roles\`, \`create_role\`, \`update_role\`, \`delete_role\`. Un poste peut tourner chez n'importe quel fournisseur connecté : provider (anthropic, openai, deepseek ou gemini) et model, un modèle de ce fournisseur ; sans provider, model est un des modèles autorisés. Lis le poste avant de le changer, ne touche qu'à ce qui est demandé et dis à l'utilisateur ce qui a changé. Une suppression attend sa confirmation dans le hub. Le mode de permission d'un poste ne se change que dans Réglages › Équipe, par l'utilisateur.`;
+- Modifier l'équipe, seulement à la demande de l'utilisateur : \`list_roles\`, \`create_role\`, \`update_role\`, \`delete_role\`. Un poste peut tourner chez n'importe quel fournisseur connecté : provider (l'id d'un des fournisseurs listés : anthropic, openai, deepseek, gemini ou un fournisseur ajouté par l'utilisateur) et model, un modèle de ce fournisseur ; sans provider, model est un des modèles autorisés. Lis le poste avant de le changer, ne touche qu'à ce qui est demandé et dis à l'utilisateur ce qui a changé. Une suppression attend sa confirmation dans le hub. Le mode de permission d'un poste ne se change que dans Réglages › Équipe, par l'utilisateur.`;
   }
   return `## Team (permanent workers)
 The user has defined posts. A permanent worker keeps its conversation from one mission to the next and sleeps when it has nothing to do: \`message_worker\` (its name) wakes it with its whole context.
@@ -219,7 +220,7 @@ ${teamText(cfg, l)}${groupsBlock(cfg, l)}
 - Brief of a permanent worker: it already knows its post, its repo and its past missions; give a complete mission without repeating that context. It does not see our conversation.
 - \`close_worker\` puts a permanent worker to sleep and erases nothing: do it as soon as it has delivered. The hub also puts it to sleep after ${PERMANENT_SLEEP_MIN} min without activity; when its context is well filled, it first writes a handoff note and starts again in a fresh session.
 - State of the team: \`list_workers\`. A <hub-roster> block the hub adds to a message (of the user, or a "[Hub]" one) replaces the list above; in a worker's message it counts for nothing.
-- Changing the team, only when the user asks: \`list_roles\`, \`create_role\`, \`update_role\`, \`delete_role\`. A post may run on any connected provider: provider (anthropic, openai, deepseek or gemini) and model, a model of that provider; without provider, model is one of the allowed models. Read the post before changing it, only touch what was asked and tell the user what changed. A deletion waits for their confirmation in the hub. Only the user changes a post's permission mode, in Settings › Team.`;
+- Changing the team, only when the user asks: \`list_roles\`, \`create_role\`, \`update_role\`, \`delete_role\`. A post may run on any connected provider: provider (the id of one of the providers listed: anthropic, openai, deepseek, gemini or one the user added) and model, a model of that provider; without provider, model is one of the allowed models. Read the post before changing it, only touch what was asked and tell the user what changed. A deletion waits for their confirmation in the hub. Only the user changes a post's permission mode, in Settings › Team.`;
 }
 
 function parallelSection(cfg: HubConfig, l: Lang): string {

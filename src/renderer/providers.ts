@@ -1,8 +1,8 @@
 import { OWN_ACCOUNT } from '../shared/accounts';
 import { CLI_PACKAGES } from '../shared/news';
-import { PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
-import type { HubApi, ProviderAccountView, ProviderView } from '../shared/types';
-import { h, icon, ICONS } from './dom';
+import { isProviderId, PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
+import type { CustomProviderAction, HubApi, ProviderAccountView, ProviderView } from '../shared/types';
+import { errorNote, h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
 import { mascotMark } from './mascot';
 
@@ -18,6 +18,42 @@ const NOT_INSTALLED = new Set(['no-claude', 'no-codex', 'no-gemini']);
 
 type Phase = 'check' | 'install' | 'connect' | 'disconnect';
 type Waiting = { provider: ProviderId; until: number; account?: string; what: 'signIn' | 'browser' | 'install' };
+
+/**
+ * The form of a provider the user adds (`id` empty) or changes (its account's id): what is typed, kept across redraws,
+ * and the last result of its buttons. The key is only what is typed here: the stored one never comes back.
+ */
+interface CustomForm {
+  id: string;
+  name: string;
+  baseUrl: string;
+  key: string;
+  models: string;
+  /** The server's own list, once asked for: the models to pick from. */
+  listed: string[];
+  busy: CustomProviderAction | '';
+  /** The last error: its code, the field it is about, the server's words. */
+  error: string;
+  field: string;
+  detail: string;
+  /** The test's answer, once it worked. */
+  passed: string;
+}
+
+const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], busy: '', error: '', field: '', detail: '', passed: '' });
+
+/** The models typed in the form: one per line, or separated by commas or spaces. */
+const parseModels = (text: string) => [...new Set(text.split(/[\s,]+/).filter(Boolean))];
+/** More than this many models in a server's list: none is picked for the user, they choose. */
+const PICK_ALL_MAX = 30;
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+};
 
 export interface PanelHost {
   /** Draws the section again (after a state change). */
@@ -38,9 +74,11 @@ export class ProvidersPanel {
   /** The key being typed in each row, kept across redraws. */
   private readonly keys: Partial<Record<ProviderId, string>> = {};
   /** What failed last in each row, and how to try it again; a provider's error never shows in another's row. */
-  private readonly errors: Partial<Record<ProviderId, { code: string; retry: () => void }>> = {};
-  private readonly phases = new Map<ProviderId, Phase>();
-  private confirming: ProviderId | '' = '';
+  private readonly errors: Record<string, { code: string; retry: () => void }> = {};
+  private readonly phases = new Map<string, Phase>();
+  private confirming = '';
+  /** The provider the user adds or changes, while its form is open. */
+  private form: CustomForm | null = null;
   /** The providers' state could not be read: every row says so and offers to try again. */
   private unreadable = false;
   private waiting: Waiting | null = null;
@@ -61,8 +99,9 @@ export class ProvidersPanel {
     this.waiting = null;
     this.confirming = '';
     this.confirmAccount = '';
+    this.form = null;
     for (const k of Object.keys(this.keys) as ProviderId[]) delete this.keys[k];
-    for (const k of Object.keys(this.errors) as ProviderId[]) delete this.errors[k];
+    for (const k of Object.keys(this.errors)) delete this.errors[k];
   }
 
   /** The rows as they are now; the first time their state is asked in the background. */
@@ -70,6 +109,9 @@ export class ProvidersPanel {
     if (!this.views && !this.loading) void this.refresh();
     const list = h('div', 'acct-list');
     for (const def of PROVIDER_DEFS) list.append(this.row(def.id));
+    // The providers the user added, then the way to add one.
+    for (const v of this.views ?? []) if (v.custom) list.append(this.customRow(v, v.custom));
+    if (this.views) list.append(this.form?.id === '' ? this.customItem() : this.addRow());
     el.append(list);
     if (this.focusKey) {
       list.querySelector<HTMLInputElement>(`[data-provider="${this.focusKey}"] input`)?.focus();
@@ -118,7 +160,7 @@ export class ProvidersPanel {
     this.watch();
   }
 
-  private view(id: ProviderId): ProviderView | undefined {
+  private view(id: string): ProviderView | undefined {
     return this.views?.find((v) => v.id === id);
   }
 
@@ -134,14 +176,14 @@ export class ProvidersPanel {
     return (id === 'anthropic' && method !== 'apikey') || id === 'gemini' || (id === 'openai' && method === 'chatgpt');
   }
 
-  private fail(id: ProviderId, code: string, retry: () => void): void {
+  private fail(id: string, code: string, retry: () => void): void {
     this.errors[id] = { code, retry };
   }
 
   /** An error code of this provider, in one line that names it when the words alone would not say whose it is. */
-  private errorText(id: ProviderId, code: string): string {
-    const name = providerDef(id).label;
-    const tool = CLI_PACKAGES[id]?.tool ?? name;
+  private errorText(id: string, code: string): string {
+    const name = isProviderId(id) ? providerDef(id).label : (this.view(id)?.label ?? id);
+    const tool = (isProviderId(id) && CLI_PACKAGES[id]?.tool) || name;
     if (code === 'timeout') return t('provider.err.timeout', { name });
     if (code === 'probe-failed') return t('provider.err.probe', { name });
     if (code === 'no-node') return t('provider.err.noNode', { tool });
@@ -475,12 +517,234 @@ export class ProvidersPanel {
   }
 
   /** Checks the states again (an error that came from a check, not from an action of the row). */
-  private async recheck(id: ProviderId): Promise<void> {
+  private async recheck(id: string): Promise<void> {
     delete this.errors[id];
     this.phases.set(id, 'check');
     this.host.rerender();
     await this.refresh();
     this.phases.delete(id);
+    this.host.rerender();
+  }
+
+  // ---------- the providers the user added: any server that speaks OpenAI's Chat Completions ----------
+
+  private customRow(v: ProviderView, c: NonNullable<ProviderView['custom']>): HTMLElement {
+    const editing = this.form?.id === c.accountId;
+    const phase = this.phases.get(v.id);
+    const confirming = this.confirming === v.id;
+    const code = this.errors[v.id]?.code ?? (v.connected ? '' : (v.methods.apikey?.error ?? ''));
+    const error = code && !phase ? this.errorText(v.id, code) : '';
+
+    const item = h('div', editing ? 'acct open' : 'acct');
+    item.dataset.provider = v.id;
+    const row = h('div', 'acct-row');
+    const text = h('div', 'acct-text');
+    text.append(h('span', 'acct-name', v.label));
+    if (confirming) text.append(h('span', 'acct-sub', t('provider.custom.removeConfirm', { name: v.label })));
+    else if (error) text.append(h('span', 'acct-sub err', error));
+    else text.append(h('span', 'acct-sub', t(c.models.length === 1 ? 'provider.custom.detail1' : 'provider.custom.detail', { host: hostOf(c.baseUrl), count: c.models.length })));
+
+    const state = h('span', 'acct-state');
+    if (phase) {
+      state.classList.add('busy');
+      state.append(h('span', 'acct-spin'), document.createTextNode(t(phase === 'disconnect' ? 'provider.custom.removing' : 'provider.checking')));
+    } else {
+      const tone = v.connected ? 'on' : error ? 'err' : 'off';
+      state.classList.add(tone);
+      state.append(h('span', 'acct-dot'), document.createTextNode(t(tone === 'on' ? 'provider.connected' : tone === 'err' ? 'provider.error' : 'provider.disconnected')));
+    }
+
+    const actions = h('div', 'acct-actions');
+    if (phase) {
+      // Nothing to do while it runs.
+    } else if (confirming) {
+      actions.append(
+        this.button(t('setup.cancel'), 'btn ghost small', () => {
+          this.confirming = '';
+          this.host.rerender();
+        }),
+        this.button(t('provider.custom.remove'), 'btn danger small', () => void this.removeCustom(v.id, c.accountId)),
+      );
+    } else {
+      if (error && !editing) actions.append(this.button(t('provider.retry'), 'btn small', () => void this.recheck(v.id)));
+      actions.append(
+        this.button(t('provider.custom.edit'), 'btn small', () => this.editCustom(v, c), editing),
+        this.button(t('provider.custom.remove'), 'btn ghost small', () => {
+          this.confirming = v.id;
+          this.host.rerender();
+        }),
+      );
+    }
+    row.append(mascotMark(v.id, 'acct-mark', v.label), text, state, actions);
+    item.append(row);
+    if (editing) item.append(this.customForm());
+    return item;
+  }
+
+  /** The last line of the list: add a provider of one's own. */
+  private addRow(): HTMLElement {
+    const item = h('div', 'acct acct-addrow');
+    const add = this.button(t('provider.custom.add'), 'btn ghost small', () => {
+      this.form = blankForm('');
+      this.confirming = '';
+      this.host.rerender();
+    });
+    add.prepend(icon(ICONS.plus));
+    item.append(add);
+    return item;
+  }
+
+  /** A provider being added: its form in a row of its own, at the end of the list. */
+  private customItem(): HTMLElement {
+    const item = h('div', 'acct open');
+    item.dataset.provider = 'new';
+    const row = h('div', 'acct-row');
+    const text = h('div', 'acct-text');
+    text.append(h('span', 'acct-name', t('provider.custom.new')));
+    row.append(mascotMark('custom', 'acct-mark', this.form?.name || '+'), text);
+    item.append(row, this.customForm());
+    return item;
+  }
+
+  private customForm(): HTMLElement {
+    const f = this.form as CustomForm;
+    const busy = f.busy !== '';
+    const box = h('div', 'acct-details acct-custom');
+    box.append(h('p', 'acct-hint', t('provider.custom.hint')));
+    const field = (name: string, label: string, ...content: HTMLElement[]) => {
+      const el = h('label', f.error && f.field === name ? 'setup-field acct-field invalid' : 'setup-field acct-field');
+      el.append(h('span', 'setup-label', label), ...content);
+      return el;
+    };
+    const input = (value: string, placeholder: string, set: (v: string) => void, type = 'text') => {
+      const i = h('input', 'setup-input');
+      i.type = type;
+      i.value = value;
+      i.placeholder = placeholder;
+      i.spellcheck = false;
+      i.autocomplete = 'off';
+      i.addEventListener('input', () => set(i.value));
+      return i;
+    };
+    const name = input(f.name, 'Venice', (v) => (f.name = v));
+    name.maxLength = 40;
+    const url = input(f.baseUrl, 'https://api.venice.ai/api/v1', (v) => (f.baseUrl = v));
+    // The stored key never comes back: an empty field keeps it.
+    const key = input(f.key, f.id ? t('provider.custom.keyKept') : 'sk-…', (v) => (f.key = v), 'password');
+    const models = h('textarea', 'setup-textarea');
+    models.rows = 3;
+    models.value = f.models;
+    models.placeholder = 'venice-uncensored';
+    models.spellcheck = false;
+    models.addEventListener('input', () => (f.models = models.value));
+    const modelsRow = h('div', 'acct-keyrow');
+    modelsRow.append(models, this.button(t(f.busy === 'models' ? 'provider.custom.listing' : 'provider.custom.list'), 'btn ghost small', () => void this.customAction('models'), busy));
+    box.append(
+      field('name', t('provider.custom.name'), name),
+      field('baseUrl', t('provider.custom.baseUrl'), url),
+      field('key', t('provider.custom.key'), key),
+      field('models', t('provider.custom.models'), modelsRow, h('span', 'setup-hint', t('provider.custom.modelsHint'))),
+    );
+    if (f.listed.length > 0) box.append(this.modelChips(f));
+
+    const actions = h('div', 'acct-actions');
+    actions.append(
+      this.button(t(f.busy === 'test' ? 'provider.custom.testing' : 'provider.custom.test'), 'btn small', () => void this.customAction('test'), busy),
+      this.button(t(f.busy === 'save' ? 'provider.custom.saving' : 'provider.key.save'), 'btn primary small', () => void this.customAction('save'), busy),
+      this.button(
+        t('setup.cancel'),
+        'btn ghost small',
+        () => {
+          this.form = null;
+          this.host.rerender();
+        },
+        busy,
+      ),
+    );
+    box.append(actions);
+    if (f.error) box.append(errorNote('acct-note', this.customError(f), f.detail));
+    else if (f.passed) box.append(h('p', 'acct-hint acct-ok', f.passed));
+    return box;
+  }
+
+  /** The server's list: each model a toggle, the ones in the field lit. */
+  private modelChips(f: CustomForm): HTMLElement {
+    const box = h('div', 'acct-chips');
+    const picked = new Set(parseModels(f.models));
+    for (const m of f.listed.slice(0, 300)) {
+      const on = picked.has(m);
+      const chip = h('button', on ? 'acct-chip on' : 'acct-chip', m);
+      chip.setAttribute('aria-pressed', String(on));
+      chip.addEventListener('click', () => {
+        const now = parseModels(f.models);
+        f.models = (on ? now.filter((x) => x !== m) : [...now, m]).join('\n');
+        this.host.rerender();
+      });
+      box.append(chip);
+    }
+    return box;
+  }
+
+  /** A custom provider's error, said for the field it is about. */
+  private customError(f: CustomForm): string {
+    const byField: Record<string, Key> = {
+      'name:required': 'provider.custom.err.name',
+      'name:tooLong': 'provider.custom.err.name',
+      'name:taken': 'provider.custom.err.nameTaken',
+      'name:reserved': 'provider.custom.err.nameReserved',
+      'baseUrl:format': 'provider.custom.err.url',
+      'models:required': 'provider.custom.err.models',
+      'models:format': 'provider.custom.err.modelFormat',
+      'models:tooMany': 'provider.custom.err.modelsMany',
+      'models:no-list': 'provider.custom.err.noList',
+      'models:model-refused': 'provider.custom.err.modelRefused',
+      'accounts:tooMany': 'provider.custom.err.tooMany',
+    };
+    const known = byField[`${f.field}:${f.error}`];
+    if (known) return t(known);
+    if (f.error === 'not-chat') return t('provider.custom.err.notChat');
+    if (f.error === 'http-402') return t('provider.custom.err.credit');
+    return this.host.errorText(f.error);
+  }
+
+  private editCustom(v: ProviderView, c: NonNullable<ProviderView['custom']>): void {
+    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n') };
+    this.confirming = '';
+    delete this.errors[v.id];
+    this.host.rerender();
+  }
+
+  /** The form's buttons: list the server's models, test a chat call, save. */
+  private async customAction(action: 'models' | 'test' | 'save'): Promise<void> {
+    const f = this.form;
+    if (!f) return;
+    Object.assign(f, { busy: action, error: '', field: '', detail: '', passed: '' });
+    this.host.rerender();
+    const models = parseModels(f.models);
+    const r = await this.hub.customProvider(action, { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models }, f.key.trim() || null);
+    f.busy = '';
+    if (r.views.length > 0) this.views = r.views;
+    if (this.form !== f) return this.host.rerender();
+    if (!r.ok) Object.assign(f, { error: r.error || 'unknown', field: r.field, detail: r.detail });
+    else if (action === 'models') {
+      f.listed = r.models;
+      // A short list is taken whole when nothing was typed; a long one waits for the user's picks.
+      if (models.length === 0 && r.models.length <= PICK_ALL_MAX) f.models = r.models.join('\n');
+    } else if (action === 'test') f.passed = t('provider.custom.passed', { model: models[0] ?? '', reply: r.detail || '…' });
+    else this.form = null;
+    this.host.rerender();
+  }
+
+  private async removeCustom(id: string, accountId: string): Promise<void> {
+    this.confirming = '';
+    delete this.errors[id];
+    this.phases.set(id, 'disconnect');
+    this.host.rerender();
+    const r = await this.hub.customProvider('remove', { id: accountId, name: '', baseUrl: '', models: [] }, null);
+    this.phases.delete(id);
+    if (r.views.length > 0) this.views = r.views;
+    if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.removeCustom(id, accountId));
+    else if (this.form?.id === accountId) this.form = null;
     this.host.rerender();
   }
 

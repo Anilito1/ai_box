@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { ACCOUNT_ID, isLocalUrl } from '../shared/accounts';
 import type { Account, AccountStatus } from '../shared/types';
+import { adjustRequest, errorMessage } from './bridgeFormat';
 import { errorCode, httpCode } from './errors';
 
 // The accounts' side of the main process: the Claude Code folder of each Claude account, the environment that puts
@@ -182,12 +183,19 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
   const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
   if (!key && !isLocalUrl(baseUrl)) return { ...none, error: 'no-key' };
   try {
+    // The key goes to this address only: a redirect is refused, not followed.
     const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
       headers: key ? { authorization: `Bearer ${key}` } : {},
+      redirect: 'error',
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return { ...none, error: httpCode(res.status) };
-    const body = (await res.json().catch(() => ({}))) as { data?: { id?: unknown }[] };
+    let body: { data?: { id?: unknown }[] } = {};
+    try {
+      body = (JSON.parse(await readCapped(res, 8 * 1024 * 1024)) as typeof body | null) ?? {};
+    } catch {
+      // Not a list: no models.
+    }
     const models = (body.data ?? [])
       .map((m) => m.id)
       .filter((id): id is string => typeof id === 'string')
@@ -196,6 +204,68 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
     return { ready: true, detail: '', error: '', models };
   } catch (err) {
     return { ...none, error: errorCode(err) };
+  }
+}
+
+/** A response's text, at most `max` bytes whatever its Content-Length says: a server cannot flood the main process. */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+    if (size >= max) {
+      await reader.cancel();
+      break;
+    }
+  }
+  return Buffer.concat(chunks).toString('utf8').slice(0, max);
+}
+
+/**
+ * Checks a provider the user added with its model list. A server without one (404, 405, 501) is ready all the same,
+ * unchecked: its key shows at the first request. A refused key or an unreachable server is an error.
+ */
+export async function checkCustom(baseUrl: string, key: string): Promise<AccountStatus> {
+  const st = await checkOpenAI(baseUrl, key);
+  return !st.ready && /^http-(404|405|501)$/.test(st.error) ? { ready: true, detail: 'unchecked', error: '', models: [] } : st;
+}
+
+/**
+ * A short chat call to one model of an OpenAI-compatible server, the way the bridge makes them: ok with the first
+ * words of the reply, or an error code and the server's own words, the key masked out of them.
+ */
+export async function testChat(baseUrl: string, key: string, model: string): Promise<{ ok: boolean; error: string; detail: string }> {
+  const mask = (text: string) => (key ? text.split(key).join('••••') : text).slice(0, 300);
+  const body: Record<string, unknown> = { model, messages: [{ role: 'user', content: 'Reply with the single word OK.' }], max_tokens: 64, stream: false };
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
+  try {
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(60_000) });
+      const text = await readCapped(res, 1024 * 1024);
+      if (!res.ok) {
+        const { message } = errorMessage(text);
+        // A parameter this server does not take (max_tokens on a reasoning model): left out, asked again.
+        if (attempt < 3 && adjustRequest(body, res.status, message)) continue;
+        return { ok: false, error: httpCode(res.status), detail: mask(message) };
+      }
+      let choices: unknown;
+      try {
+        choices = (JSON.parse(text) as { choices?: unknown } | null)?.choices;
+      } catch {
+        // Not JSON: a web page, a proxy's answer.
+      }
+      if (!Array.isArray(choices)) return { ok: false, error: 'not-chat', detail: mask(text) };
+      const content = (choices[0] as { message?: { content?: unknown } } | undefined)?.message?.content;
+      const reply = typeof content === 'string' ? content : '';
+      return { ok: true, error: '', detail: mask(reply.replace(/\s+/g, ' ').trim()).slice(0, 80) };
+    }
+  } catch (err) {
+    return { ok: false, error: errorCode(err), detail: '' };
   }
 }
 

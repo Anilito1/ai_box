@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { after, before, test } from 'node:test';
 
 const { Bridge } = await import('./bridge');
@@ -155,4 +155,54 @@ test('count_tokens and models answer without the server', async () => {
     assert.deepEqual(list.data.map((d) => d.id), ['gpt-test', 'gpt-mini']);
     assert.equal(seen.length, 0);
   });
+});
+
+test('one bridge, several servers: each account reaches its own base URL with its own key, never a redirect elsewhere', async () => {
+  const hits: { server: string; path: string; auth: string }[] = [];
+  const serve = (name: string, answer?: (res: ServerResponse) => void) =>
+    createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        hits.push({ server: name, path: req.url ?? '', auth: String(req.headers.authorization ?? '') });
+        if (answer) return answer(res);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ model: 'm', choices: [{ finish_reason: 'stop', message: { content: `from ${name}` } }] }));
+      });
+    });
+  const listen = async (s: Server) => {
+    await new Promise<void>((resolve) => s.listen(0, '127.0.0.1', () => resolve()));
+    const address = s.address();
+    return `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  };
+  const elsewhere = serve('elsewhere');
+  const venice = serve('venice');
+  const elsewhereUrl = await listen(elsewhere);
+  const redirecting = serve('redirecting', (res) => {
+    res.writeHead(307, { location: `${elsewhereUrl}/v1/chat/completions` });
+    res.end();
+  });
+  const accounts: Record<string, { baseUrl: string; key: string; model: string; smallModel: string }> = {
+    'a-ven00001': { baseUrl: `${await listen(venice)}/api/v1`, key: 'key-venice', model: 'venice-uncensored', smallModel: '' },
+    'a-red00001': { baseUrl: `${await listen(redirecting)}/v1`, key: 'key-redirect', model: 'm', smallModel: '' },
+  };
+  const b = new Bridge((id) => accounts[id] ?? null);
+  await b.start();
+  try {
+    const ask = { model: 'claude-sonnet-4-5', max_tokens: 20, messages: [{ role: 'user', content: 'Hello' }] };
+    const r = await post(b, ask, b.token(), 'a-ven00001');
+    assert.equal(r.status, 200);
+    assert.deepEqual(((await r.json()) as { content: unknown }).content, [{ type: 'text', text: 'from venice' }]);
+    assert.deepEqual(hits, [{ server: 'venice', path: '/api/v1/chat/completions', auth: 'Bearer key-venice' }]);
+    hits.length = 0;
+    const r2 = await post(b, ask, b.token(), 'a-red00001');
+    assert.equal(r2.ok, false);
+    assert.deepEqual(
+      hits.map((h) => h.server),
+      ['redirecting'],
+      'the key never follows a redirect to another server',
+    );
+  } finally {
+    b.stop();
+    for (const s of [elsewhere, venice, redirecting]) s.close();
+  }
 });

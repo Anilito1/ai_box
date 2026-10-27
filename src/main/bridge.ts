@@ -142,7 +142,8 @@ export class Bridge {
 
     let upstream: Response | null = null;
     for (let attempt = 0; attempt <= ADJUST_MAX; attempt++) {
-      upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(chat), signal: abort.signal });
+      // The account's key goes to its own server only: a redirect is refused, not followed.
+      upstream = await fetch(url, { method: 'POST', headers, body: JSON.stringify(chat), redirect: 'error', signal: abort.signal });
       if (upstream.ok) break;
       const text = await upstream.text();
       const { message, code } = errorMessage(text);

@@ -25,8 +25,10 @@ interface RoleTools {
 }
 
 const CODEX = "a-cdx00001";
+const VENICE = "a-ven00001";
 
-function hub() {
+/** `custom`: with a provider the user added, Venice. */
+function hub(custom = false) {
   const dir = mkdtempSync(join(tmpdir(), "hub-roles-"));
   const work = join(dir, "work");
   mkdirSync(work);
@@ -40,8 +42,25 @@ function hub() {
       baseUrl: "",
       model: "",
       smallModel: "",
+      slug: "",
+      models: [],
       isolated: true,
     },
+    ...(custom
+      ? [
+          {
+            id: VENICE,
+            kind: "openai" as const,
+            name: "Venice",
+            baseUrl: "https://api.venice.ai/api/v1",
+            model: "venice-uncensored",
+            smallModel: "",
+            slug: "venice",
+            models: ["venice-uncensored", "llama-3.3-70b"],
+            isolated: false,
+          },
+        ]
+      : []),
   ];
   const m = new SessionManager({
     cfg,
@@ -55,8 +74,23 @@ function hub() {
     costLog: {} as CostLog,
     capabilities: async () => "",
   });
+  if (custom)
+    m.setCatalog(
+      VENICE,
+      ["venice-uncensored", "llama-3.3-70b"].map((value) => ({
+        value,
+        displayName: value,
+        description: "",
+        efforts: [],
+      })),
+    );
   m.setProviderStates({
     openai: { connected: true, accountId: CODEX, method: "chatgpt" },
+    ...(custom
+      ? {
+          venice: { connected: true, accountId: VENICE, method: "apikey" as const },
+        }
+      : {}),
   });
   m.setCatalog(CODEX, [
     {
@@ -194,6 +228,47 @@ test("an Anthropic post works as before, and moving it keeps a model only where 
       [post("api").account, post("api").model],
       ["default", "sonnet"],
     );
+  } finally {
+    done();
+  }
+});
+
+test("a provider the user added is one like the others: a post runs there, the master reads it", async () => {
+  const { cfg, work, tools, post, done } = hub(true);
+  try {
+    const text = await tools.createRole(
+      {
+        name: "writer",
+        description: "Writes",
+        folders: [work],
+        provider: "Venice",
+        model: "llama-3.3-70b",
+      },
+      signal,
+    );
+    assert.deepEqual(
+      [post("writer").account, post("writer").model],
+      [VENICE, "llama-3.3-70b"],
+    );
+    assert.match(text, /provider venice · model llama-3\.3-70b/);
+    const roster = rosterBlock(cfg, "en");
+    assert.match(roster, /writer .* provider venice, model llama-3\.3-70b/);
+    assert.ok(
+      roster.includes(
+        "venice (Venice · connected · models: venice-uncensored, llama-3.3-70b)",
+      ),
+    );
+    assert.ok(
+      roster.includes(
+        "spawn_worker or message_worker (anthropic, openai, deepseek, gemini, venice)",
+      ),
+    );
+    await assert.rejects(
+      tools.updateRole({ name: "writer", provider: "venice", model: "gpt-6-astra" }, signal),
+      /gpt-6-astra/,
+    );
+    await tools.updateRole({ name: "writer", provider: "openai" }, signal);
+    assert.deepEqual([post("writer").account, post("writer").model], [CODEX, ""]);
   } finally {
     done();
   }

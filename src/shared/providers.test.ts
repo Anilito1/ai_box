@@ -35,6 +35,16 @@ test('a provider is asked for by its id or the name of its program; only a conne
   assert.equal(isProviderId('anthropic') && !isProviderId('claude'), true);
 });
 
+test('a provider the user added: known by its id once the main process gave it a state', () => {
+  assert.equal(providerOfAccount({ kind: 'openai', baseUrl: 'https://api.venice.ai/api/v1', slug: 'venice' }), 'venice');
+  assert.equal(providerOfAccount({ kind: 'openai', baseUrl: 'https://api.openai.com/v1', slug: 'my-openai' }), 'my-openai', 'not taken for OpenAI’s own block');
+  const states = { venice: { connected: true, accountId: 'a-ven00001', method: 'apikey' as const }, groq: { connected: false, accountId: '', method: '' as const } };
+  assert.deepEqual(resolveProvider(states, ' Venice '), { account: 'a-ven00001' });
+  assert.deepEqual(resolveProvider(states, 'groq'), { error: 'disconnected' });
+  assert.deepEqual(resolveProvider(states, 'constructor'), { error: 'unknown' }, 'only its own states, nothing inherited');
+  assert.deepEqual(resolveProvider({}, 'venice'), { error: 'unknown' });
+});
+
 test('DeepSeek’s models are asked for through the names its endpoint maps', () => {
   assert.equal(deepseekAlias('deepseek-v4-pro'), 'opus');
   assert.equal(deepseekAlias('deepseek-v4-flash'), 'sonnet');

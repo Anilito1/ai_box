@@ -663,7 +663,7 @@ export class ChatView {
       const p = this.providers.find((x) => x.id === id);
       if (!p?.connected || looked.has(id)) return;
       looked.set(id, p.news.models);
-      if (p.news.unseen) this.hub.ackNews(p.id);
+      if (p.news.unseen && isProviderId(p.id)) this.hub.ackNews(p.id);
     };
     openMenu(this.modelBtn, (menu, close) => {
       const draw = () => {
@@ -676,7 +676,7 @@ export class ChatView {
         const tabs = h('div', 'segmented provider-tabs');
         for (const p of this.providers) {
           const b = h('button', p.id === tab ? 'seg active' : 'seg');
-          b.append(mascotMark(p.id, 'seg-pic'), p.label);
+          b.append(mascotMark(p.id, 'seg-pic', p.label), p.label);
           b.classList.toggle('off', !p.connected);
           b.title = p.connected ? '' : t('chat.providerOff');
           if (p.connected && p.id !== tab && !looked.has(p.id) && p.news.unseen) {

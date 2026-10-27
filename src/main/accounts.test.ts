@@ -16,10 +16,10 @@ mkdirSync(join(base, 'skills'));
 process.env.CLAUDE_CONFIG_DIR = base;
 after(() => rmSync(root, { recursive: true, force: true }));
 
-const { accountDir, accountEnv, checkAnthropicCompatible, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } = await import('./accounts');
+const { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir, testChat } = await import('./accounts');
 const { createServer } = await import('node:http');
 type Account = import('../shared/types').Account;
-const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '', isolated: false };
+const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '', slug: '', models: [], isolated: false };
 
 test('a Claude account folder shares everything but its sign-in', () => {
   const dir = accountDir(data, claude.id);
@@ -112,6 +112,54 @@ test('checkAnthropicCompatible: a refused key is refused; a server without a mod
     assert.deepEqual(await checkAnthropicCompatible(url, 'k'), { ready: true, detail: 'unchecked', error: '', models: [] });
     // No key: only a server on this computer may go without.
     assert.equal((await checkAnthropicCompatible('https://example.invalid/anthropic', '')).error, 'no-key');
+  } finally {
+    server.close();
+  }
+});
+
+test('a provider the user added: checked with its list, tested with a short chat call, its key masked out of any error', async () => {
+  const KEY = 'fake-test-key-0123456789';
+  const asked: { path: string; auth: string; body: Record<string, unknown> }[] = [];
+  let answer: (body: Record<string, unknown>) => { status: number; body: unknown } = () => ({ status: 200, body: { data: [{ id: 'venice-uncensored' }] } });
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<string, unknown>;
+      asked.push({ path: req.url ?? '', auth: String(req.headers.authorization ?? ''), body });
+      const a = answer(body);
+      res.writeHead(a.status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(a.body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as { port: number };
+  const url = `http://127.0.0.1:${port}/api/v1`;
+  try {
+    assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: '', error: '', models: ['venice-uncensored'] });
+    assert.deepEqual(asked[0], { path: '/api/v1/models', auth: `Bearer ${KEY}`, body: {} });
+    answer = () => ({ status: 404, body: {} });
+    assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: 'unchecked', error: '', models: [] }, 'no list: accepted, unchecked');
+    answer = () => ({ status: 401, body: { error: { message: 'bad key' } } });
+    assert.equal((await checkCustom(url, KEY)).error, 'unauthorized');
+
+    // The test: a server that refuses max_tokens is asked again the way it wants, like the bridge does.
+    asked.length = 0;
+    answer = (body) =>
+      'max_tokens' in body
+        ? { status: 400, body: { error: { message: "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead." } } }
+        : { status: 200, body: { choices: [{ message: { content: '  OK \n' } }] } };
+    assert.deepEqual(await testChat(url, KEY, 'venice-uncensored'), { ok: true, error: '', detail: 'OK' });
+    assert.deepEqual(asked.map((a) => a.path), ['/api/v1/chat/completions', '/api/v1/chat/completions']);
+    assert.equal(asked[1].body.model, 'venice-uncensored');
+    assert.equal(asked[1].body.max_completion_tokens, 64);
+    answer = () => ({ status: 401, body: { error: { message: `Invalid key ${KEY}` } } });
+    const refused = await testChat(url, KEY, 'venice-uncensored');
+    assert.deepEqual([refused.ok, refused.error], [false, 'unauthorized']);
+    assert.ok(!refused.detail.includes(KEY) && refused.detail.includes('Invalid key'), 'the key never comes back in the words shown');
+    answer = () => ({ status: 200, body: 'not a chat' });
+    assert.equal((await testChat(url, KEY, 'x')).error, 'not-chat', 'a 200 that is no chat answer');
+    assert.equal((await testChat('http://127.0.0.1:1/v1', KEY, 'x')).error, 'network');
   } finally {
     server.close();
   }

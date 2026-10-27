@@ -125,6 +125,10 @@ export interface Account {
   baseUrl: string;
   model: string;
   smallModel: string;
+  /** openai only: the id of a provider the user added ("venice"), empty for any other account. Never changes. */
+  slug: string;
+  /** A provider the user added: the models its sessions pick from, the first being the default. */
+  models: string[];
   /** codex only: signed in in a Codex folder of the hub's own (true), or the one the user's Codex already uses (false). */
   isolated: boolean;
 }
@@ -134,8 +138,8 @@ export interface AccountBadge {
   id: string;
   name: string;
   kind: AccountKind | 'default';
-  /** The provider block it belongs to, empty for an older account none of them stands for. */
-  provider: ProviderId | '';
+  /** The provider block it belongs to (a built-in one, or the slug of one the user added), empty for an older account none of them stands for. */
+  provider: string;
   /** Epoch seconds when the account's limit ends, while it is limited. */
   limitedUntil: number | null;
   /** Its sessions run the account's own model: the model menu has nothing to pick. */
@@ -435,7 +439,8 @@ export interface HubSnapshot {
 
 /** What the composer and the post editor show of a provider. */
 export interface ProviderBadge {
-  id: ProviderId;
+  /** A built-in provider, or the slug of one the user added. */
+  id: string;
   label: string;
   connected: boolean;
   /** The account its sessions run on ("default" for Anthropic), empty when not connected. */
@@ -482,7 +487,8 @@ export interface ProviderResult {
 
 /** A provider's block in Settings › Accounts. */
 export interface ProviderView {
-  id: ProviderId;
+  /** A built-in provider, or the slug of one the user added. */
+  id: string;
   label: string;
   connected: boolean;
   /** The method that is connected (the first when several are), else empty. */
@@ -492,6 +498,23 @@ export interface ProviderView {
   methods: Partial<Record<ProviderMethod, MethodView>>;
   /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
   cli: { found: boolean; version: string; outdated: boolean } | null;
+  /** A provider the user added: what its form shows again. Its key never comes back. */
+  custom?: { accountId: string; baseUrl: string; models: string[] };
+}
+
+/** A provider the user adds or changes in Settings › Accounts: any server that speaks OpenAI's Chat Completions. */
+export interface CustomProviderDraft {
+  /** The account behind it, empty for a new one. */
+  id: string;
+  name: string;
+  baseUrl: string;
+  models: string[];
+}
+export type CustomProviderAction = 'models' | 'test' | 'save' | 'remove';
+/** What a custom provider's action answers: `models`, the server's list; `detail`, the server's own words behind an error (the key masked). */
+export interface CustomProviderResult extends ProviderResult {
+  models: string[];
+  detail: string;
 }
 
 /**
@@ -734,6 +757,11 @@ export interface HubApi {
   installProvider(provider: ProviderId): Promise<ProviderResult & { opened: boolean }>;
   /** Anthropic's accounts: use one (make it the active one), add one, sign one in again, remove one. */
   anthropicAccount(action: 'use' | 'add' | 'login' | 'remove', id: string): Promise<ProviderResult & { opened: boolean }>;
+  /**
+   * A provider the user adds: list its models, test a short chat call, save it, remove it. `key`: the typed key, or
+   * null for the stored one (used only while the address stays the same).
+   */
+  customProvider(action: CustomProviderAction, draft: CustomProviderDraft, key: string | null): Promise<CustomProviderResult>;
   /**
    * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
    * '' to remove it. A key is checked with its service first; `field` names the field refused.

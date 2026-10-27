@@ -17,10 +17,10 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
-import { ACCOUNTS_MAX, canonAccount, checkAccount, isAccountRef, isLocalUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
+import { ACCOUNTS_MAX, canonAccount, checkAccount, CUSTOM_SLUG, customSlug, isAccountRef, isLocalUrl, isServerUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
 import { APP_ID } from '../shared/brand';
 import { capabilitiesText } from '../shared/capabilities';
-import { DEEPSEEK_URL, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
+import { DEEPSEEK_URL, isCustomAccount, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
 import { brewPackage, type CliUpdate } from '../shared/news';
 import {
@@ -31,6 +31,8 @@ import {
   IMAGE_TYPES,
   type Account,
   type AccountStatus,
+  type CustomProviderAction,
+  type CustomProviderResult,
   type ChatItem,
   type CodexCli,
   type MethodView,
@@ -49,7 +51,7 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
-import { accountDir, accountEnv, checkAnthropicCompatible, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir } from './accounts';
+import { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir, testChat } from './accounts';
 import { agentFiles } from './agents';
 import { CapabilityStore } from './capabilities';
 import { Bridge, type BridgeAccount } from './bridge';
@@ -404,7 +406,8 @@ class Hub {
     this.codex = (await codexExecutable(this.cfg.codexPath)) || this.codex;
     this.gemini = (await geminiExecutable()) || this.gemini;
     const claudeAccounts = this.cfg.accounts.filter((a) => a.kind === 'claude');
-    const [claude, codexVersionText, chatgpt, apikey, deepseek, geminiVersionText, google, geminiKey, others] = await Promise.all([
+    const customs = this.cfg.accounts.filter(isCustomAccount);
+    const [claude, codexVersionText, chatgpt, apikey, deepseek, geminiVersionText, google, geminiKey, others, customViews] = await Promise.all([
       claudeStatus(this.cfg, this.mgr.environment(OWN_ACCOUNT)),
       codexVersion(this.codex, this.mgr.toolEnv()),
       method(this.managed('openai', 'chatgpt')),
@@ -414,6 +417,7 @@ class Hub {
       method(this.managed('gemini', 'google')),
       method(this.managed('gemini', 'apikey'), true),
       Promise.all(claudeAccounts.map((a) => claudeStatus(this.cfg, this.mgr.environment(a.id)))),
+      Promise.all(customs.map((a) => method(a, true))),
     ]);
     this.executable = claude.executable || this.executable;
     // Ultracode is offered by the plan of each Claude Code sign-in, and by the Claude Code installed.
@@ -470,8 +474,18 @@ class Hub {
         methods: { google, apikey: geminiKey },
         cli: { found: this.gemini !== '', version: geminiVersionText, outdated: geminiVersionText !== '' && !versionAtLeast(geminiVersionText, GEMINI_MIN_VERSION) },
       },
+      // The providers the user added, each an OpenAI-compatible server behind the bridge.
+      ...customs.map((a, i) => ({
+        id: a.slug,
+        label: a.name,
+        connected: customViews[i].connected,
+        method: customViews[i].connected ? ('apikey' as const) : ('' as const),
+        methods: { apikey: customViews[i] },
+        cli: null,
+        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models },
+      })),
     ];
-    const states: Partial<Record<ProviderId, ProviderState>> = {
+    const states: Record<string, ProviderState> = {
       anthropic: { connected: anthropicOn, accountId: 'default', method: anthropicOn ? (viaKey ? 'apikey' : 'cli') : '' },
       openai: chatgpt.connected
         ? { connected: true, accountId: this.managed('openai', 'chatgpt')?.id ?? '', method: 'chatgpt' }
@@ -485,6 +499,7 @@ class Hub {
           ? { connected: true, accountId: this.managed('gemini', 'apikey')?.id ?? '', method: 'apikey' }
           : { connected: false, accountId: '', method: '' },
     };
+    customs.forEach((a, i) => (states[a.slug] = customViews[i].connected ? { connected: true, accountId: a.id, method: 'apikey' } : { connected: false, accountId: '', method: '' }));
     this.mgr.setProviderStates(states);
     // What is new at the connected providers (models, program versions): told in the background, never holds the views back.
     void this.news
@@ -562,6 +577,52 @@ class Hub {
     const existing = this.managed('openai', 'apikey');
     const r = await this.saveAccount({ id: existing?.id ?? '', kind: 'openai', name: MANAGED_NAMES.openaiKey, baseUrl: OPENAI_URL, model: existing?.model || model, smallModel: '', isolated: false }, typed);
     return out({ ok: r.ok, error: r.error, field: r.field === 'baseUrl' || r.field === 'model' ? 'key' : r.field });
+  }
+
+  /**
+   * A provider the user added (any OpenAI-compatible server): its model list read, a short chat call tested, saved,
+   * removed. Its key is stored like every other one and never goes back to the renderer.
+   */
+  async customProvider(action: CustomProviderAction, raw: unknown, key: unknown): Promise<CustomProviderResult> {
+    // Listing and testing leave the blocks as they are: only a save or a removal checks them again.
+    const out = async (r: { ok: boolean; error: string; field?: string; models?: string[]; detail?: string }, views = false) => ({
+      ok: r.ok,
+      error: r.error,
+      field: r.field ?? '',
+      models: r.models ?? [],
+      detail: r.detail ?? '',
+      views: views ? await this.providerViews() : [],
+    });
+    const d = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const before = this.cfg.accounts.find((a) => a.id === d.id && isCustomAccount(a));
+    if (action === 'remove') {
+      if (!before) return out({ ok: true, error: '' }, true);
+      const r = await this.deleteAccount(before.id);
+      return out({ ok: r.ok, error: r.error }, true);
+    }
+    const slug = before?.slug ?? customSlug(isStr(d.name) ? d.name : '', this.cfg.accounts.map((a) => a.slug).filter(Boolean));
+    const draft = normalizeAccount({ id: before?.id ?? '', kind: 'openai', name: d.name, baseUrl: d.baseUrl, models: d.models, slug, isolated: false });
+    const typed = isStr(key) ? key.trim() : '';
+    if (action === 'save') {
+      const r = await this.saveAccount(draft, typed || null);
+      return out({ ok: r.ok, error: r.error, field: r.field }, r.ok);
+    }
+    if (!isServerUrl(draft.baseUrl)) return out({ ok: false, error: 'format', field: 'baseUrl' });
+    if (typed && !isOpenAIKey(typed)) return out({ ok: false, error: 'format', field: 'key' });
+    // The stored key goes to the address it was given for, never to another one typed since.
+    const k = typed || (before && before.baseUrl === draft.baseUrl ? this.secrets.get(`account:${before.id}`) : '');
+    if (!k && !isLocalUrl(draft.baseUrl)) return out({ ok: false, error: 'required', field: 'key' });
+    if (action === 'models') {
+      const st = await checkOpenAI(draft.baseUrl, k);
+      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models });
+      if (st.ready || /^http-(404|405|501)$/.test(st.error)) return out({ ok: false, error: 'no-list', field: 'models' });
+      return out({ ok: false, error: st.error, field: /^(unauthorized|forbidden)$/.test(st.error) ? 'key' : 'baseUrl' });
+    }
+    if (!draft.model) return out({ ok: false, error: 'required', field: 'models' });
+    const r = await testChat(draft.baseUrl, k, draft.model);
+    // The address answered but refused the call: most often a model it does not have.
+    if (/^http-(400|404|422)$/.test(r.error)) return out({ ok: false, error: 'model-refused', field: 'models', detail: r.detail });
+    return out({ ok: r.ok, error: r.error, field: /^(unauthorized|forbidden)$/.test(r.error) ? 'key' : '', detail: r.detail });
   }
 
   /** Anthropic's accounts: the user's own sign-in and the ones added beside it; one is active (what "Anthropic" runs on). */
@@ -738,9 +799,17 @@ class Hub {
     }
     // DeepSeek's Anthropic-style address has no model list: its key is asked against DeepSeek's own.
     const deepseek = providerOfAccount(a) === 'deepseek';
-    const status = deepseek ? await checkOpenAI('https://api.deepseek.com', key) : a.kind === 'anthropic-compatible' ? await checkAnthropicCompatible(a.baseUrl, key) : await checkOpenAI(a.baseUrl, key);
-    // OpenAI's own list: each session picks among its chat models.
-    if (a.kind === 'openai' && status.ready) this.mgr.setCatalog(a.id, chatModels(status.models).map((value) => ({ value, displayName: value, description: '', efforts: [] })));
+    const custom = isCustomAccount(a);
+    const status = deepseek
+      ? await checkOpenAI('https://api.deepseek.com', key)
+      : a.kind === 'anthropic-compatible'
+        ? await checkAnthropicCompatible(a.baseUrl, key)
+        : custom
+          ? await checkCustom(a.baseUrl, key)
+          : await checkOpenAI(a.baseUrl, key);
+    // OpenAI's own list: each session picks among its chat models. A provider the user added: among the ones they chose.
+    const catalog = custom ? a.models : chatModels(status.models);
+    if (a.kind === 'openai' && status.ready) this.mgr.setCatalog(a.id, catalog.map((value) => ({ value, displayName: value, description: '', efforts: [] })));
     return { ...status, detail: [hostOf(a.baseUrl), a.model, status.detail === 'unchecked' ? 'unchecked' : ''].filter(Boolean).join(' · ') };
   }
 
@@ -750,10 +819,11 @@ class Hub {
    */
   async saveAccount(raw: unknown, key: unknown) {
     const fail = (error: string, field = '') => ({ ...this.view(), ok: false, error, field, id: '', status: null as AccountStatus | null });
-    const account = normalizeAccount(raw);
-    const before = this.cfg.accounts.find((a) => a.id === account.id) ?? null;
+    const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const before = this.cfg.accounts.find((a) => a.id === o.id) ?? null;
+    // A kind never changes (another kind is another account), nor the id of a provider the user added.
+    const account = normalizeAccount(before ? { ...o, kind: before.kind, slug: before.slug } : o);
     if (!before) account.id = '';
-    else account.kind = before.kind; // A kind never changes: another kind is another account.
     const bad = checkAccount(account, this.cfg.accounts);
     if (bad) return fail(bad.problem, bad.field);
     const typed = isStr(key) ? key.trim() : null;
@@ -767,9 +837,11 @@ class Hub {
       }
     } else if (account.kind === 'openai' || account.kind === 'anthropic-compatible') {
       if (typed && !isOpenAIKey(typed)) return fail('format', 'key');
+      // The stored key goes to the address it was given for: another address needs it typed again.
+      if (before && typed === null && before.baseUrl !== account.baseUrl && this.secrets.has(`account:${before.id}`)) return fail('required', 'key');
       const k = typed ?? (before ? this.secrets.get(`account:${before.id}`) : '');
       if (!k && !isLocalUrl(account.baseUrl)) return fail('required', 'key');
-      status = account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
+      status = isCustomAccount(account) ? await checkCustom(account.baseUrl, k) : account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
       if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
     }
     const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai' || account.kind === 'anthropic-compatible' || account.kind === 'gemini-key') && typed !== null;
@@ -1024,8 +1096,15 @@ class Hub {
     handle('providers:anthropicAccount', (action, id) =>
       (action === 'use' || action === 'add' || action === 'login' || action === 'remove') && isStr(id) ? this.anthropicAccount(action, id) : { ok: false, error: 'unsupported', field: '', opened: false, views: [] },
     );
-    on('session:provider', (id, provider) => isStr(id) && isProviderId(provider) && mgr.setProvider(id, provider));
-    on('session:providerModel', (id, provider, model) => isStr(id) && isProviderId(provider) && isStr(model) && MODEL.test(model) && mgr.setProviderModel(id, provider, model));
+    handle('providers:custom', (action, draft, key) =>
+      action === 'models' || action === 'test' || action === 'save' || action === 'remove'
+        ? this.customProvider(action, draft, key)
+        : { ok: false, error: 'unsupported', field: '', models: [], detail: '', views: [] },
+    );
+    // A built-in provider or the id of one the user added: the session manager resolves it, or says it is unknown.
+    const isProviderRef = (v: unknown): v is string => isProviderId(v) || (isStr(v) && CUSTOM_SLUG.test(v));
+    on('session:provider', (id, provider) => isStr(id) && isProviderRef(provider) && mgr.setProvider(id, provider));
+    on('session:providerModel', (id, provider, model) => isStr(id) && isProviderRef(provider) && isStr(model) && MODEL.test(model) && mgr.setProviderModel(id, provider, model));
     handle('github:gh-status', async () => {
       const [gh, login] = await Promise.all([ghPath(), ghLogin()]);
       return { installed: gh !== '', login };

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { canonAccount, checkAccount, findAccount, isAccountRef, isBuiltinAccount, firstAccount, hasServer, isLocalUrl, isOpenAIHost, normalizeAccount, OPENAI_URL, pinsModel } = await import('./accounts');
+const { canonAccount, checkAccount, CUSTOM_SLUG, customSlug, findAccount, isAccountRef, isBuiltinAccount, firstAccount, hasServer, isLocalUrl, isOpenAIHost, isServerUrl, normalizeAccount, OPENAI_URL, pinsModel } = await import('./accounts');
 const { PRESETS } = await import('./presets');
 type Account = import('./types').Account;
 
-const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '', isolated: false });
-const openai = (over: Partial<Account> = {}): Account => ({ id: '', kind: 'openai', name: 'Work', baseUrl: OPENAI_URL, model: 'gpt-5', smallModel: '', isolated: false, ...over });
+const claude = (id: string, name: string): Account => ({ id, kind: 'claude', name, baseUrl: '', model: '', smallModel: '', slug: '', models: [], isolated: false });
+const openai = (over: Partial<Account> = {}): Account => ({ id: '', kind: 'openai', name: 'Work', baseUrl: OPENAI_URL, model: 'gpt-5', smallModel: '', slug: '', models: [], isolated: false, ...over });
 
 test('normalizeAccount: trims, defaults the OpenAI server, drops the OpenAI fields of other kinds', () => {
   assert.deepEqual(normalizeAccount({ kind: 'openai', name: '  My   work ', baseUrl: 'http://localhost:8080/v1/', model: ' gpt-5 ' }), {
@@ -16,6 +16,8 @@ test('normalizeAccount: trims, defaults the OpenAI server, drops the OpenAI fiel
     baseUrl: 'http://localhost:8080/v1',
     model: 'gpt-5',
     smallModel: '',
+    slug: '',
+    models: [],
     isolated: false,
   });
   assert.equal(normalizeAccount({ kind: 'codex', name: 'x', isolated: true, baseUrl: 'http://x', model: 'm' }).isolated, true);
@@ -47,6 +49,56 @@ test('checkAccount: an OpenAI account needs a server and a model', () => {
   assert.deepEqual(checkAccount(openai({ model: '' }), []), { field: 'model', problem: 'required' });
   assert.deepEqual(checkAccount(openai({ model: '-rm' }), []), { field: 'model', problem: 'format' });
   assert.deepEqual(checkAccount(openai({ smallModel: 'a b' }), []), { field: 'smallModel', problem: 'format' });
+});
+
+test('isServerUrl: https anywhere, plain http to this computer only', () => {
+  assert.ok(isServerUrl('https://api.venice.ai/api/v1'));
+  assert.ok(isServerUrl('http://localhost:11434/v1'));
+  assert.ok(isServerUrl('http://127.0.0.1:1234/v1'));
+  assert.ok(isServerUrl('http://[::1]:8080/v1'));
+  assert.ok(!isServerUrl('http://api.venice.ai/api/v1'), 'a key never travels in clear');
+  assert.ok(!isServerUrl('http://192.168.1.10:8080/v1'));
+  assert.ok(!isServerUrl('http://0.0.0.0:8080/v1'));
+  assert.ok(!isServerUrl('http://localhost.evil.com/v1'));
+  assert.ok(!isServerUrl('https://user:pw@api.venice.ai/v1'));
+  assert.ok(!isServerUrl('https://api.venice.ai/v1?x=1'));
+  assert.ok(!isServerUrl('ftp://api.venice.ai/v1'));
+  assert.ok(!isServerUrl('javascript:alert(1)'));
+  assert.ok(!isServerUrl(`https://a.io/${'x'.repeat(300)}`));
+});
+
+test('customSlug: readable, stable, never a built-in name nor one taken', () => {
+  assert.equal(customSlug('Venice', []), 'venice');
+  assert.equal(customSlug('Venice.ai', []), 'venice-ai');
+  assert.equal(customSlug('  Élan Vital ', []), 'elan-vital');
+  assert.equal(customSlug('Venice', ['venice']), 'venice-2');
+  assert.equal(customSlug('Venice', ['venice', 'venice-2']), 'venice-3');
+  assert.equal(customSlug('OpenAI', []), 'openai-2');
+  assert.equal(customSlug('Claude', []), 'claude-2');
+  assert.equal(customSlug('42', []), 'custom');
+  assert.equal(customSlug('X', []), 'x-ai');
+  for (const name of ['Venice', 'a very long provider name indeed', '!!!', 'Default']) assert.match(customSlug(name, []), CUSTOM_SLUG);
+});
+
+test('a provider the user added: its id kept, its models checked, the first one its default', () => {
+  const venice = (over: Record<string, unknown> = {}) =>
+    normalizeAccount({ kind: 'openai', name: 'Venice', baseUrl: 'https://api.venice.ai/api/v1/', slug: 'Venice', models: [' venice-uncensored ', 'llama-3.3-70b', 'venice-uncensored'], model: 'ignored', smallModel: 'ignored', ...over });
+  const a = venice();
+  assert.equal(a.slug, 'venice');
+  assert.equal(a.baseUrl, 'https://api.venice.ai/api/v1');
+  assert.deepEqual(a.models, ['venice-uncensored', 'llama-3.3-70b']);
+  assert.equal(a.model, 'venice-uncensored');
+  assert.equal(a.smallModel, '');
+  assert.equal(checkAccount(a, []), null);
+  assert.equal(normalizeAccount({ kind: 'anthropic-compatible', name: 'x', slug: 'x', models: ['m'] }).slug, '', 'only an OpenAI-compatible account stands for one');
+  assert.deepEqual(checkAccount(venice({ models: [] }), []), { field: 'models', problem: 'required' });
+  assert.deepEqual(checkAccount(venice({ models: ['-rm'] }), []), { field: 'models', problem: 'format' });
+  assert.deepEqual(checkAccount(venice({ models: Array.from({ length: 101 }, (_, i) => `m${i}`) }), []), { field: 'models', problem: 'tooMany' });
+  assert.deepEqual(checkAccount(venice({ baseUrl: 'http://api.venice.ai/api/v1' }), []), { field: 'baseUrl', problem: 'format' });
+  assert.equal(checkAccount(openai({ baseUrl: 'http://192.168.1.20:11434/v1' }), []), null, 'an older account on the local network still loads');
+  assert.deepEqual(checkAccount(venice({ slug: 'openai' }), []), { field: 'name', problem: 'reserved' });
+  assert.deepEqual(checkAccount(venice({ slug: 'bad slug' }), []), { field: 'name', problem: 'reserved' });
+  assert.deepEqual(checkAccount(venice(), [{ ...venice(), id: 'a-other000', name: 'Other' }]), { field: 'name', problem: 'taken' });
 });
 
 test('findAccount and firstAccount', () => {
