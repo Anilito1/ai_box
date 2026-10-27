@@ -134,7 +134,7 @@ const en = {
   'close.done': '{name} closed. message_worker restarts it with its conversation if needed.',
   'close.alreadyAsleep': '{name} is already asleep.',
   'close.asleep': '{name} is asleep. message_worker wakes it with its conversation.',
-  'close.note': '{name} is writing its handoff note (its context is well filled), then falls asleep; its next mission starts a fresh conversation.',
+  'close.note': '{name} is writing its handoff note (its mission is over), then falls asleep; its next mission starts a fresh conversation.',
   'spawn.empty': 'Empty mission.',
   'spawn.badDir': 'Invalid folder: {cwd}',
   'spawn.sameRepo': '⚠ Already active in this folder: {names}. Coordinate them (name them in the briefs), reuse the existing one, or have the new one work in a dedicated worktree.',
@@ -595,7 +595,7 @@ const fr: Record<Key, string> = {
   'close.done': '{name} fermé. message_worker le relance avec sa conversation si besoin.',
   'close.alreadyAsleep': '{name} dort déjà.',
   'close.asleep': '{name} dort. message_worker le réveille avec sa conversation.',
-  'close.note': '{name} écrit sa note de passation (son contexte est bien rempli), puis s’endort ; sa prochaine mission démarre une conversation neuve.',
+  'close.note': '{name} écrit sa note de passation (sa mission est finie), puis s’endort ; sa prochaine mission démarre une conversation neuve.',
   'spawn.empty': 'Mission vide.',
   'spawn.badDir': 'Dossier invalide : {cwd}',
   'spawn.sameRepo':

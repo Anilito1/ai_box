@@ -706,7 +706,7 @@ const en = {
   'team.template.docs': 'Docs',
   'team.import': "Import a subagent…",
   'team.fine':
-    'A permanent worker falls asleep after 5 minutes without work: nothing runs until the master or you write to it. When its context is well filled, it writes a handoff note before falling asleep, and its next mission starts a fresh conversation with that note.',
+    'A permanent worker falls asleep after 5 minutes without work: nothing runs until the master or you write to it. After a mission where it really worked, it writes a handoff note before falling asleep, and its next mission starts a fresh conversation with that note. Woken after more than an hour while its conversation kept growing, it starts afresh too, with a note the hub writes.',
   'team.off': 'off',
   'team.deleteAsk': 'Delete {name}? Its handoff note goes too.',
   'team.delete': 'Delete',
@@ -1729,7 +1729,7 @@ const fr: Record<Key, string> = {
   'team.template.docs': 'Docs',
   'team.import': "Importer un sous-agent…",
   'team.fine':
-    'Un permanent s’endort après 5 minutes sans travail : rien ne tourne jusqu’à ce que le maître ou toi lui écriviez. Quand son contexte est bien rempli, il écrit une note de passation avant de s’endormir, et sa prochaine mission démarre une conversation neuve avec cette note.',
+    'Un permanent s’endort après 5 minutes sans travail : rien ne tourne jusqu’à ce que le maître ou toi lui écriviez. Après une mission où il a vraiment travaillé, il écrit une note de passation avant de s’endormir, et sa prochaine mission démarre une conversation neuve avec cette note. Réveillé après plus d’une heure alors que sa conversation a grossi, il repart aussi à neuf, avec une note écrite par le hub.',
   'team.off': 'désactivé',
   'team.deleteAsk': 'Supprimer {name} ? Sa note de passation part aussi.',
   'team.delete': 'Supprimer',

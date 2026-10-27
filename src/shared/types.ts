@@ -63,7 +63,7 @@ export interface RateLimits {
 }
 
 /**
- * A permanent worker with a set post (backend, front, QA…): it keeps its conversation from one mission to the next,
+ * A permanent worker with a set post (backend, front, QA…): it carries a handoff note from one mission to the next,
  * sleeps when it has nothing to do, and the master hands it the tasks of its post first.
  */
 export interface TeamRole {

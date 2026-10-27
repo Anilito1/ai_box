@@ -29,6 +29,23 @@ export function digest(items: ChatItem[], budget = BUDGET): string {
   return lines.reverse().join('\n');
 }
 
+/**
+ * The handoff note of a permanent worker woken after its prompt cache expired, written by the hub: asking the model for
+ * one would reread its whole conversation at full price. Its last note, then the last steps of the conversation.
+ */
+export function staleNote(previous: string, items: ChatItem[], l: Lang): string {
+  const fr = l === 'fr';
+  return [
+    fr
+      ? 'Note écrite par le hub : ta conversation précédente dormait depuis plus d’une heure.'
+      : 'Note written by the hub: your previous conversation had been asleep for over an hour.',
+    previous.trim() ? `${fr ? 'Ta note précédente' : 'Your previous note'}:\n${clip(previous.trim(), 2500)}` : '',
+    `${fr ? 'Dernières étapes' : 'Latest steps'}:\n${digest(items, 2500) || (fr ? '(rien)' : '(nothing)')}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export interface Handoff {
   lang: Lang;
   /** `away`: the session leaves its account; `back`: it returns to it. */

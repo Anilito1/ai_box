@@ -15,10 +15,11 @@ import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
-import { buildHandoff } from '../shared/passation';
+import { buildHandoff, staleNote } from '../shared/passation';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
+  freshStartDue,
   fromTemplate,
   needsFreshStart,
   resolveChoice,
@@ -26,7 +27,9 @@ import {
   sessionNameOf,
   slugify,
   TEMPLATE_IDS,
+  workTokens,
   type ChoiceNote,
+  type ContextBase,
   type RoleError,
 } from '../shared/team';
 import {
@@ -173,6 +176,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   note: string;
   /** The note was written after the last work of this conversation: closing it now starts the next one afresh. */
   noteFresh: boolean;
+  /** Its context at the first reading of this conversation: what grew past it is work. */
+  contextBase: ContextBase | null;
   /** Writing its handoff note; work that arrives meanwhile makes the note stale. */
   handoff: boolean;
   handoffStale: boolean;
@@ -237,6 +242,8 @@ type Persisted = {
   | 'roleId'
   | 'note'
   | 'noteFresh'
+  | 'contextBase'
+  | 'activeAt'
   | 'noteSentTo'
   | 'userModel'
   | 'userEffort'
@@ -577,7 +584,9 @@ export class SessionManager extends EventEmitter {
 
   resume(id: string): void {
     const s = this.sessions.get(id);
-    if (s && !s.inbox && !this.ended(s) && !this.orphan(s)) void this.launch(s, s.started);
+    if (!s || s.inbox || this.ended(s) || this.orphan(s)) return;
+    this.renewStale(s);
+    void this.launch(s, s.started);
   }
 
   /** Shows the conversation of a closed session without resuming it. */
@@ -1562,6 +1571,8 @@ export class SessionManager extends EventEmitter {
         if (s.noteSending) Object.assign(s, { noteSentTo: ev.id, noteSending: false });
         // Another conversation in the same process: its totals start again from zero.
         if (s.usageSeen && ev.id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
+        // Its first reading may predate the id the program gives the conversation: it stays this conversation's.
+        if (s.contextBase?.id === s.sessionId) s.contextBase.id = ev.id;
         s.sessionId = ev.id;
         s.mode = ev.mode;
         if (ev.effort) s.effort = ev.effort;
@@ -1569,6 +1580,8 @@ export class SessionManager extends EventEmitter {
         break;
       case 'compacted':
         s.compacting = false;
+        // What was compacted was work, even when the context is now below its first reading.
+        if (s.contextBase) s.contextBase.tokens = 0;
         this.compacted(s, ev.before, ev.after);
         break;
       case 'commands':
@@ -1786,6 +1799,7 @@ export class SessionManager extends EventEmitter {
     metrics.contextSize = size || metrics.contextSize;
     metrics.contextPct = metrics.contextSize ? (tokens / metrics.contextSize) * 100 : null;
     s.metrics = metrics;
+    if (tokens > 0 && s.contextBase?.id !== s.sessionId) s.contextBase = { id: s.sessionId, tokens };
   }
 
   /** The running totals a resumed conversation starts from, read before its first turn ends. */
@@ -1919,6 +1933,7 @@ export class SessionManager extends EventEmitter {
     // Away on another account: back on its own as soon as it is open again and the policy says so. Or its account is
     // limited at this very moment: it goes on elsewhere, with a summary.
     if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
+    if (!prompt.command) this.renewStale(s);
     if (s.backNote && s.inbox) {
       prompt = { ...prompt, text: `${s.backNote}\n\n${prompt.text}` };
       s.backNote = '';
@@ -2296,7 +2311,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * A settled permanent worker goes to sleep. With a well-filled context it first writes its handoff note: the hub
+   * A settled permanent worker goes to sleep. After real work it first writes its handoff note: the hub
    * asks for it once, closes the worker when the note is in, and its next mission starts in a fresh conversation
    * seeded with the note. False while it writes the note. `idleMin`: it falls asleep for lack of work.
    */
@@ -2308,9 +2323,27 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
-  /** A worker closing with a well-filled context first writes its handoff note, then closes. True while it writes it. */
+  private worked(s: Session): number {
+    return workTokens(s.metrics, s.contextBase, s.sessionId);
+  }
+
+  /**
+   * A permanent worker woken after its prompt cache expired, still in a conversation that grew: it starts afresh, with
+   * a note the hub writes from its last note and steps (asking the model would reread the whole conversation).
+   */
+  private renewStale(s: Session): void {
+    if (s.inbox || !s.roleId || !s.started || s.noteFresh) return;
+    if (!freshStartDue({ working: false, worked: this.worked(s), idleMs: Date.now() - s.activeAt })) return;
+    s.note = staleNote(s.note, [...s.items.values()], lang()).slice(0, NOTE_MAX);
+    this.freshStart(s);
+  }
+
+  /** A worker closing after real work first writes its handoff note, then closes. True while it writes it. */
   private askHandoff(s: Session): boolean {
-    if (!s.query || s.handoffDone || !needsFreshStart(s.metrics)) return false;
+    if (!s.query || s.handoffDone) return false;
+    // A permanent worker after real work; an ad-hoc one only with a well-filled context: it rarely gets another mission.
+    const due = s.roleId ? freshStartDue({ working: !this.settled(s), worked: this.worked(s) }) : needsFreshStart(s.metrics);
+    if (!due) return false;
     s.owesReport = false;
     s.closeWhenDone = true;
     this.pushUser(s, { text: handoffRequest(), images: [], from: 'hub', handoff: true });
@@ -3700,6 +3733,7 @@ export class SessionManager extends EventEmitter {
       roleId: null,
       note: '',
       noteFresh: false,
+      contextBase: null,
       handoff: false,
       handoffStale: false,
       handoffDone: false,
@@ -3770,6 +3804,8 @@ export class SessionManager extends EventEmitter {
         if (s.tree && !validTree(s.tree)) s.tree = null;
         // Its note written, the hub closed before the worker did: the next conversation starts afresh all the same.
         if (s.noteFresh) this.freshStart(s);
+        // Saved before its first reading was kept: all of its context counts as work.
+        if (s.started && !s.contextBase) s.contextBase = { id: s.sessionId, tokens: 0 };
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
       }
       // The topics of the master's conversation, if they are this conversation's.
@@ -3813,6 +3849,8 @@ export class SessionManager extends EventEmitter {
       roleId: s.roleId,
       note: s.note,
       noteFresh: s.noteFresh,
+      contextBase: s.contextBase,
+      activeAt: s.activeAt,
       noteSentTo: s.noteSentTo,
       userModel: s.userModel,
       userEffort: s.userEffort,
