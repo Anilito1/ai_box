@@ -1,79 +1,50 @@
-<p align="center"><img src="assets/icon.png" width="120" alt="AI Box logo"></p>
+<p align="center"><img src="assets/icon.png" width="96" alt="AI Box logo"></p>
 
-# AI Box
+<h1 align="center">AI Box</h1>
 
-**One chat, a whole team.** You talk to one master [Claude Code](https://code.claude.com/docs) session; it splits the work and runs workers in parallel, each in its own repo, while you watch.
+<p align="center"><b>One chat. A whole team of AI coders, from any provider.</b><br>
+Talk to one master agent: it splits the work, runs workers in parallel and reports back.</p>
 
-![AI Box: the master starts two workers, one asks a question, both report back](docs/media/demo.gif)
+<p align="center">
+  <img alt="Windows · macOS · Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-0d1117?style=flat-square">
+  <img alt="Claude · Codex · Gemini · DeepSeek" src="https://img.shields.io/badge/Claude%20·%20Codex%20·%20Gemini%20·%20DeepSeek-4c8dff?style=flat-square">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
+</p>
 
-> **Unofficial project.** AI Box is not made, endorsed or supported by Anthropic. Claude and Claude Code are trademarks of Anthropic PBC. AI Box runs the Claude Code you install yourself and uses your own Claude access.
+<p align="center"><img src="docs/readme/mascots.gif" width="820" alt="The four mascots, Claude, Codex, Gemini and DeepSeek, typing, waving a flag, jumping and dancing"></p>
 
-## What it does
+<p align="center"><img src="docs/readme/app.png" width="900" alt="The master plans four jobs; four workers on Claude, GPT, Gemini and DeepSeek run them in parallel"></p>
 
-### A master and its workers
+## Why AI Box
 
-Tell the master what you want. It writes a brief for each job, starts a worker in the right folder and sums up their reports for you. Workers ask the master when they are stuck, and talk to each other when their work overlaps.
+| | |
+|---|---|
+| 👑 **A master that runs the show** | Say what you want. It writes a brief per job, starts the workers, answers their questions and sums up for you. |
+| ⚡ **Workers in parallel** | Each one in its own repo, or its own git worktree and branch: they never step on each other. |
+| 🔌 **Any provider, side by side** | Claude, Codex, Gemini and DeepSeek in the same team. Hit a limit? The work moves to your next account. |
+| 🎯 **The right model for each job** | The master picks model and effort by difficulty, among the ones you allow. Cost and context are on every card. |
+| 🧑‍🤝‍🧑 **A permanent team** | Backend, frontend, QA, docs, or your own posts: they keep their memory and sleep when idle. |
+| 🗂️ **Topics** | The master's chat is filed by topic, with a badge where it waits for your answer. |
+| 🧩 **MCP, Skills and one-click updates** | Manage MCP servers and skills from the app, update each provider's CLI in one click. AI Box rebuilds itself on start after an update. |
 
-### The right model for each job
+## A mascot for every agent
 
-The master rates each task (scope, risk, reasoning needed) and picks the model and effort that do the job at the lowest cost, among the ones you allow. What you set by hand always wins.
+Every session gets its provider's 3D mascot, **Clawd**, **Codex**, **Gemini** or **DeepSeek**, that shows what it is doing: typing, searching, thinking, waiting for you, celebrating, sleeping, or knocked out by an error. The master wears a crown, and the team dresses up for Halloween, Christmas and New Year.
 
-![The master's plan: a model and an effort per job](docs/media/model.png)
+## Providers
 
-### A permanent team
+| Provider | Runs on | Sign in |
+|---|---|---|
+| **Anthropic** | Claude Code | Claude account or API key |
+| **OpenAI** | Codex | ChatGPT account or API key |
+| **Google** | Gemini CLI | Google account or API key |
+| **DeepSeek** | Claude Code | API key |
 
-In **Settings › Team**, give workers a post: backend, frontend, QA, DevOps, docs, or one of your own subagents. A post keeps its memory from one mission to the next, sleeps when idle (nothing runs) and wakes when the master writes to it. When its context fills up, it leaves itself a handoff note and starts fresh. You can ask the master to add or change a post.
-
-![Settings › Team](docs/media/team.png)
-
-### Reinforcements
-
-When a mission splits into independent jobs, the master can run several copies of one post at once, each in its own git worktree and branch, so they never step on each other.
-
-<img src="docs/media/reinforcements.png" width="300" alt="The backend post asleep, two of its copies at work on their own branches">
-
-### Topics
-
-With several jobs going, the master's conversation is filed by topic. A red badge marks where the master waits for your answer; reply right there. A finished topic goes with its cross, history and all; the master's own conversation stays.
-
-![Topics, with a badge on the one waiting for you](docs/media/topics.png)
-
-### Real Claude Code sessions
-
-Every session is a plain Claude Code session: your `CLAUDE.md` files, plugins, MCP servers and models. Open any worker beside the master to watch it or talk to it directly.
-
-![A worker opened beside the master](docs/media/sessions.png)
-
-### Git and cost at hand
-
-<table>
-<tr>
-<td width="50%" valign="top"><b>Git panel.</b> Branches, worktrees, changes and the graph of the repos you follow. Commit, pull and push without leaving AI Box.<br><br><img src="docs/media/git.png" width="300" alt="Git panel"></td>
-<td width="50%" valign="top"><b>Cost.</b> Every card shows its cost and how full its context is. <b>Σ API cost</b> opens the spend by day, week or month, split by session.<br><br><img src="docs/media/cost.png" width="330" alt="API cost popover"></td>
-</tr>
-</table>
-
-### "/" commands
-
-In any composer: `/compact`, `/clear`, `/model`, `/effort`, `/mode`, `/cost`, then the session's own Claude Code commands and skills. The "/" button beside the model opens the same list.
-
-<img src="docs/media/slash.png" width="540" alt="Slash command menu">
-
-### A Clawd for every session
-
-Each session gets an animated 3D Clawd that shows what it is doing: typing, searching, delegating, celebrating, sleeping.
-
-<img src="docs/media/clawd.gif" width="420" alt="Clawd types, searches, delegates, celebrates and sleeps">
-
-### And also
-
-**Ctrl+K** (⌘K) for every command, Ctrl+1…9 to switch sessions. English and French. Light and dark themes. Idle and closed sessions resume with their whole conversation. A copy cloned from GitHub updates itself, never over your own changes. Light on your machine: the mascots and animations stop when nothing happens.
-
-![Command palette, and the update banner](docs/media/palette.png)
+AI Box never sees your passwords: accounts sign in through each provider's own CLI, and API keys are stored encrypted by your OS.
 
 ## Quick start
 
-**You need:** Windows, macOS or Linux · [Node.js](https://nodejs.org) 22.12+ · [git](https://git-scm.com) (on a Mac: `xcode-select --install`) · a Claude subscription or an [Anthropic API key](https://console.anthropic.com/settings/keys). GitHub is optional.
+You need [Node.js](https://nodejs.org) 22.12+ and [git](https://git-scm.com).
 
 ```sh
 git clone https://github.com/Anilito1/claude-hub.git
@@ -82,37 +53,13 @@ npm install
 npm start
 ```
 
-The first start downloads Electron (about 100 MB); Claude Code comes with the install. A short setup then asks for your language, your Claude access, GitHub (optional), the folders that hold your repos and the repos to follow. Everything stays editable in **Settings**.
+A short setup asks for your language, your providers and the folders that hold your repos. Updates then arrive in one click.
 
-**Signing in.** AI Box never asks for your Claude credentials. **Sign in with Claude Code** opens a terminal with Claude Code's own sign-in (`claude auth login`), as Anthropic's [rules](https://code.claude.com/docs/en/legal-and-compliance) require. Or paste an API key; it is stored encrypted by your OS keychain.
-
-**Updates** are automatic: when a new version is on GitHub, a small badge beside **Settings** offers **Update**, and AI Box builds it, restarts and picks the sessions up where they were. It only updates a clean `main` that follows the official repo. A copy cloned **before 26 October 2026** needs one manual update (this drops local changes and local commits): close AI Box, then in its folder run `git fetch origin`, `git reset --hard origin/main`, `npm install`, `npm start`.
-
-Running several sessions at once uses your plan or API budget faster: keep an eye on the cost and limits in the status bar.
-
-## Before you start: safety
-
-AI Box gives AI agents your computer.
-
-- **Sessions act as you.** They read and change files and run commands, within the permission mode you choose. Anything they read can try to steer them (prompt injection).
-- **A worker loads its repo's Claude Code setup** (`CLAUDE.md`, `.claude/settings.json` hooks, `.mcp.json`). Only send workers into repos you trust.
-- **Leaving your folders needs your yes.** A worker that would work outside your folders and followed repos waits for you, whatever the mode.
-- **"Allow everything" removes every approval**, including MCP confirmations before a `DROP` or `DELETE`. It is off unless you turn it on; use it only where you can afford to lose things.
-- **No telemetry.** AI Box itself only talks to `api.anthropic.com` (to check a key), GitHub, and the git remotes you follow.
-
-Found a vulnerability? Please open a private security advisory rather than a public issue.
-
-## Development
-
-```sh
-npm run typecheck   # TypeScript
-npm test            # unit tests
-npm run build       # bundles into dist/
-npm start -- --user-data-dir=<folder>   # run with a separate profile
-```
-
-`npm run dist` builds an installer for your platform (not signed, and not published: it would bundle Anthropic's Agent SDK, which is under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance)). A built app finds the Claude Code you install yourself. macOS is reviewed but not yet tested on a real Mac: reports are welcome.
+> [!WARNING]
+> Agents act as you: they read and change files and run commands, within the permission mode you choose. Only send them into repos you trust. AI Box has no telemetry.
 
 ## License
 
-[MIT](LICENSE). Bundled third-party code (three.js, marked, DOMPurify, the commit graph from VS Code) is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The Claude Agent SDK and Claude Code are Anthropic software under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance); they are installed from npm or by you, not shipped in this repository.
+[MIT](LICENSE) · Third-party code: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+
+AI Box is an unofficial project, not made or endorsed by Anthropic, OpenAI, Google or DeepSeek. Their names, models and CLIs belong to them and run under their own terms; you install the CLIs and use your own access.
