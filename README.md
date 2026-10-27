@@ -2,8 +2,8 @@
 
 <h1 align="center">AI Box</h1>
 
-<p align="center"><b>One chat. A whole team of AI coders, from any provider.</b><br>
-Talk to one master agent: it splits the work, runs workers in parallel and reports back.</p>
+<p align="center"><b>One chat. A whole team.</b><br>
+You talk to one master. It delegates to workers that run in parallel, and reports back.</p>
 
 <p align="center">
   <img alt="Windows · macOS · Linux" src="https://img.shields.io/badge/Windows%20·%20macOS%20·%20Linux-0d1117?style=flat-square">
@@ -11,36 +11,37 @@ Talk to one master agent: it splits the work, runs workers in parallel and repor
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-2ea043?style=flat-square"></a>
 </p>
 
-<p align="center"><img src="docs/readme/mascots.gif" width="820" alt="The four mascots, Claude, Codex, Gemini and DeepSeek, typing, waving a flag, jumping and dancing"></p>
+<p align="center"><img src="docs/readme/demo.gif" width="900" alt="One request to the master; four workers start in parallel, each on its own branch; their reports and a question come back, filed by topic"></p>
 
-<p align="center"><img src="docs/readme/app.png" width="900" alt="The master plans four jobs; four workers on Claude, GPT, Gemini and DeepSeek run them in parallel"></p>
+## How it works
 
-## Why AI Box
+**1. You talk to the master, it runs the team.** Describe what you want. The master writes a brief per job, starts the workers, reads their reports, answers their questions and validates their work in your place. You are only called when it needs you.
 
-| | |
-|---|---|
-| 👑 **A master that runs the show** | Say what you want. It writes a brief per job, starts the workers, answers their questions and sums up for you. |
-| ⚡ **Workers in parallel** | Each one in its own repo, or its own git worktree and branch: they never step on each other. |
-| 🔌 **Any provider, side by side** | Claude, Codex, Gemini and DeepSeek in the same team. Hit a limit? The work moves to your next account. |
-| 🎯 **The right model for each job** | The master picks model and effort by difficulty, among the ones you allow. Cost and context are on every card. |
-| 🧑‍🤝‍🧑 **A permanent team** | Backend, frontend, QA, docs, or your own posts: they keep their memory and sleep when idle. |
-| 🗂️ **Topics** | The master's chat is filed by topic, with a badge where it waits for your answer. |
-| 🧩 **MCP, Skills and one-click updates** | Manage MCP servers and skills from the app, update each provider's CLI in one click. AI Box rebuilds itself on start after an update. |
+**2. Permanent and one-off workers.** A *post* (backend, frontend, QA, docs, or your own) is a permanent worker: it keeps its memory from one mission to the next and sleeps when idle. One-off workers cover the rest. Posts can be put in a *group* under a lead that drives them and reports to the master.
 
-## A mascot for every agent
+**3. One post, several instances.** A mission that splits into independent jobs runs on several instances of the same post at once, each in its own git worktree and branch: they never step on each other.
 
-Every session gets its provider's 3D mascot, **Clawd**, **Codex**, **Gemini** or **DeepSeek**, that shows what it is doing: typing, searching, thinking, waiting for you, celebrating, sleeping, or knocked out by an error. The master wears a crown, and the team dresses up for Halloween, Christmas and New Year.
+<p align="center"><img src="docs/readme/team.png" width="760" alt="Settings › Team: the posts, their groups and the instances per post"></p>
 
-## Providers
+**4. A chat filed by topic.** The master's conversation is split into topics, grouped by repo. A badge shows the ones where it is waiting for your answer.
 
-| Provider | Runs on | Sign in |
-|---|---|---|
-| **Anthropic** | Claude Code | Claude account or API key |
-| **OpenAI** | Codex | ChatGPT account or API key |
-| **Google** | Gemini CLI | Google account or API key |
-| **DeepSeek** | Claude Code | API key |
+**5. A master that stays light.** It orchestrates and produces nothing: it cannot edit files, only brief and route. The work, and its context, stays in the workers, so the master keeps its head across long days.
 
-AI Box never sees your passwords: accounts sign in through each provider's own CLI, and API keys are stored encrypted by your OS.
+**6. The right model, the right effort.** For each mission the master picks the model and the effort from its difficulty, among the models you allow and up to the effort you cap. A choice you make on a post or on a worker always wins.
+
+<p align="center"><img src="docs/readme/models.png" width="300" alt="The model menu: provider, model and effort"></p>
+
+**7. Git, MCP and skills, built in.** A git panel per repo (graph, branches, commit, push) and automatic worktrees. Manage your MCP servers and skills from the **MCP** and **Skills** buttons, and update each provider's CLI in one click.
+
+**8. A simple, consistent UI.** One window: the master, its team, its topics. Light and dark, English and French. Every session wears the mascot of its provider and shows what it is doing.
+
+**Any provider, side by side.** Claude, Codex, Gemini and DeepSeek can work in the same team, on your accounts or API keys. Hit a limit? The work can move to your next account.
+
+<p align="center"><img src="docs/readme/providers.png" width="560" alt="Settings › Accounts: Anthropic, OpenAI, DeepSeek and Gemini, each with its mascot"></p>
+
+## What you get
+
+More time. Everything in parallel. Peace of mind.
 
 ## Quick start
 
@@ -53,10 +54,12 @@ npm install
 npm start
 ```
 
-A short setup asks for your language, your providers and the folders that hold your repos. Updates then arrive in one click.
+A short setup asks for your language, your providers and the folders that hold your repos. AI Box then updates itself in one click.
+
+To build an installer: `npm run dist`. Before a merge: `npm run typecheck`, `npm test` and `npm run build` must be green.
 
 > [!WARNING]
-> Agents act as you: they read and change files and run commands, within the permission mode you choose. Only send them into repos you trust. AI Box has no telemetry.
+> Agents act as you: they read and change files and run commands, within the permission mode you choose. Only send them into repos you trust. AI Box has no telemetry, never sees your passwords (accounts sign in through each provider's own CLI) and stores API keys encrypted by your OS.
 
 ## License
 
