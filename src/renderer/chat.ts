@@ -13,6 +13,7 @@ import {
   type ProviderBadge,
   type SessionView,
 } from '../shared/types';
+import { HistoryCursor, sentMessages, wantsHistory } from '../shared/inputHistory';
 import { effortsFor, splitRecent } from '../shared/models';
 import { modelKey } from '../shared/news';
 import { isProviderId } from '../shared/providers';
@@ -118,6 +119,8 @@ export class ChatView {
   private live: { id: string; stable: HTMLElement; tail: HTMLElement; source: string } | null = null;
   /** Rebuilding the stream (a conversation opens): its items appear without the arrival animation. */
   private resetting = false;
+  /** Where the arrow keys are in the messages sent here (see inputHistory). */
+  private readonly history = new HistoryCursor();
   private readonly drafts = new Map<string, { text: string; attachments: Attachment[] }>();
   private attachments: Attachment[] = [];
   /** Images still being decoded or re-encoded: sending waits for them so none is dropped. */
@@ -209,6 +212,7 @@ export class ChatView {
     this.input.addEventListener('blur', () => this.slash.close());
     this.input.addEventListener('keydown', (e) => {
       if (this.slash.onKey(e)) return;
+      if (this.browseHistory(e)) return;
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         this.submit();
@@ -332,6 +336,7 @@ export class ChatView {
     this.topic = topic;
     this.renderChrome();
     if (!changed) return;
+    this.history.reset();
     this.empty.textContent = topic ? t('topics.empty', { title: topic.title }) : this.emptyText;
     this.reset(this.items);
   }
@@ -360,6 +365,7 @@ export class ChatView {
       this.attachments = draft?.attachments ?? [];
       this.renderAttachments();
       this.slash.reset();
+      this.history.reset();
       this.reset(items);
     }
     this.renderChrome();
@@ -493,6 +499,22 @@ export class ChatView {
     this.sendBtn.title = stop ? t('chat.interrupt') : this.preparing > 0 ? t('chat.preparing') : t('chat.send');
   }
 
+  /** Up/down in the field recall the messages already sent here; the draft comes back after the newest. */
+  private browseHistory(e: KeyboardEvent): boolean {
+    const input = this.input;
+    const dir = wantsHistory(e, input.value, input.selectionStart, input.selectionEnd);
+    if (!dir) return false;
+    const sent = sentMessages([...(this.items?.values() ?? [])].filter((item) => this.shows(item)).map((item) => ({ kind: item.kind, text: item.kind === 'user' ? item.text : undefined })));
+    const next = this.history.step(dir, input.value, sent);
+    if (next === null) return false;
+    e.preventDefault();
+    input.value = next;
+    input.setSelectionRange(next.length, next.length);
+    input.scrollTop = input.scrollHeight;
+    this.syncSend();
+    return true;
+  }
+
   /** A "/" command runs here (or is refused with a note, nothing sent); anything else goes to the session. */
   private submit(): void {
     if (!this.hasContent() || this.preparing > 0 || !this.session || this.submitting) return;
@@ -515,6 +537,7 @@ export class ChatView {
         );
         // Only what was sent leaves the composer: text typed or images added meanwhile stay.
         if (this.input.value === text) this.input.value = '';
+        this.history.reset();
         for (const a of attachments) {
           const i = this.attachments.indexOf(a);
           if (i >= 0) this.attachments.splice(i, 1);
