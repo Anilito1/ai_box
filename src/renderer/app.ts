@@ -13,6 +13,7 @@ import { TopicsView } from './topics';
 import './tooltip';
 import { initNews } from './news';
 import { initCliUpdates } from './cliUpdate';
+import { showReleaseNotes } from './releaseNotes';
 import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
 
@@ -509,3 +510,5 @@ if (!setup.resume()) {
     if (!v.settings.onboarded) void setup.open('onboarding');
   });
 }
+// What changed since the last start (none on a new install): over the window once.
+void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || paletteOpen());

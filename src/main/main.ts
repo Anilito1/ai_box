@@ -74,6 +74,7 @@ import { openTerminal } from './terminal';
 import { installTool, setToolsDir, type Tool } from './providers/tools';
 import { ProviderNewsWatch, resolved } from './news';
 import { CliUpdater, realRunner, simulatedRunner } from './cliUpdate';
+import { ReleaseNotes } from './releaseNotes';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
 
@@ -270,6 +271,7 @@ class Hub {
   private gemini = '';
   private readonly news: ProviderNewsWatch;
   private readonly cliUpdates: CliUpdater;
+  private readonly releaseNotes: ReleaseNotes;
   /** The Google sign-ins in progress (a browser is open), by account: the way to cancel each. */
   private readonly googleLogins = new Map<string, () => void>();
   private gh = '';
@@ -279,6 +281,7 @@ class Hub {
     this.cfg = loadConfig(this.dataDir, systemLang());
     setToolsDir(join(this.dataDir, 'tools'));
     setLang(this.cfg.language);
+    this.releaseNotes = new ReleaseNotes(this.dataDir, !this.cfg.onboarded);
     this.news = new ProviderNewsWatch({
       dataDir: this.dataDir,
       toolsDir: join(this.dataDir, 'tools'),
@@ -1223,6 +1226,8 @@ class Hub {
     handle('update:install', (choice) => this.updater.install(UPDATE_CHOICES.includes(choice as UpdateChoice) ? (choice as UpdateChoice) : 'ask'));
     on('update:answer', (go) => typeof go === 'boolean' && this.updater.answer(go));
     on('update:open-folder', () => this.updater.openFolder());
+    handle('notes:pending', () => this.releaseNotes.notes());
+    on('notes:seen', () => this.releaseNotes.seen());
     on('app:relaunch', () => {
       // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
       if (!confirmQuit(mgr)) return;

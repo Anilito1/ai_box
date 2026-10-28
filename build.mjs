@@ -21,6 +21,8 @@ await Promise.all([
     platform: 'node',
     format: 'esm',
     external: ['electron', '@anthropic-ai/claude-agent-sdk', 'zod'],
+    // The release notes shown at start (main/releaseNotes.ts) travel inside the build.
+    loader: { '.md': 'text' },
   }),
   build({ ...common, entryPoints: ['src/preload/preload.ts'], outfile: 'dist/preload.cjs', platform: 'node', format: 'cjs', external: ['electron'] }),
   // Installs an update once the hub has closed, run by the user's Node.js: Node's own modules only.
