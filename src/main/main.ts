@@ -18,6 +18,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron';
 import { ACCOUNTS_MAX, canonAccount, checkAccount, CUSTOM_SLUG, customSlug, isAccountRef, isLocalUrl, isServerUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
+import { backgroundTokens } from '../shared/background';
 import { APP_ID } from '../shared/brand';
 import { capabilitiesText } from '../shared/capabilities';
 import { DEEPSEEK_URL, isCustomAccount, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
@@ -107,15 +108,30 @@ const send = (channel: string, ...args: unknown[]) => {
   if (win && !win.isDestroyed() && rendererReady) win.webContents.send(channel, ...args);
 };
 
-/** The renderer gets its language and platform in the URL: it builds its whole UI from them before any IPC. */
+/** The background colour of the settings ("#rrggbb"), empty for the system's appearance. */
+let background = '';
+
+/** The renderer gets its language, platform and background in the URL: it builds its whole UI from them before any IPC. */
 function loadRenderer(lang: Lang): void {
-  void win?.loadFile(join(here, 'renderer', 'index.html'), { query: { lang, platform: process.platform } });
+  void win?.loadFile(join(here, 'renderer', 'index.html'), { query: { lang, platform: process.platform, bg: background } });
 }
 
-/** The window's own colours, the page's --bg and --text-3 in the system's appearance (light or dark). */
-const chrome = () => (nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 40 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 40 });
+/** The window's own colours, the page's --bg and --text-3: the user's background, else the system's appearance. */
+const chrome = () => {
+  if (background) {
+    const { vars } = backgroundTokens(background);
+    return { color: vars['--bg'], symbolColor: vars['--text-3'], height: 40 };
+  }
+  return nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 40 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 40 };
+};
 /** The window controls sit over a pane's header: they take its colour (--chat). */
-const controls = () => ({ ...chrome(), color: nativeTheme.shouldUseDarkColors ? '#0f1013' : '#ffffff' });
+const controls = () => ({ ...chrome(), color: background ? backgroundTokens(background).vars['--chat'] : nativeTheme.shouldUseDarkColors ? '#0f1013' : '#ffffff' });
+
+function paintWindow(): void {
+  if (!win || win.isDestroyed()) return;
+  win.setBackgroundColor(chrome().color);
+  if (process.platform !== 'darwin') win.setTitleBarOverlay(controls());
+}
 
 function createWindow(mgr: SessionManager, lang: Lang): void {
   win = new BrowserWindow({
@@ -138,11 +154,7 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     },
   });
   win.removeMenu();
-  nativeTheme.on('updated', () => {
-    if (!win || win.isDestroyed()) return;
-    win.setBackgroundColor(chrome().color);
-    if (process.platform !== 'darwin') win.setTitleBarOverlay(controls());
-  });
+  nativeTheme.on('updated', paintWindow);
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('did-start-loading', () => {
@@ -1016,6 +1028,10 @@ class Hub {
       mgr.accountsChanged();
       // The page is built in one language: it is reloaded in the new one.
       if (before.lang !== this.cfg.language) setImmediate(() => loadRenderer(this.cfg.language));
+      if (background !== this.cfg.background) {
+        background = this.cfg.background;
+        paintWindow();
+      }
       return { ...this.view(), ok: true, error: '' };
     });
     // The team, one post at a time, with the checks of the master's tools (sessions.ts); the master hears of it next.
@@ -1285,6 +1301,7 @@ async function start(): Promise<void> {
     // Run from source, the Dock would show Electron's icon.
     if (!app.isPackaged) app.dock?.setIcon(join(here, '..', 'assets', 'icon.png'));
   }
+  background = hub.cfg.background;
   createWindow(mgr, hub.cfg.language);
   if (built?.kind === 'failed') {
     // The hub runs on its previous build; the raw output is not shown, a button copies it.

@@ -1,4 +1,5 @@
 import type { ChatItem, HubApi, HubSnapshot, SessionView, UsageState } from '../shared/types';
+import './background';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';

@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Couleur de fond de l'app au choix, dans Réglages › Général.
 - Flèche ↑ / ↓ dans la zone de saisie : retrouver les messages déjà envoyés, comme dans un terminal.
 - Les nouveautés s'affichent au lancement après une mise à jour.
 - Fournisseurs compatibles OpenAI personnalisés, dans Réglages › Comptes.

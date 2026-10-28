@@ -4439,6 +4439,33 @@ kbd,
   margin: 0;
   min-width: 240px;
 }
+.setup-bg .setup-input {
+  flex: none;
+  width: 104px;
+}
+/* The background's swatch: a round chip of the colour, opening the system's picker. */
+.setup-swatch {
+  flex: none;
+  width: var(--ctl-lg);
+  height: var(--ctl-lg);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+.setup-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.setup-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--r-full);
+}
+.setup-swatch:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
 .setup-list {
   max-width: 600px;
   margin: var(--sp-1) 0 0;

@@ -2,6 +2,8 @@ import { effortsFor, splitRecent } from '../shared/models';
 import { providerOfAccount } from '../shared/providers';
 import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
 import { DEFAULT_ACCOUNT } from '../shared/accounts';
+import { parseHex } from '../shared/background';
+import { applyBackground } from './background';
 import { ProvidersPanel } from './providers';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
@@ -464,11 +466,61 @@ export class SetupView {
     }
     f.append(seg);
     el.append(f);
+    if (this.mode !== 'onboarding') el.append(this.backgroundField(v.settings.background));
     if (this.mode === 'onboarding') {
       const list = h('ul', 'setup-list');
       for (const key of ['setup.welcome.p1', 'setup.welcome.p2', 'setup.welcome.p3'] as const) list.append(h('li', '', t(key)));
       el.append(list);
     }
+  }
+
+  /**
+   * The window's colour: a swatch opening the system's colour picker and a hex field, both previewing as the user
+   * picks; saved when the picker closes or the field is left. An invalid hex is ignored and the field shows the saved one.
+   */
+  private backgroundField(saved: string): HTMLDivElement {
+    const f = this.field(t('setup.background'));
+    const row = h('div', 'setup-row setup-bg');
+    const current = () => saved || getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+    const swatch = h('input', 'setup-swatch');
+    swatch.type = 'color';
+    swatch.value = parseHex(current()) ?? '#000000';
+    swatch.setAttribute('aria-label', t('setup.background'));
+    const hex = this.input(saved, current());
+    hex.maxLength = 7;
+    hex.setAttribute('aria-label', t('setup.background.hex'));
+    const keep = (value: string) => {
+      if (value === saved) return;
+      void this.save({ background: value }).then(() => applyBackground(this.view?.settings.background ?? ''));
+    };
+    swatch.addEventListener('input', () => {
+      applyBackground(swatch.value);
+      hex.value = swatch.value;
+    });
+    swatch.addEventListener('change', () => keep(swatch.value));
+    hex.addEventListener('input', () => {
+      const value = parseHex(hex.value);
+      if (!value) return;
+      applyBackground(value);
+      swatch.value = value;
+    });
+    hex.addEventListener('change', () => {
+      const value = parseHex(hex.value);
+      if (value) return keep(value);
+      hex.value = saved;
+      swatch.value = parseHex(current()) ?? '#000000';
+      applyBackground(saved);
+    });
+    hex.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') hex.blur();
+    });
+    const reset = this.button(t('setup.background.reset'), 'btn ghost small', () => {
+      applyBackground('');
+      keep('');
+    }, !saved);
+    row.append(swatch, hex, reset);
+    f.append(row);
+    return f;
   }
 
   /**

@@ -631,6 +631,8 @@ export interface HubSettings {
   updates: UpdateMode;
   /** The topics column of the master: its groups' order and the folded ones. */
   topicGroups: TopicGroupPrefs;
+  /** Background colour of the window ("#rrggbb"), the surfaces derived from it; empty = the system's appearance. */
+  background: string;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */
