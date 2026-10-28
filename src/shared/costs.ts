@@ -25,6 +25,11 @@ export interface TurnRecord {
   name: string;
   role: CostRole;
   models: Record<string, Usage>;
+  /**
+   * Main folder of the repo it worked in (a worktree counts with its repo), '' outside any repo; missing on the turns
+   * logged before it was kept.
+   */
+  repo?: string;
 }
 
 export const ZERO: Usage = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -76,10 +81,10 @@ export function turnDelta(prev: Totals | null, cur: Totals): Record<string, Usag
 
 // ---------- storage: one JSON line per turn ----------
 
-/** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]}}` */
+/** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo}` */
 export function encodeRecord(r: TurnRecord): string {
   const m = Object.fromEntries(Object.entries(r.models).map(([model, u]) => [model, FIELDS.map((f) => (f === 'cost' ? +u[f].toFixed(8) : u[f]))]));
-  return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m });
+  return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }) });
 }
 
 /** A line written by encodeRecord(), or null for anything else (a torn last line, a hand-edited file). */
@@ -98,7 +103,7 @@ export function decodeRecord(line: string): TurnRecord | null {
     if (!Array.isArray(arr) || arr.length !== FIELDS.length) return null;
     models[model] = Object.fromEntries(FIELDS.map((f, i) => [f, num(arr[i])])) as unknown as Usage;
   }
-  return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models };
+  return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}) };
 }
 
 // ---------- periods, in the computer's own time zone ----------
@@ -142,12 +147,28 @@ export interface CostRow {
   models: string[];
 }
 
+/** What one repo spent, all its sessions and worktrees together. */
+export interface RepoCostRow {
+  /** Main folder of the repo; '' for the turns outside any repo, or logged before the repo was kept. */
+  key: string;
+  label: string;
+  usage: Usage;
+  turns: number;
+  /** The sessions that worked in it, most expensive first. */
+  sessions: Pick<CostRow, 'label' | 'role'>[];
+}
+
 export interface CostSummary {
   total: Usage;
   turns: number;
   /** Most expensive first. */
   sessions: CostRow[];
+  /** Most expensive first, the turns outside any repo last. */
+  repos: RepoCostRow[];
 }
+
+/** Last folder of a path, Windows or POSIX. */
+const folderName = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
 
 export function summarize(records: TurnRecord[], range: Range): CostSummary {
   const sessions = new Map<string, CostRow>();
@@ -170,8 +191,38 @@ export function summarize(records: TurnRecord[], range: Range): CostSummary {
     byModel.set(r.id, costs);
   }
   const rows = [...sessions.values()].map((s) => ({ ...s, models: [...(byModel.get(s.key) ?? [])].sort((a, b) => b[1] - a[1]).map(([model]) => model) }));
-  return { total, turns, sessions: rows.sort((a, b) => b.usage.cost - a.usage.cost || a.label.localeCompare(b.label)) };
+  rows.sort((a, b) => b.usage.cost - a.usage.cost || a.label.localeCompare(b.label));
+  return { total, turns, sessions: rows, repos: byRepo(records, range, rows) };
 }
+
+/** The turns of the range by repo; `sessions` (most expensive first) orders the names of each row. */
+function byRepo(records: TurnRecord[], range: Range, sessions: CostRow[]): RepoCostRow[] {
+  const repos = new Map<string, { usage: Usage; turns: number; ids: Set<string> }>();
+  for (const r of records) {
+    if (r.at < range.from || r.at >= range.to) continue;
+    const key = r.repo ?? '';
+    const row = repos.get(key) ?? { usage: ZERO, turns: 0, ids: new Set<string>() };
+    row.ids.add(r.id);
+    repos.set(key, { usage: addUsage(row.usage, sumUsage(r.models)), turns: row.turns + 1, ids: row.ids });
+  }
+  const rows = [...repos].map(([key, row]): RepoCostRow => ({
+    key,
+    label: key ? folderName(key) : '',
+    usage: row.usage,
+    turns: row.turns,
+    sessions: sessions.filter((s) => row.ids.has(s.key)).map((s) => ({ label: s.label, role: s.role })),
+  }));
+  return rows.sort((a, b) => Number(!a.key) - Number(!b.key) || b.usage.cost - a.usage.cost || a.label.localeCompare(b.label));
+}
+
+/** What the turns of one day cost; `day` is its local midnight. */
+export interface DayCost {
+  day: number;
+  cost: number;
+}
+
+/** Local midnight of the day of `at`. */
+export const dayOf = (at: number) => midnight(new Date(at));
 
 /** "claude-opus-5-5" → "Opus 5.5", "claude-sonnet-4-5-20250929[1m]" → "Sonnet 4.5 (1M)"; anything else as is. */
 export function modelName(id: string): string {

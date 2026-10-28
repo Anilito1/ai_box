@@ -1,9 +1,7 @@
-import { modelName, PERIODS, periodRange, summarize, type CostRow, type CostSummary, type Period } from '../shared/costs';
+import { PERIODS, periodRange, summarize, type CostSummary, type Period, type RepoCostRow } from '../shared/costs';
 import type { HubApi } from '../shared/types';
 import { fmtCost, h, icon, ICONS } from './dom';
 import { LANG, t, tn } from './i18n';
-
-const MAX_ROWS = 6;
 
 const exactUsd = (v: number) => `$${v.toFixed(4)}`;
 const compact = new Intl.NumberFormat(LANG, { notation: 'compact', maximumFractionDigits: 1 });
@@ -12,9 +10,9 @@ const whole = new Intl.NumberFormat(LANG);
 function storedPeriod(): Period {
   try {
     const v = localStorage.getItem('costPeriod') as Period | null;
-    return v && PERIODS.includes(v) ? v : '7d';
+    return v && PERIODS.includes(v) ? v : 'today';
   } catch {
-    return '7d';
+    return 'today';
   }
 }
 
@@ -26,7 +24,7 @@ export function toggleCostPanel(hub: HubApi, anchor: HTMLElement): void {
   openPanel = new CostPanel(hub, anchor);
 }
 
-/** The cost of a period and its split by session, read from the turn log when the popover opens or the period changes. */
+/** The cost of a period and its split by repo, read from the turn log when the popover opens or the period changes. */
 class CostPanel {
   private readonly root = h('div', 'cost-panel');
   private readonly body = h('div', 'cost-body');
@@ -167,28 +165,27 @@ class CostPanel {
 
   private list(s: CostSummary): HTMLElement {
     const list = h('ul', 'cost-list');
-    const shown = s.sessions.length > MAX_ROWS ? MAX_ROWS - 1 : s.sessions.length;
-    for (const row of s.sessions.slice(0, shown)) list.append(this.row(row, s.total.cost));
-    const rest = s.sessions.slice(shown);
-    if (rest.length > 0) {
-      const li = h('li', 'cost-row cost-more');
-      li.append(h('span', 'cost-name', tn('cost.others', rest.length, { n: rest.length })), h('span', 'cost-amount', fmtCost(rest.reduce((sum, r) => sum + r.usage.cost, 0))));
-      list.append(li);
-    }
+    for (const row of s.repos) list.append(this.row(row, s.total.cost));
+    const li = h('li', 'cost-row cost-sum');
+    const sum = h('span', 'cost-amount', fmtCost(s.total.cost));
+    sum.title = exactUsd(s.total.cost);
+    li.append(h('span', 'cost-name', t('cost.total')), sum);
+    list.append(li);
     return list;
   }
 
-  private row(row: CostRow, total: number): HTMLElement {
-    const li = h('li', 'cost-row');
+  private row(row: RepoCostRow, total: number): HTMLElement {
+    const li = h('li', row.key ? 'cost-row' : 'cost-row cost-more');
     const share = total > 0 ? row.usage.cost / total : 0;
-    li.append(h('span', 'cost-name', row.role === 'master' ? t('master') : row.label.replace(/^hub-/, '')), h('span', 'cost-amount', fmtCost(row.usage.cost)));
+    li.append(h('span', 'cost-name', row.key ? row.label : t('cost.otherRepos')), h('span', 'cost-amount', fmtCost(row.usage.cost)));
     const bar = h('span', 'cost-share');
     bar.style.setProperty('--share', String(share));
     li.append(bar);
     const u = row.usage;
     li.title = [
-      `${t(`cost.role.${row.role}`)} · ${tn('cost.turns', row.turns, { n: whole.format(row.turns) })} · ${exactUsd(u.cost)} · ${Math.round(share * 100)}%`,
-      row.models.map(modelName).join(', '),
+      row.key || t('cost.otherReposHint'),
+      `${tn('cost.turns', row.turns, { n: whole.format(row.turns) })} · ${exactUsd(u.cost)} · ${Math.round(share * 100)}%`,
+      row.sessions.map((s) => (s.role === 'master' ? t('master') : s.label.replace(/^hub-/, ''))).join(', '),
       `${t('cost.input')} ${compact.format(u.input)} · ${t('cost.output')} ${compact.format(u.output)}`,
       `${t('cost.cacheRead')} ${compact.format(u.cacheRead)} · ${t('cost.cacheWrite')} ${compact.format(u.cacheWrite)}`,
     ].join('\n');

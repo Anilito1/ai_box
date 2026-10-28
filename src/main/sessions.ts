@@ -1196,7 +1196,10 @@ export class SessionManager extends EventEmitter {
   private repoCache = new Map<string, { at: number; main: string | null }>();
   private repoOfWorker(name: string): string | null {
     const cwd = [...this.sessions.values()].find((x) => x.name === name)?.cwd;
-    if (!cwd) return null;
+    return cwd ? this.repoOfDir(cwd) : null;
+  }
+
+  private repoOfDir(cwd: string): string | null {
     const hit = this.repoCache.get(cwd);
     if (hit && Date.now() - hit.at < 10_000) return hit.main;
     const main = repoOf(cwd)?.main ?? null;
@@ -1256,6 +1259,12 @@ export class SessionManager extends EventEmitter {
     this.notice(s, t(s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
     if (running && !this.orphan(s)) void this.launch(s, false);
     this.changed();
+  }
+
+  /** The repo of a session still known, for the turns logged before their repo was kept; null when it is gone. */
+  costRepoOf(id: string): string | null {
+    const s = this.sessions.get(id);
+    return s ? (this.repoOfDir(s.cwd) ?? '') : null;
   }
 
   /** /cost: what the session spent, its tokens from the turns the log has, said in its conversation. */
@@ -1323,7 +1332,7 @@ export class SessionManager extends EventEmitter {
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
     this.fileTopicsByRepo();
-    return { sessions, models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
+    return { sessions, costToday: this.opts.costLog.today(), models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -1833,7 +1842,7 @@ export class SessionManager extends EventEmitter {
       if (before === 'unknown') return;
       const models = turnDelta(before, totals);
       if (!models) return;
-      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models });
+      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '' });
       if (!s.metrics) return;
       const costBefore = s.metrics.costUsd;
       s.metrics.costUsd += sumUsage(models).cost;

@@ -93,6 +93,38 @@ test('summarize: totals and sessions of the range only', () => {
   assert.equal(summarize([], range).total.cost, 0);
 });
 
+test('the repo of a turn survives the file; a turn without one stays without', () => {
+  const r: TurnRecord = { at: 1, id: 'w', name: 'hub-w', role: 'worker', models: { a: u(1) }, repo: 'C:\\dev\\shop' };
+  assert.equal(decodeRecord(encodeRecord(r))?.repo, 'C:\\dev\\shop');
+  assert.equal(decodeRecord(encodeRecord({ ...r, repo: '' }))?.repo, '');
+  assert.equal('repo' in (decodeRecord(encodeRecord({ ...r, repo: undefined })) ?? {}), false);
+});
+
+test('summarize: by repo, most expensive first, outside any repo last', () => {
+  const range = { from: at(2026, 10, 26, 0), to: at(2026, 10, 27, 0) };
+  const inRepo = (id: string, cost: number, repo: string | undefined, role: TurnRecord['role'] = 'worker') => ({ ...rec(at(2026, 10, 26), id, role, { opus: u(cost) }), ...(repo === undefined ? {} : { repo }) });
+  const s = summarize(
+    [
+      inRepo('master', 9, '', 'master'),
+      inRepo('w1', 1, '/dev/shop'),
+      inRepo('w2', 2, '/dev/shop'), // in a worktree: logged with its main folder
+      inRepo('w3', 2.5, 'C:\\dev\\api'),
+      inRepo('w4', 0.5, undefined), // logged before the repo was kept
+      { ...inRepo('w1', 100, '/dev/shop'), at: at(2026, 10, 25) }, // another day
+    ],
+    range,
+  );
+  assert.deepEqual(
+    s.repos.map((r) => [r.key, r.label, r.usage.cost, r.turns, r.sessions.map((x) => x.label)]),
+    [
+      ['/dev/shop', 'shop', 3, 2, ['hub-w2', 'hub-w1']],
+      ['C:\\dev\\api', 'api', 2.5, 1, ['hub-w3']],
+      ['', '', 9.5, 2, ['hub-master', 'hub-w4']],
+    ],
+  );
+  assert.equal(s.total.cost, 15);
+});
+
 test('modelName', () => {
   assert.equal(modelName('claude-opus-5-5'), 'Opus 5.5');
   assert.equal(modelName('claude-sonnet-4-5-20250929[1m]'), 'Sonnet 4.5 (1M)');

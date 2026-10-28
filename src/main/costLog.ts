@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { decodeRecord, encodeRecord, type TurnRecord } from '../shared/costs';
+import { dayOf, decodeRecord, encodeRecord, sumUsage, type DayCost, type TurnRecord } from '../shared/costs';
 
 const FILE = /^turns-(\d{4})-(\d{2})\.jsonl$/;
 const monthFile = (at: number) => {
@@ -19,10 +19,40 @@ export class CostLog {
   private tail: Promise<unknown> = Promise.resolve();
   /** When the log started: costs before it are not known by turn. */
   readonly since: number;
+  /** The cost of the turns of today (local day), kept as they are appended: the status bar shows it. */
+  private day: DayCost;
 
   constructor(dataDir: string) {
     this.dir = join(dataDir, 'usage');
     this.since = this.readSince();
+    this.day = this.readDay(Date.now());
+  }
+
+  /** Today's cost; 0 from midnight on. */
+  today(now = Date.now()): DayCost {
+    const day = dayOf(now);
+    if (this.day.day !== day) this.day = { day, cost: 0 };
+    return this.day;
+  }
+
+  /** Read once at start, from the files of the UTC months the local day touches. */
+  private readDay(now: number): DayCost {
+    const day = dayOf(now);
+    const end = dayOf(day + 36 * 3_600_000);
+    let cost = 0;
+    for (const name of new Set([monthFile(day), monthFile(end - 1)])) {
+      let text: string;
+      try {
+        text = readFileSync(join(this.dir, name), 'utf8');
+      } catch {
+        continue; // No turn that month yet.
+      }
+      for (const line of text.split('\n')) {
+        const r = line ? decodeRecord(line) : null;
+        if (r && r.at >= day && r.at < end) cost += sumUsage(r.models).cost;
+      }
+    }
+    return { day, cost };
   }
 
   private readSince(): number {
@@ -45,6 +75,8 @@ export class CostLog {
 
   append(record: TurnRecord): void {
     const line = `${encodeRecord(record)}\n`;
+    const today = this.today();
+    if (dayOf(record.at) === today.day) this.day = { ...today, cost: today.cost + sumUsage(record.models).cost };
     this.tail = this.tail
       .then(async () => {
         await mkdir(this.dir, { recursive: true });

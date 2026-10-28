@@ -991,7 +991,9 @@ class Hub {
     handle('cost:history', async (from, to) => {
       const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
       if (!ok(from) || !ok(to) || from >= to) throw new Error(t('cost.badRange'));
-      return { records: await this.costLog.read(from, to), since: this.costLog.since };
+      // Turns logged before their repo was kept: the repo of their session, when it is still known.
+      const records = (await this.costLog.read(from, to)).map((r) => (r.repo !== undefined ? r : { ...r, repo: mgr.costRepoOf(r.id) ?? '' }));
+      return { records, since: this.costLog.since };
     });
     handle('repo:graph', (path, filter, limit) => {
       const c = checkout(path);
