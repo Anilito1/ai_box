@@ -5,6 +5,7 @@ import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
+import { dayOf } from '../shared/costs';
 import { windowFigure } from '../shared/usage';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
@@ -85,7 +86,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, usage: null, topics: [], accounts: [], providers: [] };
+let snapshot: HubSnapshot = { sessions: [], costToday: { day: 0, cost: 0 }, models: [], catalogs: {}, usage: null, topics: [], accounts: [], providers: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 
@@ -312,7 +313,9 @@ function renderStatusbar(usage: UsageState | null): void {
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
   const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(total), usage, usageClock()]);
+  // From midnight on, today's figure is 0 until a turn brings a new snapshot.
+  const today = snapshot.costToday.day === dayOf(Date.now()) ? snapshot.costToday.cost : 0;
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), fmtCost(total), usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -327,11 +330,11 @@ function renderStatusbar(usage: UsageState | null): void {
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
-  // The Σ opens the cost by period.
+  // Today's cost, then the Σ of the open sessions; a click opens the cost by repo.
   const cost = h('button', 'sb-item sb-cost');
-  cost.title = `${t('sb.costHint')}\n${t('cost.open')}`;
+  cost.title = `${t('sb.costHint')}\n${t('sb.costTotalHint')}\n${t('cost.open')}`;
   cost.setAttribute('aria-haspopup', 'dialog');
-  cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(total)));
+  cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(today)), h('span', 'sb-cost-total', `${t('sb.costTotal')} ${fmtCost(total)}`));
   cost.addEventListener('click', () => toggleCostPanel(hub, cost));
   const right: HTMLElement[] = [cost];
   if (usage) {

@@ -1,5 +1,5 @@
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
-import type { TurnRecord } from './costs';
+import type { DayCost, TurnRecord } from './costs';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
 import type { CliRun, UpdateAction } from './cliUpdate';
@@ -436,6 +436,8 @@ export type RepoActionResult = { ok: true } | { ok: false; kind: RepoErrorKind; 
 
 export interface HubSnapshot {
   sessions: SessionView[];
+  /** What every session spent today (local day), from the turn log. */
+  costToday: DayCost;
   models: ModelOption[];
   /** Plan limits of the master's account; null when that account has none (API key, third-party server). */
   usage: UsageState | null;

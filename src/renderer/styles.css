@@ -3320,6 +3320,10 @@ kbd,
 .sb-cost:hover {
   background: var(--hover-strong);
 }
+.sb-cost-total {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
 
 .cost-panel {
   /* One series: the accent, a step lighter on the dark surface (validated: lightness band and 3:1 against it). */
@@ -3451,6 +3455,15 @@ kbd,
 }
 .cost-more .cost-amount {
   color: inherit;
+}
+/* The total of the rows, under them. */
+.cost-sum {
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--line);
+  font-weight: 600;
+}
+.cost-sum .cost-amount {
+  color: var(--text);
 }
 .cost-empty {
   color: var(--text-3);

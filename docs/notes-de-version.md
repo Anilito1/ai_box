@@ -24,6 +24,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- La barre d'état montre le coût API du jour, remis à zéro à minuit ; au clic, le détail se lit par repo.
 - Le compteur d'usage de la barre d'état suit le bon compte, se met à jour tout seul et affiche « inconnu » plutôt qu'un faux 0 %.
 - Nouvelle mascotte 3D pour DeepSeek.
 - Les commandes propres au terminal ouvrent le panneau de l'app qui les remplace.
