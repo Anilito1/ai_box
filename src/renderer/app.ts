@@ -312,10 +312,9 @@ function renderStatusbar(usage: UsageState | null): void {
   const running = workers.filter((s) => s.status === 'busy').length;
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
-  const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
   // From midnight on, today's figure is 0 until a turn brings a new snapshot.
   const today = snapshot.costToday.day === dayOf(Date.now()) ? snapshot.costToday.cost : 0;
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), fmtCost(total), usage, usageClock()]);
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -330,11 +329,11 @@ function renderStatusbar(usage: UsageState | null): void {
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
-  // Today's cost, then the Σ of the open sessions; a click opens the cost by repo.
+  // Today's cost; a click opens the cost by repo.
   const cost = h('button', 'sb-item sb-cost');
-  cost.title = `${t('sb.costHint')}\n${t('sb.costTotalHint')}\n${t('cost.open')}`;
+  cost.title = `${t('sb.costHint')}\n${t('cost.open')}`;
   cost.setAttribute('aria-haspopup', 'dialog');
-  cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(today)), h('span', 'sb-cost-total', `${t('sb.costTotal')} ${fmtCost(total)}`));
+  cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(today)));
   cost.addEventListener('click', () => toggleCostPanel(hub, cost));
   const right: HTMLElement[] = [cost];
   if (usage) {

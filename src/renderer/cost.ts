@@ -18,7 +18,7 @@ function storedPeriod(): Period {
 
 let openPanel: CostPanel | null = null;
 
-/** Opens the cost popover above the status bar's Σ, or closes it when it is open. */
+/** Opens the cost popover above the status bar's cost, or closes it when it is open. */
 export function toggleCostPanel(hub: HubApi, anchor: HTMLElement): void {
   if (openPanel) return openPanel.close();
   openPanel = new CostPanel(hub, anchor);
@@ -67,7 +67,7 @@ class CostPanel {
     this.periodSeg.querySelector<HTMLElement>('.seg.active')?.focus();
   }
 
-  /** Above the Σ, its right edge on the Σ's, inside the window. */
+  /** Above the status bar's cost, its right edge on the cost's, inside the window. */
   private readonly place = () => {
     const r = this.anchorEl().getBoundingClientRect();
     this.root.style.right = `${Math.max(12, window.innerWidth - r.right - 8)}px`;
@@ -77,7 +77,7 @@ class CostPanel {
 
   private readonly onDown = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
-    // The Σ toggles the popover on its own click.
+    // The status bar's cost toggles the popover on its own click.
     if (!this.root.contains(target) && !target.closest('.sb-cost')) this.close();
   };
 
@@ -109,7 +109,7 @@ class CostPanel {
     this.anchorEl().focus();
   }
 
-  /** The status bar redraws its Σ when the total moves: the one in the window now. */
+  /** The status bar redraws its cost when the figure moves: the one in the window now. */
   private anchorEl(): HTMLElement {
     return this.anchor.isConnected ? this.anchor : (document.querySelector<HTMLElement>('.sb-cost') ?? this.anchor);
   }

@@ -3304,7 +3304,7 @@ kbd,
   min-width: 200px;
 }
 
-/* the Σ of the status bar opens the panel */
+/* the cost of the status bar opens the panel */
 .sb-cost {
   height: 20px;
   margin: 0 -6px;
@@ -3319,10 +3319,6 @@ kbd,
 }
 .sb-cost:hover {
   background: var(--hover-strong);
-}
-.sb-cost-total {
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
 }
 
 .cost-panel {
