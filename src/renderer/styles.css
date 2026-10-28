@@ -2966,6 +2966,108 @@ kbd,
   font-weight: 500;
 }
 
+/* ---------- release notes: what changed since the last start, a card over the dimmed window (no blur, as the
+   settings sheet) ---------- */
+.notes-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: var(--scrim);
+  transition: opacity var(--dur-3) var(--ease-out);
+}
+.notes-overlay.closing {
+  opacity: 0;
+  pointer-events: none;
+}
+.notes-card {
+  display: flex;
+  flex-direction: column;
+  width: min(500px, 100%);
+  max-height: min(560px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  background: var(--elevated);
+  box-shadow: var(--shadow-lg);
+  transition:
+    opacity var(--dur-3) var(--ease-out),
+    transform var(--dur-4) var(--ease-spring);
+}
+.notes-overlay.closing .notes-card {
+  transform: scale(0.98) translateY(4px);
+}
+@starting-style {
+  .notes-overlay {
+    opacity: 0;
+  }
+  .notes-card {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+}
+.notes-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-6) var(--sp-6) var(--sp-4);
+}
+.notes-title {
+  margin: 0 0 4px;
+  font: 600 var(--fs-2xl) / var(--lh-tight) var(--font-display);
+  letter-spacing: -0.01em;
+}
+.notes-lead {
+  margin: 0 0 var(--sp-4);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.notes-section + .notes-section {
+  margin-top: var(--sp-4);
+}
+.notes-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.notes-label::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.notes-section.added .notes-label::before {
+  background: var(--ok);
+}
+.notes-section.removed .notes-label::before {
+  background: var(--text-3);
+}
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+.notes-list li::marker {
+  color: var(--text-3);
+}
+.notes-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--sp-3) var(--sp-6);
+  border-top: 1px solid var(--line);
+}
+
 /* ---------- command palette ---------- */
 .palette-overlay {
   position: fixed;

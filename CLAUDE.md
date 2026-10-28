@@ -2,6 +2,13 @@
 
 Electron + TypeScript. `npm run typecheck`, `npm test`, `npm run build` must be green before a merge.
 
+## Release notes
+
+A change users can see adds one short French line, for users (no file, commit or jargon), at the top of
+`docs/notes-de-version.md` under `### Ajouté`, `### Modifié` or `### Supprimé` of a `## AAAA-MM-JJ` entry; the app shows
+the lines it has not shown yet at the next start. Never reword a published line (it would show again). `npm run notes`
+drafts them from the commits since the file last changed; `npm test` checks the file.
+
 ## Checking the UI
 
 Use `npm run ui`, never the installed app and never its data folder. It builds if needed, starts an isolated instance

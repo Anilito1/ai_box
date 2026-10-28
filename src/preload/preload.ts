@@ -116,6 +116,8 @@ const api: HubApi = {
   installUpdate: (choice) => ipcRenderer.invoke('update:install', choice),
   answerUpdate: (go) => ipcRenderer.send('update:answer', go),
   openUpdateFolder: () => ipcRenderer.send('update:open-folder'),
+  releaseNotes: () => ipcRenderer.invoke('notes:pending'),
+  releaseNotesSeen: () => ipcRenderer.send('notes:seen'),
 };
 
 contextBridge.exposeInMainWorld('hub', api);

@@ -4,6 +4,7 @@ import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
 import type { CliRun, UpdateAction } from './cliUpdate';
 import type { KeepReason } from './parallel';
+import type { Notes } from './releaseNotes';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
 import type { TopicGroupPrefs } from './topicGroups';
@@ -847,4 +848,8 @@ export interface HubApi {
   answerUpdate(go: boolean): void;
   /** Opens the hub's own folder (local modifications to look at). */
   openUpdateFolder(): void;
+  /** What changed since the last start (docs/notes-de-version.md), null for nothing to show. */
+  releaseNotes(): Promise<Notes | null>;
+  /** The window showed them: the next start shows only lines added since. */
+  releaseNotesSeen(): void;
 }

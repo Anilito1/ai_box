@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 // What the build is made from, as a short hash of every source's size and modification time: written into dist by
 // build.mjs, compared at start by a hub run from source. Stats only, no reading: cheap enough for every start.
 
-const FILES = ['build.mjs', 'package.json', 'package-lock.json', 'assets/logo.png', 'assets/clawd.glb', 'THIRD_PARTY_NOTICES.md', 'scripts/sourceStamp.mjs'];
+const FILES = ['build.mjs', 'package.json', 'package-lock.json', 'assets/logo.png', 'assets/clawd.glb', 'THIRD_PARTY_NOTICES.md', 'docs/notes-de-version.md', 'scripts/sourceStamp.mjs'];
 export const STAMP_FILE = 'dist/source-stamp.txt';
 
 /** @param {string} dir */
