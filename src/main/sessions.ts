@@ -16,6 +16,7 @@ import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff, staleNote } from '../shared/passation';
+import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -119,6 +120,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   accountId: string;
   /** Account its running process was started on; empty when closed. */
   runAccount: string;
+  /** The account "default" stood for when that process started, i.e. whose plan limits its readings are; empty when closed. */
+  usageAccount: string;
   /** Ultracode was on when its running process started: a worker's Workflow tool is there only then (see the adapter). */
   runUltracode: boolean;
   /** Its account changed during a turn: it restarts on the new one (`pendingTo`) once the turn is over. */
@@ -412,9 +415,10 @@ export class SessionManager extends EventEmitter {
   private readonly catalogs = new Map<string, AgentModel[]>();
   /** Commands of the last session that started: offered to one that has not run yet. */
   private lastCommands: AgentCommand[] = [];
-  /** Plan limits by account, and when each was last asked. */
-  private readonly rateLimits = new Map<string, RateLimits>();
+  /** Plan limits by account (the account a process was started on), and when each was last asked. */
+  private readonly usage = new Map<string, UsageRecord>();
   private readonly usageCheckedAt = new Map<string, number>();
+  private readonly usageAsking = new Set<string>();
   /** Which providers are connected, as the main process last checked them. */
   private providerStates: Record<string, ProviderState> = {};
   /** What is new at each provider (models, program version), as the main process read it. */
@@ -447,6 +451,8 @@ export class SessionManager extends EventEmitter {
     this.attachDir = join(opts.dataDir, 'attachments');
     this.restore();
     this.syncTeam();
+    // The figure follows the user's other uses of the account too (a terminal, claude.ai): asked now and then, turn or not.
+    setInterval(() => this.pollUsage(), USAGE_POLL_MS).unref();
   }
 
   // ---------- lifecycle ----------
@@ -638,7 +644,7 @@ export class SessionManager extends EventEmitter {
 
   /** The plan limits of an account, as its program last told them. */
   setLimits(account: string, limits: RateLimits): void {
-    this.rateLimits.set(this.canon(account), limits);
+    this.usage.set(this.canon(account), usageRead(limits, Date.now()));
     this.changed();
   }
 
@@ -1313,12 +1319,11 @@ export class SessionManager extends EventEmitter {
         ultracodeAccess: this.ultracodeAccessOf(s.runAccount || this.accountOf(s)),
       }));
     // The status bar shows the limits of the master's account.
-    const master = this.sessions.get(MASTER_ID);
-    const limits = this.rateLimits.get(this.canon(master ? master.runAccount || this.accountOf(master) : DEFAULT_ACCOUNT)) ?? null;
+    const shown = this.shownUsageAccount();
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
     this.fileTopicsByRepo();
-    return { sessions, models: this.modelOptions(), catalogs, rateLimits: limits, topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
+    return { sessions, models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -1434,6 +1439,7 @@ export class SessionManager extends EventEmitter {
     if (this.quitting || s.inbox !== inbox) return;
     // The account is fixed for the life of the process: a switch starts another one on the same conversation.
     s.runAccount = account;
+    s.usageAccount = this.canon(account);
     s.switchPending = false;
     s.ultracodePending = false;
     // The master's and a post's prompts change between launches (team, post, handoff note): rendered at each launch,
@@ -1525,6 +1531,7 @@ export class SessionManager extends EventEmitter {
     s.liveId = null;
     s.queued = 0;
     s.runAccount = '';
+    s.usageAccount = '';
     s.switchPending = false;
     s.ultracodePending = false;
     // Withdrawn, not refused: nobody answered them.
@@ -1843,19 +1850,41 @@ export class SessionManager extends EventEmitter {
     this.notice(s, t('notice.compactedTo', { before: tokens(before), after: tokens(after), pct: Math.max(1, Math.round((after / size) * 100)) }), 'info');
   }
 
-  /** Plan limits (5 h / 7 days) of the session's account from the SDK's experimental /usage API, at most once a minute. */
-  private async refreshUsage(s: Session, q: AgentProcess): Promise<void> {
-    const account = this.canon(s.runAccount || DEFAULT_ACCOUNT);
-    if (this.kindOf(account) === 'openai' || this.kindOf(account) === 'anthropic-compatible' || Date.now() - (this.usageCheckedAt.get(account) ?? 0) < 60_000) return;
+  /** The account whose plan limits the status bar shows: the master's. */
+  private shownUsageAccount(): string {
+    const master = this.sessions.get(MASTER_ID);
+    return usageAccount(master?.usageAccount ?? '', master ? this.accountOf(master) : DEFAULT_ACCOUNT, this.opts.cfg.anthropicActive);
+  }
+
+  /**
+   * Plan limits (5 h / 7 days) of the account a session's process runs on, from the program's own /usage answer. Asked at
+   * a start, after each turn, and every few minutes (pollUsage); once per account at a time, at most every 20 s. A failed
+   * reading keeps the last good one with its date and says it failed: the status bar then reads "unknown", never zero.
+   */
+  private async refreshUsage(s: Session, q: AgentProcess, force = false): Promise<void> {
+    const account = s.usageAccount || this.canon(s.runAccount || DEFAULT_ACCOUNT);
+    const kind = this.kindOf(account);
+    if (kind === 'openai' || kind === 'anthropic-compatible' || this.usageAsking.has(account)) return;
+    if (!force && Date.now() - (this.usageCheckedAt.get(account) ?? 0) < USAGE_MIN_GAP_MS) return;
+    this.usageAsking.add(account);
     this.usageCheckedAt.set(account, Date.now());
     try {
-      const limits = await q.rateLimits();
-      if (!limits) return;
-      this.rateLimits.set(account, limits);
-      this.changed();
+      this.usage.set(account, usageRead(await q.rateLimits(), Date.now()));
     } catch {
-      // Experimental API unavailable in this CLI version: the status bar simply omits plan limits.
+      // Experimental API unavailable, signed out, offline: the status bar says the figure is unknown.
+      this.usage.set(account, usageFailed(this.usage.get(account)));
+    } finally {
+      this.usageAsking.delete(account);
     }
+    this.changed();
+  }
+
+  /** Reads the displayed account again through one of its live sessions. */
+  private pollUsage(): void {
+    if (this.quitting) return;
+    const shown = this.shownUsageAccount();
+    const s = [...this.sessions.values()].find((x) => x.query && x.status !== 'starting' && x.usageAccount === shown);
+    if (s?.query) void this.refreshUsage(s, s.query, true);
   }
 
   private askPermission(s: Session, req: PermissionRequest): Promise<PermissionAnswer> {
@@ -3759,6 +3788,7 @@ export class SessionManager extends EventEmitter {
       commands: [],
       accountId: '',
       runAccount: '',
+      usageAccount: '',
       switchPending: false,
       ultracodePending: false,
       pendingTo: '',

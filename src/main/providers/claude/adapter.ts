@@ -14,6 +14,7 @@ import {
 import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
+import { limitsOfUsage } from '../../../shared/usage';
 import { blocksOf } from '../blocks';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
@@ -106,15 +107,12 @@ export class ClaudeProcess implements AgentProcess {
   }
 
   async rateLimits(): Promise<RateLimits | null> {
-    const limits = (await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true })).rate_limits;
-    if (!limits) return null;
-    const epoch = (iso: string | null | undefined) => (iso ? Date.parse(iso) / 1000 : null);
-    return {
-      fiveHourPct: limits.five_hour?.utilization ?? null,
-      fiveHourResetsAt: epoch(limits.five_hour?.resets_at),
-      sevenDayPct: limits.seven_day?.utilization ?? null,
-      sevenDayResetsAt: epoch(limits.seven_day?.resets_at),
-    };
+    const usage = await this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
+    if (!usage.rate_limits_available) return null; // API key, Bedrock, Vertex: no plan limits.
+    const limits = limitsOfUsage(usage.rate_limits);
+    // Plan limits apply but the answer holds no figure (not signed in to claude.ai, shape changed): a failure, not a zero.
+    if (!limits) throw new Error('usage: no plan-limit figure in the answer');
+    return limits;
   }
 }
 

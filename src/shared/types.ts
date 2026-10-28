@@ -63,6 +63,16 @@ export interface RateLimits {
   sevenDayResetsAt: number | null;
 }
 
+/** What the status bar knows of the plan limits of the account it shows. */
+export interface UsageState {
+  /** The last good reading; null while there is none. */
+  limits: RateLimits | null;
+  /** Epoch ms of that reading. */
+  measuredAt: number | null;
+  /** The last attempt to read them failed. */
+  failed: boolean;
+}
+
 /**
  * A permanent worker with a set post (backend, front, QA…): it carries a handoff note from one mission to the next,
  * sleeps when it has nothing to do, and the master hands it the tasks of its post first.
@@ -427,7 +437,8 @@ export type RepoActionResult = { ok: true } | { ok: false; kind: RepoErrorKind; 
 export interface HubSnapshot {
   sessions: SessionView[];
   models: ModelOption[];
-  rateLimits: RateLimits | null;
+  /** Plan limits of the master's account; null when that account has none (API key, third-party server). */
+  usage: UsageState | null;
   /** The models of each account that has a list of its own (Codex), by account id. */
   catalogs: Record<string, ModelOption[]>;
   /** Topics of the master's conversation, most recent activity first. */
