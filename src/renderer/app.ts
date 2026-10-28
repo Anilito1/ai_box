@@ -1,9 +1,10 @@
-import type { ChatItem, HubApi, HubSnapshot, RateLimits, SessionView } from '../shared/types';
+import type { ChatItem, HubApi, HubSnapshot, SessionView, UsageState } from '../shared/types';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
+import { windowFigure } from '../shared/usage';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
@@ -83,7 +84,7 @@ interface Card {
 const cards = new Map<string, Card>();
 const repoPanel = new RepoPanel(hub);
 const store = new Map<string, Map<string, ChatItem>>();
-let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, rateLimits: null, topics: [], accounts: [], providers: [] };
+let snapshot: HubSnapshot = { sessions: [], models: [], catalogs: {}, usage: null, topics: [], accounts: [], providers: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
 
@@ -290,15 +291,27 @@ function resetTime(epochSeconds: number | null, withDay: boolean): string {
   return t('sb.reset', { date: new Date(epochSeconds * 1000).toLocaleString(LANG, opts) });
 }
 
+/** A plan-limit figure: the number while it can be claimed, else "unknown" with the date of the last reading. */
+function usageItem(label: string, usage: UsageState, pctKey: 'fiveHourPct' | 'sevenDayPct', resetKey: 'fiveHourResetsAt' | 'sevenDayResetsAt', withDay: boolean): HTMLDivElement {
+  const limits = usage.limits;
+  const value = windowFigure(limits?.[pctKey], limits?.[resetKey], usage.measuredAt, Date.now());
+  const when = usage.measuredAt ? t('sb.measured', { date: new Date(usage.measuredAt).toLocaleString(LANG, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }) : t('sb.neverMeasured');
+  if (value == null) return sbItem(label, t('sb.unknown'), 'sb-unknown', [when, usage.failed ? t('sb.readFailed') : ''].filter(Boolean).join('\n'));
+  return sbItem(label, fmtPct(value), level(value), [resetTime(limits?.[resetKey] ?? null, withDay), when].filter(Boolean).join('\n'));
+}
+
+/** Changes every 30 s: a figure turns "unknown" on its own when its reading gets old, without waiting for a new snapshot. */
+const usageClock = () => Math.floor(Date.now() / 30_000);
+
 let statusKey = '';
 
-function renderStatusbar(rate: RateLimits | null): void {
+function renderStatusbar(usage: UsageState | null): void {
   const workers = snapshot.sessions.filter((s) => s.role === 'worker' && !isClosed(s));
   const running = workers.filter((s) => s.status === 'busy').length;
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
   const total = snapshot.sessions.reduce((sum, s) => sum + (s.metrics?.costUsd ?? 0), 0);
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(total), rate]);
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(total), usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -320,12 +333,13 @@ function renderStatusbar(rate: RateLimits | null): void {
   cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(total)));
   cost.addEventListener('click', () => toggleCostPanel(hub, cost));
   const right: HTMLElement[] = [cost];
-  if (rate?.fiveHourPct != null) {
-    right.push(h('span', 'sb-sep'), sbItem(t('sb.5h'), fmtPct(rate.fiveHourPct), level(rate.fiveHourPct), resetTime(rate.fiveHourResetsAt, false)));
+  if (usage) {
+    right.push(h('span', 'sb-sep'), usageItem(t('sb.5h'), usage, 'fiveHourPct', 'fiveHourResetsAt', false), usageItem(t('sb.7d'), usage, 'sevenDayPct', 'sevenDayResetsAt', true));
   }
-  if (rate?.sevenDayPct != null) right.push(sbItem(t('sb.7d'), fmtPct(rate.sevenDayPct), level(rate.sevenDayPct), resetTime(rate.sevenDayResetsAt, true)));
   $('sb-right').replaceChildren(...right);
 }
+
+window.setInterval(() => renderStatusbar(snapshot.usage), 30_000);
 
 // ---------- render ----------
 
@@ -365,7 +379,7 @@ function render(): void {
   topicsView.update(snapshot.topics, master && store.get(master.id));
   const worker = sessions.find((s) => s.id === opened);
   workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts, snapshot.catalogs, snapshot.providers);
-  renderStatusbar(snapshot.rateLimits);
+  renderStatusbar(snapshot.usage);
   renderRepos();
 }
 

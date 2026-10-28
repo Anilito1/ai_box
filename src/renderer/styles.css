@@ -3517,6 +3517,11 @@ kbd,
 .sb-num.danger {
   color: var(--danger);
 }
+.sb-num.sb-unknown {
+  color: var(--text-3);
+  font-weight: 400;
+  font-style: italic;
+}
 .sb-sep {
   width: 1px;
   height: 12px;
