@@ -255,10 +255,10 @@ export function modelGrid(allowed: string[], maxEffort: Effort): GridRow[] {
   const row = (tier: Tier, model: string, effort: Effort, alt: GridRow['alt'] = null): GridRow => ({ tier, model, effort: cap(effort), alt });
   const altOf = (model: string, effort: Effort) => (model && model !== fast ? { model, effort: cap(effort) } : null);
   return [
-    row('simple', fast, 'low', allowed.includes('haiku') && fast !== 'haiku' ? { model: 'haiku', effort: cap('medium') } : null),
+    row('simple', fast, 'medium', { model: fast, effort: cap('low') }),
     row('standard', fast, 'high', altOf(strong, 'medium')),
     row('hard', strong, 'high'),
-    row('critical', strong, 'xhigh', allowed.includes('fable') && strong !== 'fable' ? { model: 'fable', effort: cap('high') } : null),
+    row('critical', strong, 'high'),
   ];
 }
 

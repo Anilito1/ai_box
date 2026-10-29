@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-10-29
+
+### Modifié
+
+- Les workers travaillent par défaut en effort moyen, et en Sonnet pour l'analyse et les rapports, pour économiser du quota.
+
 ## 2026-10-28
 
 ### Ajouté

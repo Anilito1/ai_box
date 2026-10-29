@@ -294,7 +294,7 @@ type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
 const MASTER_ID = 'master';
 /** Effort of a worker when nobody fixed one: the user's own default (settings.json) is for their own sessions. */
-const WORKER_EFFORT: Effort = 'high';
+const WORKER_EFFORT: Effort = 'medium';
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
 const ITEMS_MAX = 1500;

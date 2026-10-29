@@ -160,16 +160,16 @@ export function rosterBlock(cfg: HubConfig, l: Lang = lang()): string {
 
 const TIERS: Record<Lang, Record<Tier, { name: string; what: string; alt: string }>> = {
   fr: {
-    simple: { name: 'Simple', what: "collecte d'infos, renommage, formatage, bump de version, changement entièrement spécifié", alt: 'si la tâche est répétitive et en lecture seule' },
+    simple: { name: 'Simple', what: "collecte d'infos, veille, recherche web, analyse, audit de lecture hors sécurité, rapport, monitoring, export de données ; code simple entièrement spécifié (renommage, bump, formatage, petit correctif)", alt: "si c'est mécanique" },
     standard: { name: 'Standard', what: 'feature ou correctif clair dans une zone connue, quelques fichiers, tests en place', alt: 'si le code est inconnu ou délicat' },
     hard: { name: 'Difficile', what: 'débogage à cause inconnue, refonte sur plusieurs modules, migration, concurrence, performance', alt: '' },
-    critical: { name: 'Critique', what: 'architecture, sécurité (auth, secrets, RLS, paiement), données de prod, incident en prod, longue mission autonome', alt: 'pour un raisonnement hors norme, plus cher' },
+    critical: { name: 'Critique', what: 'sécurité (auth, secrets, RLS, paiement, audit sécu), données de prod, incident en prod, architecture', alt: '' },
   },
   en: {
-    simple: { name: 'Simple', what: 'gathering information, renaming, formatting, a version bump, a fully specified change', alt: 'when the task is repetitive and read-only' },
+    simple: { name: 'Simple', what: 'gathering information, monitoring, web research, analysis, read-only audit outside security, reports, data exports; simple, fully specified code (renaming, bump, formatting, small fix)', alt: 'when it is mechanical' },
     standard: { name: 'Standard', what: 'a clear feature or fix in a known area, a few files, tests in place', alt: 'when the code is unfamiliar or delicate' },
     hard: { name: 'Hard', what: 'debugging an unknown cause, a refactor across modules, a migration, concurrency, performance', alt: '' },
-    critical: { name: 'Critical', what: 'architecture, security (auth, secrets, RLS, payments), production data, a production incident, a long autonomous mission', alt: 'for exceptional reasoning, at a higher cost' },
+    critical: { name: 'Critical', what: 'security (auth, secrets, RLS, payments, security audit), production data, a production incident, architecture', alt: '' },
   },
 };
 
@@ -257,7 +257,8 @@ Niveau → modèle · effort :
 ${gridText(cfg, l)}
 - Ponctuel : passe \`model\` et \`effort\` à \`spawn_worker\`. Permanent en auto : passe-les à \`message_worker\` avec la mission ; sans eux, il garde ceux de sa mission précédente.
 - Au moindre doute sur le risque prod ou la sécurité, monte d'un niveau ; sinon prends le plus bas qui convient.
-- Poste en auto : Sonnet · high pour l'exécution courante ; Opus pour la conception, la sécurité critique et l'UI.
+- Effort par défaut : medium. high est réservé au code standard ou difficile et à la sécurité.
+- Poste en auto : Sonnet · medium pour l'analyse et les rapports, Sonnet · high pour le code courant ; Opus pour la conception, la sécurité critique et l'UI.
 - Annonce ton choix en une ligne quand tu délègues, ex. « → backend · opus / high : cause inconnue, prod touchée ».
 - Un worker qui patine (deux échecs, boucle, rapport faible) : envoie-lui la suite un niveau plus haut. Suite simple d'une mission difficile : redescends.
 - Changer de modèle ou d'effort vide le cache de sa conversation : pour un permanent, ne change que si le niveau change.
@@ -276,7 +277,8 @@ Level → model · effort:
 ${gridText(cfg, l)}
 - Ad-hoc worker: pass \`model\` and \`effort\` to \`spawn_worker\`. Permanent worker in auto: pass them to \`message_worker\` with the mission; without them, it keeps those of its previous mission.
 - At the slightest doubt about production risk or security, go one level up; otherwise take the lowest level that fits.
-- Post in auto: Sonnet · high for routine execution; Opus for design, critical security and UI.
+- Default effort: medium. high is reserved for standard or hard code and for security.
+- Post in auto: Sonnet · medium for analysis and reports, Sonnet · high for routine code; Opus for design, critical security and UI.
 - Announce your choice in one line when you delegate, e.g. "→ backend · opus / high: unknown cause, production touched".
 - A worker that struggles (two failures, a loop, a weak report): send it the follow-up one level higher. A simple follow-up of a hard mission: go back down.
 - Changing a model or effort empties its conversation's cache: for a permanent worker, only change when the level changes.
