@@ -10,7 +10,7 @@ import { resolveTopicRepo } from '../shared/topicGroups';
 import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from '../shared/groups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
-import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
+import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
@@ -116,7 +116,7 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -1339,6 +1339,7 @@ export class SessionManager extends EventEmitter {
         tool: s.tools.values().next().value ?? null,
         approvedAt: s.approvedAt,
         pulse: pulseOf(s),
+        modelStreams: modelStreams(this.kindOf(s.runAccount || this.accountOf(s))),
         error: s.error,
         account: s.runAccount || this.accountOf(s),
         fallbackFrom: s.home === null ? '' : this.accountOf(s, s.home),
@@ -1514,8 +1515,8 @@ export class SessionManager extends EventEmitter {
       onSignal: () => {
         if (s.inbox === inbox) this.signal(s);
       },
-      onPermission: (req) => this.askPermission(s, req),
-      onElicitation: (req, signal) => this.answerElicitation(s, req, signal),
+      onPermission: (req) => this.askPermission(s, req, inbox),
+      onElicitation: (req, signal) => this.answerElicitation(s, req, signal, inbox),
     });
     s.query = q;
     s.usageSeen = null;
@@ -1530,7 +1531,8 @@ export class SessionManager extends EventEmitter {
   private async consume(s: Session, q: AgentProcess, isMissing: (failure: string) => boolean, adapter: ProviderAdapter): Promise<void> {
     let failure = '';
     try {
-      for await (const ev of q.events) this.onEvent(s, q, ev);
+      // Once replaced or stopped, what a process still says is no news of this session: its tool would never end.
+      for await (const ev of q.events) if (s.query === q) this.onEvent(s, q, ev);
     } catch (err) {
       failure = errorText(err);
     }
@@ -1663,7 +1665,7 @@ export class SessionManager extends EventEmitter {
         break;
       case 'background':
         s.background = ev.tasks;
-        if (s.closeWhenDone && s.background.length === 0) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        if (s.background.length === 0) this.lookAgainSoon(s, q);
         break;
       case 'agentTask':
         if (ev.state === 'start') this.trackAgent(s, ev.id, true);
@@ -1678,7 +1680,7 @@ export class SessionManager extends EventEmitter {
       case 'stream': {
         const before = s.status;
         const retried = this.cameThrough(s);
-        this.markBusy(s);
+        this.markBusy(s, true);
         s.tokens.estimate(tokensOf(ev.delta));
         if (ev.textStart) {
           s.liveId = `live-${randomUUID()}`;
@@ -1692,8 +1694,9 @@ export class SessionManager extends EventEmitter {
         return;
       }
       case 'output':
-        // While a tool of the turn runs, the thinking that arrives is a subagent's.
-        if (s.tools.size === 0) s.tokens.estimate(ev.tokens);
+        // With a tool or a subagent at work, thinking of no known owner may not be the turn's: its real count will say.
+        if (ev.unattributed && (s.tools.size > 0 || s.agents > 0)) return;
+        s.tokens.estimate(ev.tokens);
         if (this.cameThrough(s)) this.changed();
         return;
       case 'outputTokens':
@@ -1707,7 +1710,7 @@ export class SessionManager extends EventEmitter {
         s.retrying = false;
         // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
         if (!ev.error) s.limit = null;
-        this.markBusy(s);
+        this.markBusy(s, true);
         // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
         const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
@@ -1741,7 +1744,7 @@ export class SessionManager extends EventEmitter {
         // One of our prompts reached the model: it is no longer waiting in the queue.
         s.queued = Math.max(0, s.queued - 1);
         if (s.id === MASTER_ID) this.topics.taken(ev.text);
-        this.markBusy(s);
+        this.markBusy(s, true);
         break;
       case 'peer': {
         const text = ev.body ?? userTextItem(ev.blocks, '')?.text ?? '';
@@ -1776,11 +1779,8 @@ export class SessionManager extends EventEmitter {
         s.turnOver = true;
         s.tools.clear();
         s.tokens.reset();
-        s.status = s.pending.size > 0 ? 'attention' : 'idle';
-        if (s.status === 'idle') {
-          s.busySince = null;
-          s.idleAt = Date.now();
-        }
+        if (s.pending.size > 0) s.status = 'attention';
+        else this.wentIdle(s);
         // The handoff note, kept for the next conversation. Work that came in while it was written may share its
         // turn: then the result answers that work, and goes where any result goes.
         const handoff = s.handoff && !s.handoffStale;
@@ -1805,8 +1805,7 @@ export class SessionManager extends EventEmitter {
         const size = Math.max(s.metrics?.contextSize ?? 0, ...ev.contextWindows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, size);
         this.countTurn(s, ev.usage);
-        if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
-        if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
+        this.lookAgainSoon(s, q);
         if (s.switchPending || s.ultracodePending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
         if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
         void this.refreshContext(s, q);
@@ -1816,12 +1815,26 @@ export class SessionManager extends EventEmitter {
       case 'context':
         this.setContext(s, ev.tokens, ev.size);
         break;
+      case 'subagent':
+        // A subagent at work: the retry or the limit was its own, and an answer of its model puts it behind.
+        if (s.tools.size > 0 || s.agents > 0) this.cameThrough(s);
+        break;
       case 'activity':
-        // A subagent at work: the retry or the limit it met is behind it. Its frames only ever arrive as activity.
-        if (s.tools.size > 0) this.cameThrough(s);
         break;
     }
     this.changed();
+  }
+
+  private wentIdle(s: Session): void {
+    s.status = 'idle';
+    s.busySince = null;
+    s.idleAt = Date.now();
+  }
+
+  /** Chasing a report and closing a session give up on one that is not settled: called again once it may be. */
+  private lookAgainSoon(s: Session, q: AgentProcess): void {
+    if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
+    if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
   }
 
   private hubMode(): Mode | null {
@@ -1833,11 +1846,13 @@ export class SessionManager extends EventEmitter {
     return this.postOf(s)?.mode || this.hubMode();
   }
 
-  private markBusy(s: Session): void {
+  /** `frame`: a frame of the process says so, and the turn it opens starts on that signal, whichever clock read came first. */
+  private markBusy(s: Session, frame = false): void {
     s.turnOver = false;
     if (s.status === 'attention') return;
     if (s.status !== 'busy') {
       s.busySince = Date.now();
+      if (frame) s.signalAt = s.busySince;
       s.tokens.reset(); // A reading that came between turns belongs to neither.
     }
     s.status = 'busy';
@@ -1974,8 +1989,9 @@ export class SessionManager extends EventEmitter {
     if (s?.query) void this.refreshUsage(s, s.query, true);
   }
 
-  private askPermission(s: Session, req: PermissionRequest): Promise<PermissionAnswer> {
-    if (req.signal.aborted) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
+  private askPermission(s: Session, req: PermissionRequest, inbox: Session['inbox']): Promise<PermissionAnswer> {
+    // A process that was replaced or stopped: no one is left to answer it, and the session is no longer its own.
+    if (req.signal.aborted || s.inbox !== inbox) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,
@@ -2006,7 +2022,13 @@ export class SessionManager extends EventEmitter {
         if (!s.pending.delete(item.id)) return;
         this.upsert(s, { ...item, state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
         // Asked after its turn ended (a background subagent): no end of turn would ever bring a "busy" back.
-        if (s.status === 'attention' && s.pending.size === 0) Object.assign(s, s.turnOver ? { status: 'idle', busySince: null, idleAt: Date.now() } : { status: 'busy' });
+        if (s.status === 'attention' && s.pending.size === 0) {
+          if (!s.turnOver) s.status = 'busy';
+          else {
+            this.wentIdle(s);
+            if (s.query) this.lookAgainSoon(s, s.query);
+          }
+        }
         // The wait for the user is neither silence of the process nor time of the tool.
         s.approvedAt = Date.now();
         for (const tool of s.tools.values()) if (tool.name === item.tool && tool.summary === item.summary) tool.since = s.approvedAt;
@@ -2023,7 +2045,8 @@ export class SessionManager extends EventEmitter {
    * validation, so they are accepted; in any other mode the user answers them like a permission. A form that needs
    * real input, or a browser sign-in, is declined and shown.
    */
-  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationAnswer> {
+  private answerElicitation(s: Session, req: ElicitationRequest, signal: AbortSignal, inbox: Session['inbox']): Promise<ElicitationAnswer> {
+    if (s.inbox !== inbox) return Promise.resolve({ action: 'decline' });
     const content = req.mode === 'url' ? null : confirmationAnswers(req.requestedSchema);
     const message = oneLine(req.message, 300);
     if (!content) {

@@ -112,11 +112,13 @@ export type AgentEvent =
       usage: Totals;
     }
   /** Model content that is no reply text (its thinking, a tool's input), as an estimate for the turn's token count. */
-  | { type: 'output'; tokens: number }
+  | { type: 'output'; tokens: number; /** The program does not say whose: a subagent's as well as the turn's. */ unattributed?: boolean }
   /** A real count of what the model sent: of the reply being written, or of the whole turn. */
   | { type: 'outputTokens'; of: 'reply' | 'turn'; tokens: number }
   /** The model starts another reply within the turn. */
   | { type: 'reply' }
+  /** A subagent's model answered. Which subagent the program does not say of its limits and retries, so nor does this. */
+  | { type: 'subagent' }
   /** Something arrived that changes nothing but "the session is alive". */
   | { type: 'activity' };
 

@@ -22,7 +22,7 @@ test('the turn count takes the replies of the model and its real counts', () => 
 });
 
 test('thinking counts through the estimate of the CLI: its deltas are empty on Opus', () => {
-  assert.deepEqual(translate(msg({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 250, estimated_tokens_delta: 150 })), [{ type: 'output', tokens: 150 }]);
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 250, estimated_tokens_delta: 150 })), [{ type: 'output', tokens: 150, unattributed: true }]);
   const hidden = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } } }));
   assert.deepEqual(hidden, [{ type: 'stream', textStart: false, delta: '' }]);
   const shown = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '12345678' } } }));
@@ -52,14 +52,14 @@ test('a refused rate limit is a limit signal with its reset; a warning is only a
   assert.deepEqual(translate(msg({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } })), [{ type: 'activity' }]);
 });
 
-test('stream events carry the start of a text block and its deltas; a subagent’s are only activity', () => {
+test('stream events carry the start of a text block and its deltas; a subagent’s only say it went on', () => {
   const start = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_start', content_block: { type: 'text' } } }));
   assert.deepEqual(start, [{ type: 'stream', textStart: true, delta: '' }]);
   const delta = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Bon' } } }));
   assert.deepEqual(delta, [{ type: 'stream', textStart: false, delta: 'Bon' }]);
   const other = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'signature_delta' } } }));
   assert.deepEqual(other, [{ type: 'stream', textStart: false, delta: '' }]);
-  assert.deepEqual(translate(msg({ type: 'stream_event', parent_tool_use_id: 'toolu_1', event: { type: 'message_start' } })), [{ type: 'activity' }]);
+  assert.deepEqual(translate(msg({ type: 'stream_event', parent_tool_use_id: 'toolu_1', event: { type: 'message_start' } })), [{ type: 'subagent' }]);
 });
 
 test('an assistant frame keeps its blocks, its error, and the context it filled', () => {
@@ -73,7 +73,7 @@ test('an assistant frame keeps its blocks, its error, and the context it filled'
     }),
   );
   assert.deepEqual(ev, { type: 'assistant', id: 'u1', blocks: [{ type: 'text', text: 'Limit' }], error: 'rate_limit', contextTokens: 100 });
-  assert.deepEqual(translate(msg({ type: 'assistant', uuid: 'u2', parent_tool_use_id: 'toolu_9', message: { content: [] } })), [{ type: 'activity' }]);
+  assert.deepEqual(translate(msg({ type: 'assistant', uuid: 'u2', parent_tool_use_id: 'toolu_9', message: { content: [] } })), [{ type: 'subagent' }]);
 });
 
 test('user frames: a replayed prompt, a message from a peer, tool results', () => {

@@ -21,6 +21,8 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Le bouton micro n'apparaît plus sur les ordinateurs où la dictée vocale n'existe pas.
 - Pendant une dictée, Entrée termine la dictée au lieu d'envoyer un texte incomplet : le texte attend dans le composeur.
+- « Semble bloqué » ne s'affiche plus pour un modèle qui réfléchit sans donner de nouvelles (Codex, Gemini, serveurs compatibles) : la ligne dit seulement depuis quand rien n'est arrivé.
+- La ligne d'activité reste exacte quand un sous-agent est arrêté par une limite, et après un changement de compte.
 
 ## 2026-10-29
 

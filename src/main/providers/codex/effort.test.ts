@@ -88,6 +88,7 @@ test('the effort a session is launched with, then the one picked by hand, reach 
     assert.equal(turns()[1].effort, 'low');
   } finally {
     proc.close();
-    rmSync(dir, { recursive: true, force: true });
+    // Windows keeps the folder until the stand-in, which runs in it, is gone.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 40, retryDelay: 50 });
   }
 });

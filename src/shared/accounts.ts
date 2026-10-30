@@ -64,6 +64,9 @@ export const runsClaude = (kind: AccountKind | 'default') => kind !== 'openai' &
 export const hasServer = (kind: AccountKind | 'default') => kind === 'openai' || kind === 'anthropic-compatible';
 /** Its sessions run one model of the account's, whatever model is asked for. An Anthropic-compatible account without one leaves Claude's names to its server. */
 export const pinsModel = (a: Pick<Account, 'kind' | 'model'>) => a.kind === 'openai' || (a.kind === 'anthropic-compatible' && a.model !== '');
+/** Claude Code on Anthropic's own API reports all along a reply. Elsewhere a model may think in silence: only Codex or Gemini's summaries, if any, or a server's stream would show it. */
+export const modelStreams = (kind: AccountKind | 'default'): boolean => kind === 'default' || kind === 'claude' || kind === 'anthropic-key';
+
 /** The program that runs the sessions of an account. */
 export const harnessOf = (kind: AccountKind | 'default'): HarnessId => (kind === 'codex' ? 'codex' : kind === 'gemini' || kind === 'gemini-key' ? 'gemini' : 'claude');
 /** A server on this computer (LM Studio, llama.cpp, Ollama…): it usually needs no key. */

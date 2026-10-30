@@ -17,6 +17,7 @@ export const toCommands = (list: { name: string; description: string; argumentHi
   list.map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint, aliases: c.aliases ?? [] }));
 
 const ACTIVITY: AgentEvent[] = [{ type: 'activity' }];
+const SUBAGENT: AgentEvent[] = [{ type: 'subagent' }];
 
 export function translate(msg: SDKMessage): AgentEvent[] {
   switch (msg.type) {
@@ -47,7 +48,7 @@ export function translate(msg: SDKMessage): AgentEvent[] {
           return [{ type: 'agentTask', id: msg.task_id, state: msg.status === 'failed' ? 'failed' : 'done' }];
         case 'thinking_tokens':
           // Hidden thinking (empty deltas, on Opus): this count of the CLI is all there is of it.
-          return [{ type: 'output', tokens: msg.estimated_tokens_delta }];
+          return [{ type: 'output', tokens: msg.estimated_tokens_delta, unattributed: true }];
         default:
           return ACTIVITY;
       }
@@ -57,7 +58,7 @@ export function translate(msg: SDKMessage): AgentEvent[] {
         ? [{ type: 'limit', signal: { kind: 'rate', resetsAt: msg.rate_limit_info.resetsAt ?? null, source: `rate_limit_event:${msg.rate_limit_info.rateLimitType ?? ''}` } }]
         : ACTIVITY;
     case 'stream_event': {
-      if (msg.parent_tool_use_id) return ACTIVITY;
+      if (msg.parent_tool_use_id) return SUBAGENT;
       const e = msg.event;
       const textStart = e.type === 'content_block_start' && e.content_block.type === 'text';
       const delta = e.type === 'content_block_delta' && e.delta.type === 'text_delta' ? e.delta.text : '';
@@ -71,7 +72,8 @@ export function translate(msg: SDKMessage): AgentEvent[] {
       return [stream];
     }
     case 'assistant': {
-      if (msg.parent_tool_use_id) return ACTIVITY;
+      // An error frame is how a limit goes on being said, not a reply.
+      if (msg.parent_tool_use_id) return msg.error ? ACTIVITY : SUBAGENT;
       const u = msg.message.usage;
       return [
         {

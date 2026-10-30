@@ -13,12 +13,12 @@ export interface PulseState {
   ms: number;
 }
 
-/** A model that streams says something all the time: a short silence already means something. */
-const modelTone = (quiet: number): PulseTone => (quiet < 30_000 ? 'ok' : quiet <= 120_000 ? 'slow' : 'stuck');
+/** A model that streams says something all the time: a short silence already means something. One that may think in silence is never called stuck. */
+const modelTone = (quiet: number, streams: boolean): PulseTone => (quiet < 30_000 ? 'ok' : quiet <= 120_000 || !streams ? 'slow' : 'stuck');
 /** A tool, a compaction or an API retry waiting its delay has nothing to say until it ends: only its length can tell. */
 const toolTone = (quiet: number): PulseTone => (quiet <= 120_000 ? 'ok' : quiet <= 600_000 ? 'slow' : 'stuck');
 
-type Seen = Pick<SessionView, 'status' | 'busySince' | 'compacting' | 'retrying' | 'limit' | 'tool' | 'pulse' | 'approvedAt'>;
+type Seen = Pick<SessionView, 'status' | 'busySince' | 'compacting' | 'retrying' | 'limit' | 'tool' | 'pulse' | 'approvedAt' | 'modelStreams'>;
 
 /** Null: nothing to show. An approval waits for the user, not for the process. */
 export function pulseState(s: Seen, now: number): PulseState | null {
@@ -32,7 +32,7 @@ export function pulseState(s: Seen, now: number): PulseState | null {
   if (s.limit) return { tone: 'neutral', silent, ms };
   // Measured from the tool's start or its last event alike: a tool that keeps talking stays fine.
   const quiet = Math.max(0, now - Math.max(signalAt ?? 0, waitFrom));
-  return { tone: s.tool || s.compacting || s.retrying ? toolTone(quiet) : modelTone(quiet), silent, ms };
+  return { tone: s.tool || s.compacting || s.retrying ? toolTone(quiet) : modelTone(quiet, s.modelStreams), silent, ms };
 }
 
 /** The tokens of a turn, short and in the reader's language: "850", "3,2 k", "1,5 M". */
@@ -73,7 +73,7 @@ export class TurnTokens {
   /** The next reply of the turn begins: what the last one came to stays. */
   nextReply(): void {
     this.rough ||= this.guess > 0;
-    this.settled += this.reply + this.guess;
+    this.settled += this.reply + Math.ceil(this.guess);
     this.reply = 0;
     this.guess = 0;
   }

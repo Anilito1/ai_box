@@ -11,6 +11,8 @@ drafts them from the commits since the file last changed; `npm test` checks the 
 
 ## Checking the UI
 
+`npm test` also starts the built app, isolated, for the composer's keyboard path (`src/renderer/dictation.test.ts`).
+
 Use `npm run ui`, never the installed app and never its data folder. It builds if needed, starts an isolated instance
 (Playwright's Electron support, temporary user-data-dir in /tmp, removed at the end), runs the steps, and quits.
 Steps are chained with `+` so the app starts once (about 2.5 s, then each step is instant):

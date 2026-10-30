@@ -252,6 +252,8 @@ export interface SessionView {
   /** When the user last answered an approval: until then, nothing was due from the process. */
   approvedAt: number | null;
   pulse: SessionPulse;
+  /** Its program reports all along a reply: a long silence means something. */
+  modelStreams: boolean;
   /** Why its last start or run failed; empty once it runs again. */
   error: string;
   /** Account it runs on (while running) or will run on at its next launch. */

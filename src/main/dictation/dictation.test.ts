@@ -58,11 +58,6 @@ test('a dictation in progress keeps the composer from sending its unfinished tex
   assert.equal(canSend({ ...ready, preparing: 1 }), false);
 });
 
-test('the microphone button of a machine without dictation is really gone', () => {
-  // `hidden` alone loses to the display of .cbtn.
-  assert.match(readFileSync('src/renderer/styles.css', 'utf8'), /\}\s*\.cbtn\[hidden\] \{\s*display: none;/);
-});
-
 test('the helper is looked for next to the resources once packaged, else in the native build folder', () => {
   const posix = (path: string) => path.replaceAll('\\', '/');
   assert.equal(posix(helperPath('/app/Resources', '/src', true)), '/app/Resources/dictation-mac');

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { modelStreams } from './accounts';
 import { pulseState, shortTokens, tokensOf, TurnTokens } from './pulse';
 import type { SessionView } from './types';
 
@@ -7,7 +8,7 @@ const START = 1_000_000;
 const tool = { name: 'Bash', summary: 'npm test', since: START };
 
 const seen = (over: Partial<SessionView> = {}, signalAt: number | null = START) =>
-  ({ status: 'busy', busySince: START, compacting: false, retrying: false, limit: null, tool: null, approvedAt: null, pulse: { signalAt, tokens: 0, estimated: false }, ...over }) as SessionView;
+  ({ status: 'busy', busySince: START, modelStreams: true, compacting: false, retrying: false, limit: null, tool: null, approvedAt: null, pulse: { signalAt, tokens: 0, estimated: false }, ...over }) as SessionView;
 
 const toneAt = (ms: number, over: Partial<SessionView> = {}) => pulseState(seen(over), START + ms)?.tone;
 
@@ -134,4 +135,26 @@ test('each turn starts again from zero', () => {
   t.estimate(10);
   t.reset();
   assert.deepEqual([t.count, t.estimated], [0, false]);
+});
+
+test('a reply cut before its real count leaves a whole number of tokens', () => {
+  const tokens = new TurnTokens();
+  tokens.estimate(tokensOf('x'.repeat(49)));
+  tokens.nextReply();
+  assert.equal(tokens.count, 13);
+  assert.equal(shortTokens(tokens.count, 'fr'), '13');
+});
+
+test('a model that may think in silence is slow at worst, never called stuck', () => {
+  assert.equal(toneAt(200_000), 'stuck');
+  assert.equal(toneAt(200_000, { modelStreams: false }), 'slow');
+  assert.equal(toneAt(3_600_000, { modelStreams: false }), 'slow');
+  // Its silence is still shown, and a tool's length still tells.
+  assert.equal(pulseState(seen({ modelStreams: false }), START + 200_000)?.ms, 200_000);
+  assert.equal(toneAt(700_000, { modelStreams: false, tool }), 'stuck');
+});
+
+test('only Claude Code on Anthropic reports all along a reply', () => {
+  for (const kind of ['default', 'claude', 'anthropic-key'] as const) assert.equal(modelStreams(kind), true, kind);
+  for (const kind of ['openai', 'anthropic-compatible', 'codex', 'gemini', 'gemini-key'] as const) assert.equal(modelStreams(kind), false, kind);
 });

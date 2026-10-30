@@ -3,6 +3,13 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { build } from 'esbuild';
+import { builtStamp, sourceStamp } from './sourceStamp.mjs';
+
+// Some tests drive the built app.
+if (builtStamp('.') !== sourceStamp('.')) {
+  const built = spawnSync(process.execPath, ['build.mjs'], { stdio: 'inherit' });
+  if (built.status !== 0) process.exit(built.status ?? 1);
+}
 
 const find = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? find(join(dir, e.name)) : e.name.endsWith('.test.ts') ? [join(dir, e.name)] : []));
 const tests = find('src');
