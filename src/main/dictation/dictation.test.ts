@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { DictationEvent } from '../../shared/dictation';
-import { isDictationLanguage, TERMS_MAX } from '../../shared/dictation';
+import { canSend, isDictationLanguage, TERMS_MAX } from '../../shared/dictation';
 import { AppleEngine, appleSupported, checkApple, helperPath } from './apple';
 import { LineSplitter, parseLine } from './engine';
 import { applyTerms, COMMON_TERMS, mergeTerms } from './terms';
@@ -50,9 +50,23 @@ test('languages: well-formed tags only', () => {
   for (const bad of ['', 'fr_FR', '../x', 'fr-FR; rm', 3, null]) assert.ok(!isDictationLanguage(bad), String(bad));
 });
 
+test('a dictation in progress keeps the composer from sending its unfinished text', () => {
+  const ready = { hasContent: true, preparing: 0, dictating: false };
+  assert.equal(canSend(ready), true);
+  assert.equal(canSend({ ...ready, dictating: true }), false);
+  assert.equal(canSend({ ...ready, hasContent: false }), false);
+  assert.equal(canSend({ ...ready, preparing: 1 }), false);
+});
+
+test('the microphone button of a machine without dictation is really gone', () => {
+  // `hidden` alone loses to the display of .cbtn.
+  assert.match(readFileSync('src/renderer/styles.css', 'utf8'), /\}\s*\.cbtn\[hidden\] \{\s*display: none;/);
+});
+
 test('the helper is looked for next to the resources once packaged, else in the native build folder', () => {
-  assert.equal(helperPath('/app/Resources', '/src', true), '/app/Resources/dictation-mac');
-  assert.equal(helperPath('/app/Resources', '/src', false), '/src/native/dictation-mac/build/dictation-mac');
+  const posix = (path: string) => path.replaceAll('\\', '/');
+  assert.equal(posix(helperPath('/app/Resources', '/src', true)), '/app/Resources/dictation-mac');
+  assert.equal(posix(helperPath('/app/Resources', '/src', false)), '/src/native/dictation-mac/build/dictation-mac');
   assert.equal(appleSupported('linux', '25.0.0'), false);
   assert.equal(appleSupported('darwin', '24.6.0'), false);
   assert.equal(appleSupported('darwin', '25.6.0'), true);

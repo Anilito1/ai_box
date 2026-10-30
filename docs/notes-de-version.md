@@ -17,6 +17,11 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - La dictée vocale (bouton micro) est de retour dans le composeur.
 - La ligne « Cogitation… » montre si la session vit vraiment : pastille de couleur, tokens reçus, outil en cours, tentatives et limites.
 
+### Modifié
+
+- Le bouton micro n'apparaît plus sur les ordinateurs où la dictée vocale n'existe pas.
+- Pendant une dictée, Entrée termine la dictée au lieu d'envoyer un texte incomplet : le texte attend dans le composeur.
+
 ## 2026-10-29
 
 ### Modifié

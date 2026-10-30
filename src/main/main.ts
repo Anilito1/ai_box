@@ -917,6 +917,7 @@ class Hub {
       githubTokenSet: this.secrets.has('githubToken'),
       secureStorage: this.secrets.available(),
       defaultClientId: DEFAULT_CLIENT_ID !== '',
+      dictationOffered: this.dictation.offered(),
       platform: process.platform,
       version: app.getVersion(),
     };

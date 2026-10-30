@@ -2641,6 +2641,9 @@ kbd,
 .cbtn-muted {
   color: var(--text-3);
 }
+.cbtn[hidden] {
+  display: none;
+}
 /* The model button is the one that gives way: its name shrinks to an ellipsis before anything leaves the bubble. */
 .cbtn-model,
 .cbtn:not(.cbtn-icon, .cbtn-model) {

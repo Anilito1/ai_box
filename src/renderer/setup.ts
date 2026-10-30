@@ -471,7 +471,7 @@ export class SetupView {
     f.append(seg);
     el.append(f);
     if (this.mode !== 'onboarding') el.append(this.backgroundField(v.settings.background));
-    if (v.platform === 'darwin' && this.mode !== 'onboarding') this.dictationBlock(el, v.settings.dictation);
+    if (v.dictationOffered && this.mode !== 'onboarding') this.dictationBlock(el, v.settings.dictation);
     if (this.mode === 'onboarding') {
       const list = h('ul', 'setup-list');
       for (const key of ['setup.welcome.p1', 'setup.welcome.p2', 'setup.welcome.p3'] as const) list.append(h('li', '', t(key)));
@@ -479,7 +479,7 @@ export class SetupView {
     }
   }
 
-  /** Voice dictation: the switch, the spoken language and the key. Offered on a Mac only (the engine is Apple's). */
+  /** Voice dictation: the switch, the spoken language and the key. Offered where the machine has an engine. */
   private dictationBlock(el: HTMLElement, d: DictationSettings): void {
     const group = this.field(t('setup.dictation'), t('setup.dictation.hint'));
     const toggle = h('label', 'setup-toggle');

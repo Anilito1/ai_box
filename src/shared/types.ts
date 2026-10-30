@@ -667,6 +667,8 @@ export interface SettingsView {
   secureStorage: boolean;
   /** A client ID ships with this build, so the device flow works without configuring one. */
   defaultClientId: boolean;
+  /** This machine has a dictation engine, whether or not it is switched on. */
+  dictationOffered: boolean;
   platform: string;
   version: string;
 }

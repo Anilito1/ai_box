@@ -5,7 +5,7 @@ import { PLATFORM, t } from './i18n';
 
 // Voice dictation in the composer: a microphone button, and a key to hold (talk while it is down) or tap (talk until
 // it is tapped again). The words appear dimmed where the cursor is while they are being recognised, and settle there
-// when the speech ends. Nothing is sent: the text waits in the composer. Escape drops it.
+// when the speech ends. Nothing is sent: the text waits in the composer. Enter ends the speech too. Escape drops it.
 
 /** Under this long, a press of the key is a tap (it toggles) and not a hold (it ends on release). */
 const HOLD_MS = 350;
@@ -36,8 +36,9 @@ interface Run {
   before: string;
   after: string;
   partial: string;
-  /** Escape or a second press came while the engine and the microphone were still starting. */
+  /** A second press came while the engine and the microphone were still starting. */
   stopAsked: boolean;
+  /** The field has its text back; what is left to end is the start in progress, if any. */
   cancelAsked: boolean;
   audio: { stream: MediaStream; context: AudioContext; node: AudioWorkletNode } | null;
   finalTimer: number;
@@ -153,7 +154,7 @@ async function start(ui: Ui): Promise<void> {
     // The engine and the microphone start together; audio gathered meanwhile waits in the pipe.
     const [started, audio] = await Promise.all([hub.dictationStart(termsOf(ui)), openMicrophone(current)]);
     current.audio = audio;
-    if (!started.ok) return fail(current, current.cancelAsked ? '' : t('dictation.unavailable'));
+    if (!started.ok) return fail(current, t('dictation.unavailable'));
   } catch (err) {
     return fail(current, err instanceof DOMException && err.name === 'NotAllowedError' ? t('dictation.denied') : t('dictation.noMic'));
   }
@@ -222,26 +223,28 @@ function stop(): void {
 function cancel(): void {
   const current = run;
   if (!current) return;
-  if (state === 'starting') {
-    current.cancelAsked = true;
-    hub.dictationCancel();
-    // The start in progress ends first; its own checks see the flag.
-    return;
-  }
   hub.dictationCancel();
-  end(current);
-  current.ui.source.input.value = current.before + current.after;
-  restoreCursor(current, current.before.length);
-  current.ui.source.changed();
+  giveBack(current);
+  // A start in progress ends by itself: its own checks see the flag.
+  if (state !== 'starting') end(current);
 }
 
 function fail(current: Run, message: string): void {
   hub.dictationCancel();
   end(current);
+  if (current.cancelAsked) return;
+  giveBack(current);
+  if (message) current.ui.source.note(message);
+}
+
+/** The field gets back the text it held, at once: by the time a start ends, it may show another conversation. */
+function giveBack(current: Run): void {
+  if (current.cancelAsked) return;
+  current.cancelAsked = true;
+  release(current.ui);
   current.ui.source.input.value = current.before + current.after;
   restoreCursor(current, current.before.length);
   current.ui.source.changed();
-  if (message) current.ui.source.note(message);
 }
 
 function end(current: Run): void {
@@ -251,7 +254,10 @@ function end(current: Run): void {
     run = null;
     state = 'idle';
   }
-  const ui = current.ui;
+  release(current.ui);
+}
+
+function release(ui: Ui): void {
   ui.source.input.readOnly = false;
   ui.field.classList.remove('dictating');
   ui.button.classList.remove('recording');
@@ -275,7 +281,7 @@ function around(current: Run, text: string): { lead: string; trail: string } {
 
 function onEvent(event: DictationEvent): void {
   const current = run;
-  if (!current) return;
+  if (!current || current.cancelAsked) return;
   if (event.type === 'partial') {
     current.partial = event.text;
     paint(current, false);
@@ -319,9 +325,17 @@ function paint(current: Run, force: boolean): void {
   ui.source.changed();
 }
 
+/** A dictation writes into this field: its text is not final yet. */
+export const isDictating = (input: HTMLTextAreaElement): boolean => run?.ui.source.input === input && !run.cancelAsked;
+
+/** Ends the speech of the dictation that writes into this field, if any: the text settles there. */
+export function stopDictation(input: HTMLTextAreaElement): void {
+  if (isDictating(input)) stop();
+}
+
 /** Drops the dictation that writes into this field, if any. */
 export function cancelDictation(input: HTMLTextAreaElement): void {
-  if (run?.ui.source.input === input) cancel();
+  if (isDictating(input)) cancel();
 }
 
 // ---------- the composer's side ----------

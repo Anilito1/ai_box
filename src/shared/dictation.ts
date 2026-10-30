@@ -29,6 +29,9 @@ export interface DictationSupport {
 export const TERMS_MAX = 60;
 export const TERM_MAX_LENGTH = 40;
 
+/** The composer's text leaves only when it is whole: a dictation still writing in it holds words that may yet change. */
+export const canSend = (c: { hasContent: boolean; preparing: number; dictating: boolean }): boolean => c.hasContent && c.preparing === 0 && !c.dictating;
+
 /** What an engine reports. `partial` is the whole dictation so far, `final` the settled text once the audio has ended. */
 export type DictationEvent =
   | { type: 'ready' }

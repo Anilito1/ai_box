@@ -30,9 +30,13 @@ export class Dictation {
   }
 
   /** Only Apple's engine exists for now: macOS 26 and later. */
+  offered(): boolean {
+    return appleSupported();
+  }
+
   support(): Promise<DictationSupport> {
     const { enabled, language } = this.settings();
-    if (!enabled || !appleSupported()) return Promise.resolve({ available: false, installed: false });
+    if (!enabled || !this.offered()) return Promise.resolve({ available: false, installed: false });
     // Asked once per language: the helper is a process to start.
     if (!this.supportCache || this.supportFor !== language) {
       this.supportFor = language;

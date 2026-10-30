@@ -13,6 +13,7 @@ import {
   type ProviderBadge,
   type SessionView,
 } from '../shared/types';
+import { canSend } from '../shared/dictation';
 import { HistoryCursor, sentMessages, wantsHistory } from '../shared/inputHistory';
 import { effortsFor, splitRecent } from '../shared/models';
 import { modelKey } from '../shared/news';
@@ -21,7 +22,7 @@ import { toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
-import { cancelDictation, createDictationUi } from './dictation';
+import { cancelDictation, createDictationUi, isDictating, stopDictation } from './dictation';
 import { effortLabel, PLATFORM, t } from './i18n';
 import { mascotMark, sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
@@ -212,11 +213,21 @@ export class ChatView {
     });
     this.input.addEventListener('blur', () => this.slash.close());
     this.input.addEventListener('keydown', (e) => {
+      const enter = e.key === 'Enter' && !e.shiftKey && !e.isComposing;
+      // Words still being recognised: the menu and the history leave them alone, and Enter ends the speech, it sends nothing.
+      if (isDictating(this.input)) {
+        if (enter) {
+          e.preventDefault();
+          stopDictation(this.input);
+        }
+        return;
+      }
       if (this.slash.onKey(e)) return;
       if (this.browseHistory(e)) return;
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      if (enter) {
         e.preventDefault();
-        this.submit();
+        // A held key repeats: it must not send what a dictation has just settled.
+        if (!e.repeat) this.submit();
       } else if (e.key === 'Escape' && this.isBusy()) {
         e.preventDefault();
         this.interrupt();
@@ -278,7 +289,7 @@ export class ChatView {
     slashBtn.setAttribute('aria-haspopup', 'listbox');
     // The field keeps the focus: the menu reads its keys.
     slashBtn.addEventListener('mousedown', (e) => e.preventDefault());
-    slashBtn.addEventListener('click', () => this.slash.toggle());
+    slashBtn.addEventListener('click', () => isDictating(this.input) || this.slash.toggle());
 
     const ring = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     ring.setAttribute('viewBox', '0 0 18 18');
@@ -508,11 +519,15 @@ export class ChatView {
     return this.input.value.trim() !== '' || this.attachments.length > 0;
   }
 
+  private sendable(): boolean {
+    return canSend({ hasContent: this.hasContent(), preparing: this.preparing, dictating: isDictating(this.input) });
+  }
+
   private syncSend(): void {
     const stop = this.isBusy() && !this.hasContent() && this.preparing === 0;
     this.sendBtn.replaceChildren(icon(stop ? ICONS.stop : ICONS.send));
     this.sendBtn.classList.toggle('stop', stop);
-    this.sendBtn.disabled = !stop && (!this.hasContent() || this.preparing > 0);
+    this.sendBtn.disabled = !stop && !this.sendable();
     this.sendBtn.title = stop ? t('chat.interrupt') : this.preparing > 0 ? t('chat.preparing') : t('chat.send');
   }
 
@@ -534,7 +549,7 @@ export class ChatView {
 
   /** A "/" command runs here (or is refused with a note, nothing sent); anything else goes to the session. */
   private submit(): void {
-    if (!this.hasContent() || this.preparing > 0 || !this.session || this.submitting) return;
+    if (!this.sendable() || !this.session || this.submitting) return;
     const id = this.session.id;
     const text = this.input.value;
     const attachments = [...this.attachments];
