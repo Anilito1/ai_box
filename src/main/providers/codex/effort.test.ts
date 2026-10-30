@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -19,8 +19,9 @@ test('no effort held, or a model that lists none: the turn carries none', () => 
 });
 
 // A stand-in for `codex app-server`: answers the handshake, lists one model, and writes the params of each turn it is given.
-const FAKE = (log: string) => `#!${process.execPath}
-const fs = require('node:fs');
+// Node plays the binary and this file, named `app-server` in the session's folder, is what `node app-server --listen …` runs:
+// no shebang nor executable bit, which Windows would not honour.
+const FAKE = (log: string) => `const fs = require('node:fs');
 const send = (m) => process.stdout.write(JSON.stringify(m) + '\\n');
 let buf = '';
 process.stdin.on('data', (d) => {
@@ -49,9 +50,7 @@ process.stdin.on('data', (d) => {
 test('the effort a session is launched with, then the one picked by hand, reach the turns sent to Codex', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'hub-codex-'));
   const log = join(dir, 'turns.jsonl');
-  const exe = join(dir, 'codex');
-  writeFileSync(exe, FAKE(log));
-  chmodSync(exe, 0o755);
+  writeFileSync(join(dir, 'app-server'), FAKE(log));
   writeFileSync(log, '');
   let firstDone: () => void = () => undefined;
   const first = new Promise<void>((resolve) => (firstDone = resolve));
@@ -64,7 +63,7 @@ test('the effort a session is launched with, then the one picked by hand, reach 
   const spec = {
     role: 'worker', name: 'w', cwd: dir, extraDirs: [], readOnly: false, model: 'gpt-6-luna', effort: 'xhigh', mode: null, instructions: '', stableInstructions: false,
     onSignal: () => undefined,
-    tools: [], mcp: null, executable: exe, env: { ...process.env } as Record<string, string>, conversation: { id: '', resume: false },
+    tools: [], mcp: null, executable: process.execPath, env: { ...process.env } as Record<string, string>, conversation: { id: '', resume: false },
     input: (async function* () {
       yield { content: 'one' };
       await second;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -21,10 +21,24 @@ const { createServer } = await import('node:http');
 type Account = import('../shared/types').Account;
 const claude: Account = { id: 'a-claude01', kind: 'claude', name: 'Work', baseUrl: '', model: '', smallModel: '', slug: '', models: [], isolated: false };
 
+/** Windows only links a file with developer mode on. Everywhere else a failing link is a failing test. */
+function canLinkFiles(): boolean {
+  if (process.platform !== 'win32') return true;
+  try {
+    symlinkSync(join(base, 'CLAUDE.md'), join(root, 'file-link'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 test('a Claude account folder shares everything but its sign-in', () => {
   const dir = accountDir(data, claude.id);
   prepareClaudeDir(dir);
-  for (const name of ['projects', 'settings.json', 'CLAUDE.md', 'skills']) assert.ok(lstatSync(join(dir, name)).isSymbolicLink(), name);
+  for (const name of ['projects', 'skills']) assert.ok(lstatSync(join(dir, name)).isSymbolicLink(), name);
+  const fileLinks = canLinkFiles();
+  // Where a file cannot be linked it is left out, never copied: a copy would drift from the user's own.
+  for (const name of ['settings.json', 'CLAUDE.md']) assert.equal(fileLinks ? lstatSync(join(dir, name)).isSymbolicLink() : !existsSync(join(dir, name)), true, name);
   assert.ok(!existsSync(join(dir, 'agents')), 'nothing to link: not made up');
   assert.equal(readFileSync(join(dir, 'projects', '-repo', 'conv.jsonl'), 'utf8'), '{"a":1}\n');
   // Again: what is there stays, nothing fails.
