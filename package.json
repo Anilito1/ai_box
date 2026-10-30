@@ -15,6 +15,7 @@
   },
   "scripts": {
     "build": "node build.mjs",
+    "build:native": "node scripts/build-native.mjs",
     "start": "node build.mjs && electron .",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
@@ -71,7 +72,16 @@
         { "target": "zip", "arch": ["arm64", "x64"] }
       ],
       "category": "public.app-category.developer-tools",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "AI Box uses the microphone to turn your voice into text (dictation), on this Mac.",
+        "NSSpeechRecognitionUsageDescription": "AI Box turns your voice into text on this Mac."
+      },
+      "extraResources": [
+        { "from": "native/dictation-mac/build/dictation-mac", "to": "dictation-mac" }
+      ]
     },
     "linux": {
       "target": "AppImage",

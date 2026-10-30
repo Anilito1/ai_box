@@ -28,6 +28,8 @@ import {
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
+import { DICTATION_KEYS, DICTATION_LANGUAGES, type DictationSettings } from '../shared/dictation';
+import { keyLabel } from './dictation';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { mascotMark } from './mascot';
@@ -409,6 +411,8 @@ export class SetupView {
   private async save(patch: SettingsPatch): Promise<void> {
     const r = await this.run(() => this.hub.saveSettings(patch));
     this.view = r;
+    // The composers show or hide their microphone button.
+    if (patch.dictation) window.dispatchEvent(new Event('hub-settings'));
     this.note = r.ok ? null : { text: t('setup.invalid'), tone: 'error' };
     this.render();
   }
@@ -467,11 +471,44 @@ export class SetupView {
     f.append(seg);
     el.append(f);
     if (this.mode !== 'onboarding') el.append(this.backgroundField(v.settings.background));
+    if (v.platform === 'darwin' && this.mode !== 'onboarding') this.dictationBlock(el, v.settings.dictation);
     if (this.mode === 'onboarding') {
       const list = h('ul', 'setup-list');
       for (const key of ['setup.welcome.p1', 'setup.welcome.p2', 'setup.welcome.p3'] as const) list.append(h('li', '', t(key)));
       el.append(list);
     }
+  }
+
+  /** Voice dictation: the switch, the spoken language and the key. Offered on a Mac only (the engine is Apple's). */
+  private dictationBlock(el: HTMLElement, d: DictationSettings): void {
+    const group = this.field(t('setup.dictation'), t('setup.dictation.hint'));
+    const toggle = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = d.enabled;
+    box.addEventListener('change', () => void this.save({ dictation: { enabled: box.checked } }));
+    const text = h('span', 'setup-choice-text');
+    text.append(h('span', 'setup-choice-title', t('setup.dictation.on')));
+    toggle.append(box, text);
+    group.append(toggle);
+    if (d.enabled) {
+      const language = h('select', 'setup-select');
+      for (const tag of DICTATION_LANGUAGES.includes(d.language) ? DICTATION_LANGUAGES : [d.language, ...DICTATION_LANGUAGES]) {
+        const option = h('option', '', new Intl.DisplayNames([LANG], { type: 'language' }).of(tag) ?? tag);
+        option.value = tag;
+        option.selected = tag === d.language;
+        language.append(option);
+      }
+      language.addEventListener('change', () => void this.save({ dictation: { language: language.value } }));
+      const key = h('div', 'segmented setup-seg');
+      for (const k of DICTATION_KEYS) {
+        const b = h('button', k === d.key ? 'seg active' : 'seg', keyLabel(k));
+        b.addEventListener('click', () => k !== d.key && void this.save({ dictation: { key: k } }));
+        key.append(b);
+      }
+      group.append(h('div', 'setup-label', t('setup.dictation.language')), language, h('div', 'setup-label', t('setup.dictation.key')), key);
+    }
+    el.append(group);
   }
 
   /**
