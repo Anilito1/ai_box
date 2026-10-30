@@ -1,0 +1,73 @@
+{
+  "accounts": [
+    { "id": "default", "name": "Claude", "kind": "default", "provider": "anthropic", "limitedUntil": null, "pinned": false },
+    { "id": "acct-venice", "name": "DeepSeek Uncensored", "kind": "openai", "provider": "deepseek-uncensored", "limitedUntil": null, "pinned": true },
+    { "id": "acct-other", "name": "Local Llama", "kind": "openai", "provider": "local-llama", "limitedUntil": null, "pinned": true }
+  ],
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "connected": true,
+      "accountId": "default",
+      "news": { "models": [], "cli": null, "unseen": false },
+      "models": [{ "value": "claude-opus-5-5", "label": "Opus 5.5", "description": "", "efforts": ["low", "medium", "high"] }]
+    },
+    {
+      "id": "deepseek-uncensored",
+      "label": "DeepSeek Uncensored",
+      "connected": true,
+      "accountId": "acct-venice",
+      "news": { "models": [], "cli": null, "unseen": false },
+      "models": [{ "value": "deepseek-v4-1-flash-1017-uncensored", "label": "deepseek-v4-1-flash-1017-uncensored", "description": "", "efforts": [] }]
+    },
+    {
+      "id": "local-llama",
+      "label": "Local Llama",
+      "connected": true,
+      "accountId": "acct-other",
+      "news": { "models": [], "cli": null, "unseen": false },
+      "models": [{ "value": "llama-4", "label": "llama-4", "description": "", "efforts": [] }]
+    }
+  ],
+  "sessions": [
+    {
+      "id": "w-venice",
+      "role": "worker",
+      "post": null,
+      "instance": null,
+      "group": null,
+      "leads": [],
+      "tree": null,
+      "name": "venice-deepseek",
+      "mission": "Poste sur un fournisseur ajouté",
+      "cwd": "C:/work/venice",
+      "model": "opus",
+      "modelLabel": "deepseek-v4-1-flash-1017-uncensored",
+      "effort": null,
+      "mode": null,
+      "status": "idle",
+      "lastMessage": "",
+      "metrics": null,
+      "createdAt": 1790000000000,
+      "busySince": null,
+      "background": [],
+      "idleSince": 1790000000000,
+      "agents": 0,
+      "compacting": false,
+      "retrying": false,
+      "limit": null,
+      "tool": null,
+      "approvedAt": null,
+      "pulse": { "signalAt": null, "tokens": 0, "estimated": false },
+      "modelStreams": false,
+      "error": "",
+      "account": "acct-venice",
+      "fallbackFrom": "",
+      "accountPending": false,
+      "userAccount": true,
+      "ultracode": false,
+      "ultracodeAccess": "allowed"
+    }
+  ]
+}

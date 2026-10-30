@@ -1063,7 +1063,7 @@ export class SetupView {
     model.addEventListener('change', update);
     effort.addEventListener('change', update);
     const row = h('div', 'setup-row setup-defaults');
-    row.append(mascotMark(current?.id ?? '', 'setup-provider-pic', current?.label), provider, model, effort);
+    row.append(mascotMark(current?.id ?? '', 'setup-provider-pic', current?.label, current?.models.map((m) => m.value)), provider, model, effort);
     f.append(row);
     return f;
   }

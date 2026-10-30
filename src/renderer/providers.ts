@@ -575,7 +575,7 @@ export class ProvidersPanel {
         }),
       );
     }
-    row.append(mascotMark(v.id, 'acct-mark', v.label), text, state, actions);
+    row.append(mascotMark(v.id, 'acct-mark', v.label, c.models), text, state, actions);
     item.append(row);
     if (editing) item.append(this.customForm());
     return item;

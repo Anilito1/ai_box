@@ -731,7 +731,7 @@ export class ChatView {
         const tabs = h('div', 'segmented provider-tabs');
         for (const p of this.providers) {
           const b = h('button', p.id === tab ? 'seg active' : 'seg');
-          b.append(mascotMark(p.id, 'seg-pic', p.label), p.label);
+          b.append(mascotMark(p.id, 'seg-pic', p.label, p.models.map((m) => m.value)), p.label);
           b.classList.toggle('off', !p.connected);
           b.title = p.connected ? '' : t('chat.providerOff');
           if (p.connected && p.id !== tab && !looked.has(p.id) && p.news.unseen) {
