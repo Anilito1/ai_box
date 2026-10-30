@@ -14,6 +14,7 @@ import { RepoPanel } from './repo';
 import { SetupView } from './setup';
 import { TopicsView } from './topics';
 import './tooltip';
+import { initDictation } from './dictation';
 import { initNews } from './news';
 import { initCliUpdates } from './cliUpdate';
 import { showReleaseNotes } from './releaseNotes';
@@ -38,6 +39,7 @@ const teamGroup = $('team-group');
 const reposRoot = $('repos');
 
 translateDom();
+initDictation(hub);
 document.body.classList.add(`platform-${PLATFORM}`);
 
 // Settings open from the end of the master's header, where its folder chip was (the folder is in its name's tooltip); an update on offer sits to their left.

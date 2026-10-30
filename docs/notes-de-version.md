@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-10-30
+
+### Ajouté
+
+- La dictée vocale (bouton micro) est de retour dans le composeur.
+
 ## 2026-10-29
 
 ### Modifié

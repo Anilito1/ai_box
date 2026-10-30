@@ -39,6 +39,8 @@ You talk to one master. It delegates to workers that run in parallel, and report
 
 <p align="center"><img src="docs/readme/providers.png" width="560" alt="Settings › Accounts: Anthropic, OpenAI, DeepSeek and Gemini, each with its mascot"></p>
 
+**Voice dictation (macOS 26+).** A microphone button in the composer, and a key to hold while you talk (Alt+Space by default). The words are recognised on your Mac by Apple's speech model: no audio leaves it, and it costs nothing. Nothing is sent until you press Enter. Language and key are in Settings › General. Building needs the Swift compiler (Xcode command line tools).
+
 ## What you get
 
 More time. Everything in parallel. Peace of mind.
