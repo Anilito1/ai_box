@@ -201,6 +201,7 @@ class GeminiProcess implements AgentProcess {
   private onNotification(method: string, params: Json): void {
     // The conversation the agent tells again on a load is already in the hub's items.
     if (method !== 'session/update' || this.replaying) return;
+    this.spec.onSignal();
     for (const e of this.stream.handle(obj(params.update))) this.queue.push(e);
   }
 

@@ -63,6 +63,7 @@ test('the effort a session is launched with, then the one picked by hand, reach 
   };
   const spec = {
     role: 'worker', name: 'w', cwd: dir, extraDirs: [], readOnly: false, model: 'gpt-6-luna', effort: 'xhigh', mode: null, instructions: '', stableInstructions: false,
+    onSignal: () => undefined,
     tools: [], mcp: null, executable: exe, env: { ...process.env } as Record<string, string>, conversation: { id: '', resume: false },
     input: (async function* () {
       yield { content: 'one' };

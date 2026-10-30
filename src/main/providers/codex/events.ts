@@ -1,4 +1,5 @@
 import type { Totals } from '../../../shared/costs';
+import { tokensOf } from '../../../shared/pulse';
 import type { Block } from '../blocks';
 import type { AgentEvent, HistoryMessage, LimitSignal } from '../types';
 
@@ -184,6 +185,8 @@ export class CodexStream {
   contextSize = 0;
   /** The last snapshot of the account's limits. */
   limits: Json | null = null;
+  private outputBase: number | null = null;
+  private outputTotal: number | null = null;
   private readonly started = new Set<string>();
   /** The file changes of the items in progress: an approval shows them. */
   readonly changes = new Map<string, Json>();
@@ -194,11 +197,15 @@ export class CodexStream {
     switch (method) {
       case 'turn/started':
         this.lastAnswer = '';
+        this.outputBase = this.outputTotal;
         return [{ type: 'stream', textStart: false, delta: '' }];
       case 'item/started':
         return this.itemStarted(obj(p.item));
       case 'item/agentMessage/delta':
         return [{ type: 'stream', textStart: false, delta: str(p.delta) }];
+      case 'item/reasoning/summaryTextDelta':
+      case 'item/reasoning/textDelta':
+        return [{ type: 'output', tokens: tokensOf(str(p.delta)) }];
       case 'item/completed':
         return this.itemCompleted(obj(p.item));
       case 'thread/tokenUsage/updated': {
@@ -221,7 +228,15 @@ export class CodexStream {
         };
         this.contextTokens = num(last.inputTokens);
         this.contextSize = num(usage.modelContextWindow) || this.contextSize;
-        return [{ type: 'context', tokens: this.contextTokens, size: this.contextSize }];
+        // Totals of the thread: the turn's share runs from the last total seen, or for a thread resumed from the first
+        // reading, less what that reading already adds.
+        const output = num(total.outputTokens);
+        this.outputBase ??= output - num(last.outputTokens);
+        this.outputTotal = output;
+        return [
+          { type: 'context', tokens: this.contextTokens, size: this.contextSize },
+          { type: 'outputTokens', of: 'turn', tokens: output - this.outputBase },
+        ];
       }
       case 'thread/compacted':
         return [{ type: 'compacted', before: this.contextTokens }];
@@ -265,6 +280,7 @@ export class CodexStream {
   private itemStarted(item: Json): AgentEvent[] {
     const id = str(item.id);
     if (item.type === 'agentMessage') return [{ type: 'stream', textStart: true, delta: '' }];
+    if (item.type === 'contextCompaction') return [{ type: 'compacting', on: true }];
     const use = toolUse(item);
     if (!use || this.started.has(id)) return ACTIVITY;
     this.started.add(id);

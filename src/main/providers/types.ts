@@ -111,6 +111,12 @@ export type AgentEvent =
       /** Running totals of the conversation. */
       usage: Totals;
     }
+  /** Model content that is no reply text (its thinking, a tool's input), as an estimate for the turn's token count. */
+  | { type: 'output'; tokens: number }
+  /** A real count of what the model sent: of the reply being written, or of the whole turn. */
+  | { type: 'outputTokens'; of: 'reply' | 'turn'; tokens: number }
+  /** The model starts another reply within the turn. */
+  | { type: 'reply' }
   /** Something arrived that changes nothing but "the session is alive". */
   | { type: 'activity' };
 
@@ -139,6 +145,8 @@ export interface LaunchSpec {
   env: Record<string, string>;
   conversation: { id: string; resume: boolean };
   input: AsyncIterable<AgentInput>;
+  /** Something really came from the process: called at reception, before any translation. No timer of its own. */
+  onSignal(): void;
   onPermission(req: PermissionRequest): Promise<PermissionAnswer>;
   onElicitation(req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationAnswer>;
 }

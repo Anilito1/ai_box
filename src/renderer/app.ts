@@ -493,6 +493,13 @@ hub.onItems((id, items, reset) => {
   if (s?.role === 'master' && (fresh || items.some((i) => i.kind === 'permission'))) topicsView.update(snapshot.topics, map);
   if (s) renderCard(s);
 });
+// No render: the working line reads its session's pulse at its next tick.
+hub.onPulse((pulses) => {
+  for (const [id, pulse] of pulses) {
+    const s = snapshot.sessions.find((x) => x.id === id);
+    if (s) s.pulse = pulse;
+  }
+});
 hub.onEvent((id, kind) => clawdEvent(id, kind));
 reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));

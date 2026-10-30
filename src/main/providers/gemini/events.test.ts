@@ -128,3 +128,10 @@ test('the models of a session: its list, with no effort setting', () => {
   assert.equal(list[0].noEffort, true);
   assert.deepEqual(modelsOfSession({}), []);
 });
+
+test('thoughts count for the estimate, as they are kept for their item', () => {
+  const s = new GeminiStream(() => 'gemini');
+  assert.deepEqual(s.handle({ sessionUpdate: 'agent_thought_chunk', content: { text: '12345678' } }), [{ type: 'output', tokens: 2 }]);
+  const [item] = s.flush();
+  assert.equal(item.type === 'assistant' && item.blocks[0].thinking, '12345678');
+});

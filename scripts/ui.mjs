@@ -224,6 +224,9 @@ try {
       const base = await page.evaluate(() => window.__uiSnap);
       if (!base) return 'no snapshot received yet';
       const patch = jsonArg(a._.join(' '));
+      // What the app reads of any session, for a fake that only says what it is about.
+      const blank = { background: [], limit: null, tool: null, approvedAt: null, pulse: { signalAt: null, tokens: 0, estimated: false } };
+      if (patch.sessions) patch.sessions = patch.sessions.map((s) => ({ ...blank, ...s }));
       await sendToPage('hub:snapshot', [{ ...base, ...patch }]);
       await settle();
       return `merged ${Object.keys(patch).join(', ')}`;

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DictationEvent } from '../shared/dictation';
-import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, TeamRole } from '../shared/types';
+import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, SessionPulse, TeamRole } from '../shared/types';
 import type { NewsToast } from '../shared/news';
 import type { CliRun } from '../shared/cliUpdate';
 import type { UpdateState } from '../shared/update';
@@ -11,6 +11,9 @@ const api: HubApi = {
   },
   onItems: (cb) => {
     ipcRenderer.on('hub:items', (_e, id: string, items: ChatItem[], reset: boolean) => cb(id, items, reset));
+  },
+  onPulse: (cb) => {
+    ipcRenderer.on('hub:pulse', (_e, pulses: [string, SessionPulse][]) => cb(pulses));
   },
   onRepo: (cb) => {
     ipcRenderer.on('hub:repo', (_e, status: RepoStatus) => cb(status));

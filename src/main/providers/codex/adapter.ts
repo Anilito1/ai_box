@@ -268,6 +268,7 @@ class CodexProcess implements AgentProcess {
   }
 
   private onNotification(method: string, params: Json): void {
+    this.spec.onSignal();
     if (method === 'serverRequest/resolved') {
       this.asks.get(params.requestId as string | number)?.abort();
       return;

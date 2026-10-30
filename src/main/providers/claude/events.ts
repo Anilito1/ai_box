@@ -1,5 +1,6 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import { totalsOf } from '../../../shared/costs';
+import { tokensOf } from '../../../shared/pulse';
 import type { Effort } from '../../../shared/types';
 import { blocksOf } from '../blocks';
 import type { AgentCommand, AgentEvent, LimitSignal } from '../types';
@@ -44,6 +45,9 @@ export function translate(msg: SDKMessage): AgentEvent[] {
         }
         case 'task_notification':
           return [{ type: 'agentTask', id: msg.task_id, state: msg.status === 'failed' ? 'failed' : 'done' }];
+        case 'thinking_tokens':
+          // Hidden thinking (empty deltas, on Opus): this count of the CLI is all there is of it.
+          return [{ type: 'output', tokens: msg.estimated_tokens_delta }];
         default:
           return ACTIVITY;
       }
@@ -57,7 +61,14 @@ export function translate(msg: SDKMessage): AgentEvent[] {
       const e = msg.event;
       const textStart = e.type === 'content_block_start' && e.content_block.type === 'text';
       const delta = e.type === 'content_block_delta' && e.delta.type === 'text_delta' ? e.delta.text : '';
-      return [{ type: 'stream', textStart, delta }];
+      const stream: AgentEvent = { type: 'stream', textStart, delta };
+      if (e.type === 'message_start') return [stream, { type: 'reply' }];
+      // The API's own count of the reply, cumulative: it comes when the reply ends.
+      if (e.type === 'message_delta') return [stream, { type: 'outputTokens', of: 'reply', tokens: e.usage.output_tokens }];
+      if (e.type === 'content_block_delta' && e.delta.type === 'input_json_delta') return [stream, { type: 'output', tokens: tokensOf(e.delta.partial_json) }];
+      // Empty when the model hides its thinking: thinking_tokens says it then.
+      if (e.type === 'content_block_delta' && e.delta.type === 'thinking_delta' && e.delta.thinking) return [stream, { type: 'output', tokens: tokensOf(e.delta.thinking) }];
+      return [stream];
     }
     case 'assistant': {
       if (msg.parent_tool_use_id) return ACTIVITY;

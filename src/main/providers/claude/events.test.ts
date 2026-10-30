@@ -13,6 +13,22 @@ test('system/init becomes the conversation the process runs', () => {
   assert.equal(bare.type === 'conversation' && bare.effort, null);
 });
 
+test('the turn count takes the replies of the model and its real counts', () => {
+  const stream = (event: Record<string, unknown>) => translate(msg({ type: 'stream_event', parent_tool_use_id: null, event }));
+  const idle = { type: 'stream', textStart: false, delta: '' };
+  assert.deepEqual(stream({ type: 'message_start', message: { usage: { output_tokens: 1 } } }), [idle, { type: 'reply' }]);
+  assert.deepEqual(stream({ type: 'message_delta', usage: { output_tokens: 412 } }), [idle, { type: 'outputTokens', of: 'reply', tokens: 412 }]);
+  assert.deepEqual(stream({ type: 'content_block_delta', delta: { type: 'input_json_delta', partial_json: '12345678' } }), [idle, { type: 'output', tokens: 2 }]);
+});
+
+test('thinking counts through the estimate of the CLI: its deltas are empty on Opus', () => {
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 250, estimated_tokens_delta: 150 })), [{ type: 'output', tokens: 150 }]);
+  const hidden = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } } }));
+  assert.deepEqual(hidden, [{ type: 'stream', textStart: false, delta: '' }]);
+  const shown = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '12345678' } } }));
+  assert.deepEqual(shown, [{ type: 'stream', textStart: false, delta: '' }, { type: 'output', tokens: 2 }]);
+});
+
 test('compaction, retries and status levels', () => {
   assert.deepEqual(translate(msg({ type: 'system', subtype: 'compact_boundary', compact_metadata: { pre_tokens: 900, post_tokens: 100 } })), [{ type: 'compacted', before: 900, after: 100 }]);
   assert.deepEqual(translate(msg({ type: 'system', subtype: 'status', status: 'compacting' })), [{ type: 'compacting', on: true }]);
@@ -41,7 +57,7 @@ test('stream events carry the start of a text block and its deltas; a subagentâ€
   assert.deepEqual(start, [{ type: 'stream', textStart: true, delta: '' }]);
   const delta = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Bon' } } }));
   assert.deepEqual(delta, [{ type: 'stream', textStart: false, delta: 'Bon' }]);
-  const other = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'input_json_delta' } } }));
+  const other = translate(msg({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'signature_delta' } } }));
   assert.deepEqual(other, [{ type: 'stream', textStart: false, delta: '' }]);
   assert.deepEqual(translate(msg({ type: 'stream_event', parent_tool_use_id: 'toolu_1', event: { type: 'message_start' } })), [{ type: 'activity' }]);
 });

@@ -1,4 +1,5 @@
 import type { Totals } from '../../../shared/costs';
+import { tokensOf } from '../../../shared/pulse';
 import type { Block } from '../blocks';
 import type { AgentEvent, HistoryMessage, LimitSignal } from '../types';
 
@@ -120,9 +121,11 @@ export class GeminiStream {
 
   handle(update: Json): AgentEvent[] {
     switch (str(update.sessionUpdate)) {
-      case 'agent_thought_chunk':
-        this.thought += str(obj(update.content).text);
-        return ACTIVITY;
+      case 'agent_thought_chunk': {
+        const text = str(obj(update.content).text);
+        this.thought += text;
+        return [{ type: 'output', tokens: tokensOf(text) }];
+      }
       case 'agent_message_chunk': {
         const delta = str(obj(update.content).text);
         const events: AgentEvent[] = [];

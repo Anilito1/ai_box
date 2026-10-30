@@ -436,7 +436,7 @@ export class ChatView {
   private syncWorking(): void {
     const s = this.session;
     const last = lastOf(this.items);
-    this.working.update(s?.status, s?.busySince ?? null, activityOf(last), s?.background, s?.compacting);
+    this.working.update(s, activityOf(last));
     if (s) this.mascot?.update(s, last, sessionMascot(s, this.accounts));
   }
 

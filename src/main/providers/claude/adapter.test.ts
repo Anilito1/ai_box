@@ -26,8 +26,25 @@ test('Ultracode goes to Claude Code in the flag settings of the launch, only whe
 function fakeQuery() {
   const applied: unknown[] = [];
   const q = { applyFlagSettings: async (settings: unknown) => void applied.push(settings) } as unknown as Query;
-  return { applied, proc: new ClaudeProcess(q, 'conv') };
+  return { applied, proc: new ClaudeProcess(q, 'conv', () => undefined) };
 }
+
+test('every message is a signal of life, except the heartbeat of the CLI', async () => {
+  const messages = [
+    { type: 'system', subtype: 'status', status: null },
+    { type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '' } } },
+    { type: 'tool_progress', tool_use_id: 'toolu_1-heartbeat', tool_name: 'Bash', parent_tool_use_id: null, elapsed_time_seconds: 30, heartbeat: true },
+    { type: 'tool_progress', tool_use_id: 'toolu_1', tool_name: 'Bash', parent_tool_use_id: null, elapsed_time_seconds: 31 },
+    { type: 'user', parent_tool_use_id: 'toolu_9', message: { content: [] } },
+  ];
+  const q = (async function* () {
+    yield* messages;
+  })() as unknown as Query;
+  let signals = 0;
+  const proc = new ClaudeProcess(q, 'conv', () => signals++);
+  for await (const _ of proc.events);
+  assert.equal(signals, 4);
+});
 
 test('turning Ultracode on or off is one flag setting', async () => {
   const { applied, proc } = fakeQuery();

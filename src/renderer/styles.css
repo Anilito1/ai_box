@@ -1799,8 +1799,7 @@ kbd,
   }
 }
 @container (max-width: 440px) {
-  .composer-bar .cbtn > .ico:first-child + span,
-  .working-hint {
+  .composer-bar .cbtn > .ico:first-child + span {
     display: none;
   }
   .pane .composer-box {
@@ -1897,21 +1896,83 @@ kbd,
   text-align: center;
 }
 .working-verb {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-2);
   font-weight: 500;
+  text-overflow: ellipsis;
 }
-.working-meta {
+/* The first to give way, its shrink factor dwarfs the verb's; inside it, the tool's name before its length and tokens. */
+.working-info {
+  display: flex;
+  flex: 0 10000 auto;
+  gap: 0.3em;
   min-width: 0;
   overflow: hidden;
   font-variant-numeric: tabular-nums;
+}
+.working-meta {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
+}
+.working-facts {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.working-facts:empty {
+  display: none;
+}
+.working-pulse {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.working-pulse[hidden] {
+  display: none;
+}
+.working-pulse-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.working-pulse[data-tone='ok'] .working-pulse-dot {
+  background: var(--ok);
+}
+.working-pulse[data-tone='slow'] .working-pulse-dot {
+  background: var(--warn);
+}
+.working-pulse[data-tone='stuck'] {
+  color: var(--danger);
+}
+.working-pulse[data-tone='stuck'] .working-pulse-dot {
+  background: var(--danger);
+}
+.working-pulse-short {
+  display: none;
 }
 .working-hint {
   flex: none;
   margin-left: auto;
   color: var(--text-3);
   font-size: var(--fs-sm);
+}
+.working-hint-state {
+  display: none;
+  color: var(--danger);
+}
+.working.stuck .working-hint-state {
+  display: inline;
 }
 .working.waiting .working-glyph,
 .working.waiting .working-verb {
@@ -1922,6 +1983,21 @@ kbd,
 }
 .working.background .working-hint {
   display: none;
+}
+/* Narrow: the secondary goes first, the hint, then the words around the time; "seems stuck" stays. */
+@container (max-width: 640px) {
+  .working:not(.stuck) .working-hint,
+  .working-hint-esc {
+    display: none;
+  }
+}
+@container (max-width: 540px) {
+  .working-pulse-long {
+    display: none;
+  }
+  .working-pulse-short {
+    display: inline;
+  }
 }
 
 .pane-head {

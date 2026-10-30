@@ -201,6 +201,16 @@ export interface TreeBadge {
   install: '' | 'running' | 'failed';
 }
 
+/** What really came from a session's process: sent apart from the snapshot, about once a second while it comes. */
+export interface SessionPulse {
+  /** Last event received; nothing the hub does or times moves it. */
+  signalAt: number | null;
+  /** Tokens the model sent in this turn; 0 = nothing known. */
+  tokens: number;
+  /** `tokens` holds an estimate from the content, no real count yet. */
+  estimated: boolean;
+}
+
 export interface SessionView {
   id: string;
   role: Role;
@@ -235,6 +245,13 @@ export interface SessionView {
   compacting: boolean;
   /** An API call failed (overloaded, rate limit) and is being retried. */
   retrying: boolean;
+  /** The provider refused the work for now; `resetsAt` (epoch seconds) when it says when it opens again. */
+  limit: { resetsAt: number | null } | null;
+  /** The tool running for the longest, while one runs. */
+  tool: { name: string; summary: string; since: number } | null;
+  /** When the user last answered an approval: until then, nothing was due from the process. */
+  approvedAt: number | null;
+  pulse: SessionPulse;
   /** Why its last start or run failed; empty once it runs again. */
   error: string;
   /** Account it runs on (while running) or will run on at its next launch. */
@@ -715,6 +732,7 @@ export interface GithubRepo {
 export interface HubApi {
   onSnapshot(cb: (snapshot: HubSnapshot) => void): void;
   onItems(cb: (sessionId: string, items: ChatItem[], reset: boolean) => void): void;
+  onPulse(cb: (pulses: [string, SessionPulse][]) => void): void;
   onRepo(cb: (status: RepoStatus) => void): void;
   onEvent(cb: (sessionId: string, kind: HubEventKind) => void): void;
   /** Paths of the repos shown in the sidebar, sent at start and whenever the settings change them. */

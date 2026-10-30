@@ -56,7 +56,7 @@ test('token usage: cached tokens are counted apart from the input, the context i
   const s = stream();
   const usage = s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50, cacheWriteInputTokens: 0 }, last: { inputTokens: 400 }, modelContextWindow: 258400 } });
   // Said at once: a long turn moves the meter before it ends.
-  assert.deepEqual(usage, [{ type: 'context', tokens: 400, size: 258400 }]);
+  assert.deepEqual(usage, [{ type: 'context', tokens: 400, size: 258400 }, { type: 'outputTokens', of: 'turn', tokens: 0 }]);
   assert.deepEqual(s.usage.models['gpt-5.6-luna'], { cost: 0, input: 400, output: 50, cacheRead: 600, cacheWrite: 0 });
   assert.equal(s.contextTokens, 400);
   assert.equal(s.contextSize, 258400);
@@ -167,4 +167,37 @@ test('a stream cut with 401 (no sign-in) is an authentication problem, not a ser
   const events = s.handle('error', { error: { message: 'x', codexErrorInfo: info }, willRetry: false, turnId: 't' });
   assert.equal(events[0].type === 'limit' && events[0].signal.kind, 'auth');
   assert.equal(events[1].type === 'assistant' && events[1].error, 'authentication_failed');
+});
+
+test("the turn's tokens: its share of the thread's totals, read twice the same when Codex repeats itself", () => {
+  const s = new CodexStream(() => 'gpt');
+  const usage = (total: number, last: number) => s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { outputTokens: total }, last: { outputTokens: last } } })[1];
+  s.handle('turn/started', {});
+  assert.deepEqual(usage(5000, 300), { type: 'outputTokens', of: 'turn', tokens: 300 });
+  assert.deepEqual(usage(5000, 300), { type: 'outputTokens', of: 'turn', tokens: 300 });
+  assert.deepEqual(usage(5200, 200), { type: 'outputTokens', of: 'turn', tokens: 500 });
+  s.handle('turn/started', {});
+  assert.deepEqual(usage(5300, 100), { type: 'outputTokens', of: 'turn', tokens: 100 });
+});
+
+test("a new turn starts from the thread's last total, even when its first reading repeats the one before", () => {
+  const s = new CodexStream(() => 'gpt');
+  const usage = (total: number, last: number) => s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { outputTokens: total }, last: { outputTokens: last } } })[1];
+  s.handle('turn/started', {});
+  usage(5000, 300);
+  s.handle('turn/started', {});
+  assert.deepEqual(usage(5000, 300), { type: 'outputTokens', of: 'turn', tokens: 0 });
+  assert.deepEqual(usage(5050, 50), { type: 'outputTokens', of: 'turn', tokens: 50 });
+});
+
+test('an automatic compaction is said when it starts', () => {
+  const s = new CodexStream(() => 'gpt');
+  assert.deepEqual(s.handle('item/started', { item: { type: 'contextCompaction', id: 'c1' } }), [{ type: 'compacting', on: true }]);
+});
+
+test('reasoning counts for the estimate; what a command prints does not', () => {
+  const s = new CodexStream(() => 'gpt');
+  assert.deepEqual(s.handle('item/reasoning/summaryTextDelta', { delta: '12345678' }), [{ type: 'output', tokens: 2 }]);
+  assert.deepEqual(s.handle('item/reasoning/textDelta', { delta: '1234' }), [{ type: 'output', tokens: 1 }]);
+  assert.deepEqual(s.handle('item/commandExecution/outputDelta', { delta: 'npm test' }), [{ type: 'activity' }]);
 });

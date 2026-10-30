@@ -43,6 +43,7 @@ import {
   type Effort,
   type FoundRepo,
   type HubEventKind,
+  type SessionPulse,
   type ImageInput,
   type ImageType,
   type Mode,
@@ -1306,6 +1307,7 @@ async function start(): Promise<void> {
   mcpHubRef = hub.mcpHub;
   mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
+  mgr.on('pulse', (pulses: [string, SessionPulse][]) => send('hub:pulse', pulses));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
   mgr.on('team', (team: TeamRole[]) => send('hub:team', team));
   mgr.on('attention', () => {

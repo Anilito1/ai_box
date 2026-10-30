@@ -15,6 +15,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Ajouté
 
 - La dictée vocale (bouton micro) est de retour dans le composeur.
+- La ligne « Cogitation… » montre si la session vit vraiment : pastille de couleur, tokens reçus, outil en cours, tentatives et limites.
 
 ## 2026-10-29
 

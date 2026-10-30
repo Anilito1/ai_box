@@ -17,6 +17,7 @@ import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff, staleNote } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
+import { tokensOf, TurnTokens } from '../shared/pulse';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -50,6 +51,7 @@ import {
   type PermissionDecision,
   type RateLimits,
   type Role,
+  type SessionPulse,
   type SessionView,
   type TeamGroup,
   type TeamRole,
@@ -114,7 +116,7 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -173,6 +175,13 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   agentTasks: Set<string>;
   /** When it last turned idle; unlike activeAt, frames arriving meanwhile (tasks, limits) leave it alone. */
   idleAt: number;
+  /** Last event that really came from the process: unlike activeAt, nothing the hub does moves it. */
+  signalAt: number | null;
+  /** No turn is under way: an approval that ends now leaves the session idle. */
+  turnOver: boolean;
+  /** Tools of the conversation called and not answered yet, by id, oldest first. */
+  tools: Map<string, NonNullable<SessionView['tool']>>;
+  tokens: TurnTokens;
   /** Id of the post of a permanent worker, else null. */
   roleId: string | null;
   /** Handoff note a permanent worker wrote before its context was renewed: its next sessions start with it. */
@@ -303,6 +312,8 @@ const HISTORY_MAX = 400;
 const REPORT_ITEMS = 12;
 // A queued message starts its turn within this delay; only a worker still idle after it has really stopped.
 const SILENCE_MS = 5_000;
+// Deltas can come by the hundred per second: what they say reaches the windows at this pace.
+const PULSE_MS = 1000;
 const ATTACHMENTS_MAX_AGE = 30 * 86_400_000;
 // Session costs (USD) the mascot celebrates when a turn crosses them.
 const COST_MILESTONES = [5, 10, 25, 50, 100, 250, 500, 1000];
@@ -331,6 +342,7 @@ const SHOWN_INPUT = /^(Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit)$/;
 
 /** A worker's name as the user reads it: without its "hub-" prefix. */
 const displayName = (s: { name: string }) => s.name.replace(/^hub-/, '');
+const pulseOf = (s: Session): SessionPulse => ({ signalAt: s.signalAt, tokens: s.tokens.count, estimated: s.tokens.estimated });
 
 /** A model as the interface names it: Claude Code's name, its "default" choice said in the user's language. */
 const modelLabel = (value: string, label: string) => (value === 'default' ? t('model.default') : label.replace(/\s*\(recommended\)\s*$/i, ''));
@@ -433,6 +445,8 @@ export class SessionManager extends EventEmitter {
   private emitTimer: NodeJS.Timeout | null = null;
   private saveTimer: NodeJS.Timeout | null = null;
   private itemsTimer: NodeJS.Timeout | null = null;
+  private readonly pulsed = new Set<Session>();
+  private pulseTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private quitting = false;
   private readonly stateFile: string;
@@ -1005,6 +1019,8 @@ export class SessionManager extends EventEmitter {
 
   /** An account reached a limit: it rests until it opens again, and a session of it goes on with the chain's next account. */
   private onLimit(s: Session, q: AgentProcess, signal: LimitSignal): void {
+    // A sign-in problem is no limit: nothing opens again by waiting.
+    s.limit = signal.kind === 'auth' ? null : { resetsAt: signal.resetsAt ?? s.limit?.resetsAt ?? null };
     const account = s.runAccount || this.accountOf(s);
     this.cooldowns.set(this.canon(account), signal, Date.now());
     this.save();
@@ -1319,6 +1335,10 @@ export class SessionManager extends EventEmitter {
         agents: s.agents,
         compacting: s.compacting,
         retrying: s.retrying,
+        limit: s.limit,
+        tool: s.tools.values().next().value ?? null,
+        approvedAt: s.approvedAt,
+        pulse: pulseOf(s),
         error: s.error,
         account: s.runAccount || this.accountOf(s),
         fallbackFrom: s.home === null ? '' : this.accountOf(s, s.home),
@@ -1490,6 +1510,10 @@ export class SessionManager extends EventEmitter {
       env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
       conversation: { id: s.sessionId, resume },
       input: inbox,
+      // Not once this process is replaced: what it still says would pass for a sign of the next one.
+      onSignal: () => {
+        if (s.inbox === inbox) this.signal(s);
+      },
       onPermission: (req) => this.askPermission(s, req),
       onElicitation: (req, signal) => this.answerElicitation(s, req, signal),
     });
@@ -1560,10 +1584,36 @@ export class SessionManager extends EventEmitter {
     s.agents = 0;
     s.compacting = false;
     s.retrying = false;
+    s.limit = null;
+    s.signalAt = null;
+    s.approvedAt = null;
+    s.turnOver = true;
+    s.tools.clear();
+    s.tokens.reset();
   }
 
   private event(s: Session, kind: HubEventKind): void {
     if (!this.quitting) this.emit('event', s.id, kind);
+  }
+
+  /** Stamped at reception, for the session's line; a timer only groups what goes to the windows, and never moves it. */
+  private signal(s: Session): void {
+    s.signalAt = Date.now();
+    this.pulsed.add(s);
+    this.pulseTimer ??= setTimeout(() => {
+      this.pulseTimer = null;
+      const pulses = [...this.pulsed].map((x): [string, SessionPulse] => [x.id, pulseOf(x)]);
+      this.pulsed.clear();
+      if (!this.quitting) this.emit('pulse', pulses);
+    }, PULSE_MS);
+  }
+
+  /** A frame of the model came through: the retry worked, the limit is over. Says whether that changes anything. */
+  private cameThrough(s: Session): boolean {
+    const stalled = s.retrying || s.limit !== null;
+    s.retrying = false;
+    s.limit = null;
+    return stalled;
   }
 
   private trackAgent(s: Session, taskId: string, running: boolean): void {
@@ -1627,9 +1677,9 @@ export class SessionManager extends EventEmitter {
         break;
       case 'stream': {
         const before = s.status;
-        const retried = s.retrying;
-        s.retrying = false; // A frame came through: the retry worked.
+        const retried = this.cameThrough(s);
         this.markBusy(s);
+        s.tokens.estimate(tokensOf(ev.delta));
         if (ev.textStart) {
           s.liveId = `live-${randomUUID()}`;
           s.liveText = '';
@@ -1641,8 +1691,22 @@ export class SessionManager extends EventEmitter {
         if (s.status !== before || retried) this.changed();
         return;
       }
+      case 'output':
+        // While a tool of the turn runs, the thinking that arrives is a subagent's.
+        if (s.tools.size === 0) s.tokens.estimate(ev.tokens);
+        if (this.cameThrough(s)) this.changed();
+        return;
+      case 'outputTokens':
+        if (ev.of === 'reply') s.tokens.replyCount(ev.tokens);
+        else s.tokens.turnCount(ev.tokens);
+        return;
+      case 'reply':
+        s.tokens.nextReply();
+        return;
       case 'assistant': {
         s.retrying = false;
+        // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
+        if (!ev.error) s.limit = null;
         this.markBusy(s);
         // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
@@ -1657,7 +1721,10 @@ export class SessionManager extends EventEmitter {
         }
         const items = assistantItems(blocks, ev.id, hasText ? (s.liveId ?? undefined) : undefined);
         const filed = master ? this.fileFrame(all, items) : null;
-        for (const item of items) this.upsert(s, withTopics(item, filed?.get(item.id)));
+        for (const item of items) {
+          this.upsert(s, withTopics(item, filed?.get(item.id)));
+          if (item.kind === 'tool' && !s.tools.has(item.id)) s.tools.set(item.id, { name: item.name, summary: item.summary, since: Date.now() });
+        }
         if (hasText) s.liveId = null;
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === masterName())) {
           s.owesReport = false;
@@ -1687,6 +1754,7 @@ export class SessionManager extends EventEmitter {
       }
       case 'toolResults':
         for (const b of ev.blocks) {
+          s.tools.delete(String(b.tool_use_id));
           const item = s.items.get(String(b.tool_use_id));
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
@@ -1703,7 +1771,11 @@ export class SessionManager extends EventEmitter {
         if (ev.queued !== null) s.queued = Math.min(s.queued, ev.queued);
         if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
+        s.limit = null;
         s.compacting = false;
+        s.turnOver = true;
+        s.tools.clear();
+        s.tokens.reset();
         s.status = s.pending.size > 0 ? 'attention' : 'idle';
         if (s.status === 'idle') {
           s.busySince = null;
@@ -1745,6 +1817,8 @@ export class SessionManager extends EventEmitter {
         this.setContext(s, ev.tokens, ev.size);
         break;
       case 'activity':
+        // A subagent at work: the retry or the limit it met is behind it. Its frames only ever arrive as activity.
+        if (s.tools.size > 0) this.cameThrough(s);
         break;
     }
     this.changed();
@@ -1760,8 +1834,12 @@ export class SessionManager extends EventEmitter {
   }
 
   private markBusy(s: Session): void {
+    s.turnOver = false;
     if (s.status === 'attention') return;
-    if (s.status !== 'busy') s.busySince = Date.now();
+    if (s.status !== 'busy') {
+      s.busySince = Date.now();
+      s.tokens.reset(); // A reading that came between turns belongs to neither.
+    }
     s.status = 'busy';
   }
 
@@ -1927,7 +2005,11 @@ export class SessionManager extends EventEmitter {
       const settle = (d: PermissionDecision | null) => {
         if (!s.pending.delete(item.id)) return;
         this.upsert(s, { ...item, state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
-        if (s.status === 'attention' && s.pending.size === 0) s.status = 'busy';
+        // Asked after its turn ended (a background subagent): no end of turn would ever bring a "busy" back.
+        if (s.status === 'attention' && s.pending.size === 0) Object.assign(s, s.turnOver ? { status: 'idle', busySince: null, idleAt: Date.now() } : { status: 'busy' });
+        // The wait for the user is neither silence of the process nor time of the tool.
+        s.approvedAt = Date.now();
+        for (const tool of s.tools.values()) if (tool.name === item.tool && tool.summary === item.summary) tool.since = s.approvedAt;
         this.changed();
         resolve(d);
       };
@@ -3749,6 +3831,12 @@ export class SessionManager extends EventEmitter {
       agents: 0,
       compacting: false,
       retrying: false,
+      signalAt: null,
+      approvedAt: null,
+      turnOver: true,
+      tools: new Map(),
+      tokens: new TurnTokens(),
+      limit: null,
       error: '',
       sessionId: randomUUID(),
       started: false,

@@ -46,6 +46,7 @@ export class ClaudeProcess implements AgentProcess {
   constructor(
     private readonly q: Query,
     conversationId: string,
+    private readonly onSignal: () => void,
   ) {
     this.conversationId = conversationId;
     this.events = this.stream();
@@ -58,6 +59,8 @@ export class ClaudeProcess implements AgentProcess {
 
   private async *stream(): AsyncGenerator<AgentEvent> {
     for await (const msg of this.q) {
+      // The CLI's heartbeat ticks every 30 s whatever the tool is doing: it says nothing about the work.
+      if (msg.type !== 'tool_progress' || !msg.heartbeat) this.onSignal();
       if (msg.type === 'system' && msg.subtype === 'init') this.conversationId = msg.session_id;
       yield* translate(msg);
     }
@@ -177,7 +180,7 @@ export const claudeAdapter: ProviderAdapter = {
       env: spec.env,
       ...(spec.conversation.resume ? { resume: spec.conversation.id } : { sessionId: spec.conversation.id }),
     };
-    proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id);
+    proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id, spec.onSignal);
     return proc;
   },
 
