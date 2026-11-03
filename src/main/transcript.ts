@@ -176,11 +176,11 @@ const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from t
 export const capturedLine = (path: string) => (lang() === 'fr' ? `[Capture jointe : ${path}]` : `[Attached image: ${path}]`);
 /** Appended for each attached file (a document, an image the model cannot read inline...): the model opens it by its path. */
 export const fileLine = (path: string) => (lang() === 'fr' ? `[Fichier joint : ${path}]` : `[Attached file: ${path}]`);
-const CAPTURED = /^\[(?:Capture jointe :|Attached image:|Fichier joint :|Attached file:) [^\]\n]+\]\n?/gm;
-const FILE_LINE = /^\[(?:Fichier joint :|Attached file:) ([^\]\n]+)\]$/gm;
+const CAPTURED = /^\[(?:Capture jointe :|Attached image:|Fichier joint :|Attached file:) [^\n]+\](?:\n|$)/gm;
+const FILE_LINE = /^\[(?:Fichier joint :|Attached file:) ([^\n]+)\]$/gm;
 
-/** The files a message carried, from its attached-file lines (a name is the last part of its path). */
-export const attachedFiles = (text: string): AttachedFile[] => [...text.matchAll(FILE_LINE)].map((m) => ({ name: m[1].split(/[\\/]/).pop() || m[1] }));
+/** The files a message carried, from its attached-file lines (a path may hold "]"; a name is its last part). */
+export const attachedFiles = (text: string): AttachedFile[] => [...text.matchAll(FILE_LINE)].map((m) => ({ name: m[1].split(/[\\/]/).pop() || m[1], path: m[1] }));
 
 /**
  * What the hub adds to a message for the model alone: a changed team or post, a handoff note, or the instructions

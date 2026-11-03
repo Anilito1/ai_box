@@ -2,7 +2,7 @@
 export type FileKind = 'pdf' | 'doc' | 'sheet' | 'slides' | 'archive' | 'code' | 'data' | 'text' | 'audio' | 'video' | 'image' | 'other';
 
 export const FILE_LIMITS = {
-  /** Copied into the hub's folder up to this size; a larger file is referenced where it is (a copy would block the app). */
+  /** Copied into the hub's folder up to this size per message; past it a file is referenced where it is (a copy blocks the app). */
   copyBytes: 50 * 1024 * 1024,
   /** A file without a path on disk (pasted from the clipboard) travels as bytes: each one, and all of a message's. */
   dataBytes: 50 * 1024 * 1024,
@@ -17,10 +17,11 @@ export interface FileInput {
   data?: Uint8Array;
 }
 
-/** A file attached to a sent message, as the conversation shows it (the size is unknown once read back from a transcript). */
+/** A file attached to a sent message: shown by name (its size is unknown once read back from a transcript), opened by path. */
 export interface AttachedFile {
   name: string;
   size?: number;
+  path?: string;
 }
 
 const KINDS: [FileKind, string[]][] = [

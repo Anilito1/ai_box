@@ -90,7 +90,7 @@ async function toImage(file: Blob): Promise<{ image: ImageInput; url: string }> 
 }
 
 /** An image the app can hand the model (SVG is text, which the session reads better from the file). */
-const looksLikeImage = async (file: File) => (file.type.startsWith('image/') && file.type !== 'image/svg+xml') || (!file.type && (await sniff(file)) !== null);
+const looksLikeImage = async (file: File) => (file.type.startsWith('image/') && file.type !== 'image/svg+xml') || (!file.type && (await sniff(file).catch(() => null)) !== null);
 
 /**
  * A pasted, dropped or picked file: an image the model reads inline when the app can decode it, else (PDF, HEIC, an
@@ -105,6 +105,11 @@ export async function toAttachment(file: File, pathOf: (file: File) => string): 
       // Not one the app can decode or shrink enough (HEIC, a huge scan...): it goes as a file.
     }
   }
+  return asFile(file, pathOf);
+}
+
+/** Any file as a file attachment: opened by the session from its path. */
+export function asFile(file: File, pathOf: (file: File) => string): Attachment {
   const name = file.name || t('chat.pastedFile');
   const path = pathOf(file);
   if (!path && file.size > FILE_LIMITS.dataBytes) throw new Error(t('chat.fileTooHeavy', { name, max: formatSize(FILE_LIMITS.dataBytes, LANG) }));

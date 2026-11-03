@@ -19,7 +19,7 @@ import { HistoryCursor, sentMessages, wantsHistory } from '../shared/inputHistor
 import { effortsFor, splitRecent } from '../shared/models';
 import { modelKey } from '../shared/news';
 import { isProviderId } from '../shared/providers';
-import { fileChip, fileInput, toAttachment, type Attachment } from './attachments';
+import { asFile, fileChip, fileInput, toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
@@ -237,8 +237,9 @@ export class ChatView {
     this.input.addEventListener('paste', (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
       if (files.length === 0) return;
-      // A screenshot or a file copied in the explorer comes alone; an image copied from a page may also carry text, which still pastes as usual.
-      if (!e.clipboardData?.getData('text/plain')) e.preventDefault();
+      // An image copied from a page or a document may also carry text, which still pastes as usual. Files copied in the
+      // explorer have a path: the text that comes with them (their names, in the Finder) is not pasted.
+      if (!e.clipboardData?.getData('text/plain') || files.every((f) => this.hub.pathOf(f))) e.preventDefault();
       void this.addFiles(files);
     });
 
@@ -271,7 +272,11 @@ export class ChatView {
       pane.classList.remove('drop-target');
       if (!e.dataTransfer?.types.includes('Files')) return;
       e.preventDefault();
-      void this.addFiles([...e.dataTransfer.files]);
+      // A folder comes as a file the app cannot read: said here rather than after sending.
+      const items = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
+      const files = items.flatMap((i) => (i.webkitGetAsEntry()?.isDirectory ? [] : [i.getAsFile()].filter((f) => f !== null)));
+      if (files.length < items.length) this.attachError(t('chat.noFolders'), 8000);
+      void this.addFiles(files);
       this.input.focus();
     });
 
@@ -595,10 +600,14 @@ export class ChatView {
     this.syncSend();
     for (const file of batch) {
       try {
-        const attachment = await toAttachment(file, (f) => this.hub.pathOf(f));
+        const pathOf = (f: File) => this.hub.pathOf(f);
+        let attachment = await toAttachment(file, pathOf);
         // Checked once ready: concurrent pastes or drops all fill the same draft.
+        const imageBytes = (list: Attachment[]) => list.reduce((sum, a) => sum + (a.kind === 'image' ? base64Bytes(a.image.data) : 0), 0);
+        // One image too many for the message: it goes as a file, which the session opens by its path.
+        if (imageBytes([...target, attachment]) > ATTACH_LIMITS.totalBytes && pathOf(file)) attachment = asFile(file, pathOf);
         const all = [...target, attachment];
-        const images = all.reduce((sum, a) => sum + (a.kind === 'image' ? base64Bytes(a.image.data) : 0), 0);
+        const images = imageBytes(all);
         const pasted = all.reduce((sum, a) => sum + (a.kind === 'file' && !a.path ? a.size : 0), 0);
         if (target.length >= ATTACH_LIMITS.count) this.attachError(t('chat.maxAttachments', { n: ATTACH_LIMITS.count }));
         else if (images > ATTACH_LIMITS.totalBytes) this.attachError(t('chat.tooHeavy'));

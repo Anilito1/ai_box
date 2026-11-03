@@ -573,8 +573,7 @@ export class SessionManager extends EventEmitter {
     // The user took the worker over: its turn no longer answers the master, and it stays open.
     s.owesReport = false;
     s.closeWhenDone = false;
-    const attached = saved.map(({ name, size }) => ({ name, size }));
-    this.deliver(s, { text: textForModel, images, shown, command, ...(attached.length > 0 ? { files: attached } : {}), ...(filed ? { topic: filed.id } : {}) });
+    this.deliver(s, { text: textForModel, images, shown, command, ...(saved.length > 0 ? { files: saved } : {}), ...(filed ? { topic: filed.id } : {}) });
   }
 
   interrupt(id: string): void {
@@ -2166,15 +2165,18 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Files of a user message, each copied into a folder of its own under its own (made safe) name, so the session opens a
-   * copy nobody moves; one too large to copy without blocking the app stays where it is. One that fails is told, not sent.
+   * copy nobody moves. Copies block the app: past a budget per message, a file stays where it is. One that fails is told,
+   * not sent.
    */
-  private saveFiles(s: Session, files: FileInput[]): { path: string; name: string; size: number }[] {
+  private saveFiles(s: Session, files: FileInput[]): Required<AttachedFile>[] {
+    let budget = FILE_LIMITS.copyBytes;
     return files.flatMap((file) => {
       try {
         if (file.path) {
           const st = statSync(file.path);
           if (!st.isFile()) throw new Error('not a file');
-          if (st.size > FILE_LIMITS.copyBytes) return [{ path: file.path, name: file.name, size: st.size }];
+          if (st.size > budget) return [{ path: file.path, name: file.name, size: st.size }];
+          budget -= st.size;
           const dest = this.attachPath(file.name);
           copyFileSync(file.path, dest, constants.COPYFILE_EXCL);
           return [{ path: dest, name: file.name, size: st.size }];

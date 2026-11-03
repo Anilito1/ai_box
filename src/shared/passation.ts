@@ -17,7 +17,7 @@ export function digest(items: ChatItem[], budget = BUDGET): string {
   let size = 0;
   for (const item of items.slice(-KEEP).reverse()) {
     let line = '';
-    if (item.kind === 'user') line = `User: ${clip(flat(item.text), 1500)}`;
+    if (item.kind === 'user') line = `User: ${clip(flat(item.text), 1500)}${item.files?.length ? ` [attached: ${item.files.map((f) => f.path ?? f.name).join(', ')}]` : ''}`;
     else if (item.kind === 'peer') line = `${item.from}: ${clip(flat(item.text), 1500)}`;
     else if (item.kind === 'assistant') line = item.text.trim() ? `You: ${clip(flat(item.text), 1200)}` : '';
     else if (item.kind === 'tool') line = `[${item.name}] ${clip(flat(item.summary), 160)}${item.isError ? ' (failed)' : ''}`;
