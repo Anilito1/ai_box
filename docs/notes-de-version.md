@@ -12,20 +12,15 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-03
 
-### Modifié
-
-- Le champ de clé API reçoit bien le curseur quand tu choisis ce mode de connexion.
-- Un compte Gemini que Google refuse n’apparaît plus « connecté » : Réglages › Comptes le dit et propose d’utiliser une clé API Gemini à la place.
-- Claude reste affiché déconnecté même si ses réglages contiennent une clé API.
-- Les postes Claude retrouvent des modèles compatibles par défaut.
-- La déconnexion de Claude affiche son état réel et permet de réessayer en cas d’échec.
-- La déconnexion de Claude Code retire bien son état connecté, même si le terminal fournit une clé API.
-- Les modèles proposés au maître suivent les fournisseurs connectés.
-
 ### Ajouté
 
 - Range les postes de l’Équipe dans des dossiers : bouton + à côté de « Équipe », glisser-déposer pour y mettre un poste ou réordonner, clic droit pour renommer, supprimer ou déplacer.
 - Joins n’importe quel fichier à un message (PDF, Word, Excel, ZIP, audio, vidéo, photos HEIC…) avec le trombone, en le glissant ou en le collant : la session l’ouvre et le lit.
+
+### Modifié
+
+- Les réglages des fournisseurs retrouvent leur fonctionnement précédent.
+- Un compte Gemini que Google refuse n’apparaît plus « connecté » : Réglages › Comptes le dit et propose d’utiliser une clé API Gemini à la place.
 
 ## 2026-10-30
 
