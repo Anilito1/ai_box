@@ -4722,6 +4722,18 @@ kbd,
   color: var(--text);
   font-weight: 600;
 }
+/* Keep importing a file beside the instruction label, wrapping in narrow settings panes. */
+.setup-instructions-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  width: 100%;
+}
+.setup-instructions-note.err {
+  color: var(--danger);
+}
 .setup-hint {
   color: var(--text-3);
   font-size: var(--fs-sm);
