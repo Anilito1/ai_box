@@ -4,7 +4,7 @@ import type { Block } from '../blocks';
 import { EventQueue } from '../queue';
 import type { AgentEvent, AgentInput, AgentModel, AgentProcess, LaunchSpec, ProviderAdapter } from '../types';
 import { AcpClient, AcpError, type AcpRequest } from './acp';
-import { googleSignIn, modelsOfSession } from './cli';
+import { googleRefusal, googleSignIn, modelsOfSession, noteGoogleRefusal } from './cli';
 import { errorCodeOf, GeminiStream, historyOf, limitOfError, toolUse } from './events';
 
 type Json = Record<string, unknown>;
@@ -34,6 +34,12 @@ export function acpMode(mode: Mode | null, readOnly: boolean): string {
 
 /** The way an account signs in to the CLI: an API key in the environment, else the Google sign-in. */
 export const authMethodOf = (env: Record<string, string>) => (env.GEMINI_API_KEY ? 'gemini-api-key' : 'oauth-personal');
+
+/**
+ * Gemini reads and writes only inside its workspace: the post's other folders and the attachments' join it. One flag
+ * per folder (the CLI splits a value on commas, so a path holding one would be cut).
+ */
+export const workspaceArgs = (dirs: string[]): string[] => dirs.filter((d) => d && !d.includes(',')).flatMap((d) => ['--include-directories', d]);
 
 /** The prompt of a turn from the hub's blocks: text, and images the way the protocol wants them. */
 export function promptOf(content: string | Block[]): Json[] {
@@ -85,7 +91,13 @@ class GeminiProcess implements AgentProcess {
     this.mode = spec.mode;
     this.model = spec.model;
     this.stream = new GeminiStream(() => this.model);
-    this.client = new AcpClient({ executable: spec.executable || 'gemini', env: { ...spec.env, GEMINI_CLI_TRUST_WORKSPACE: 'true' }, cwd: spec.cwd, version: HUB_VERSION });
+    this.client = new AcpClient({
+      executable: spec.executable || 'gemini',
+      env: { ...spec.env, GEMINI_CLI_TRUST_WORKSPACE: 'true' },
+      cwd: spec.cwd,
+      version: HUB_VERSION,
+      args: workspaceArgs([...spec.extraDirs, ...spec.readDirs]),
+    });
     this.readyP = this.run();
     this.readyP.catch(() => undefined);
   }
@@ -113,7 +125,18 @@ class GeminiProcess implements AgentProcess {
         this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: 'gemini:not-signed-in' } });
         throw new Error('Gemini is not signed in: connect it in Settings › Accounts.');
       }
-      await client.request('authenticate', { methodId: method });
+      await client.request('authenticate', { methodId: method }).catch((err: unknown) => {
+        const refusal = method === 'oauth-personal' && err instanceof Error ? googleRefusal(err.message) : null;
+        if (!refusal) throw err;
+        // Google refuses the account: Settings › Accounts says so from now on, and the session stops with why.
+        noteGoogleRefusal(spec.env.GEMINI_CLI_HOME ?? '', refusal);
+        this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: `gemini:${refusal}` } });
+        throw new Error(
+          refusal === 'google-refused'
+            ? 'Google refuses this account for Gemini: use a Gemini API key in Settings › Accounts.'
+            : 'The Google sign-in of Gemini expired: sign in again in Settings › Accounts.',
+        );
+      });
       let session: Json | null = null;
       if (spec.conversation.resume) {
         this.replaying = true;

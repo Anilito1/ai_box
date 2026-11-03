@@ -1,10 +1,12 @@
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { errorCode } from '../../errors';
 import { geminiScript, localTool, toolCommand } from '../tools';
 import { AcpClient } from './acp';
+import type { AccountStatus } from '../../../shared/types';
 import type { AgentModel } from '../types';
 
 type Json = Record<string, unknown>;
@@ -57,6 +59,80 @@ export function googleSignIn(home: string): { signedIn: boolean; email: string }
   } catch {
     return { signedIn: true, email: '' };
   }
+}
+
+/**
+ * What Google's answer to a sign-in says when it is a refusal: an account Google no longer serves through the CLI (an
+ * individual Code Assist account, a country it is not offered in), or a sign-in that no longer holds. Null otherwise
+ * (the network, a server error, a project to set up): nothing sure about the account then.
+ */
+export function googleRefusal(message: string): 'google-refused' | 'google-signed-out' | null {
+  if (/no longer supported|ineligible|not eligible|antigravity|unsupported[_ ]location|not available in your (country|region)|not supported in your (country|region)/i.test(message)) return 'google-refused';
+  if (/invalid_grant|token (has been )?(expired|revoked)|please re-?authenticate|login required/i.test(message)) return 'google-signed-out';
+  return null;
+}
+
+/** A Google sign-in's state in Settings › Accounts: signed in and accepted is connected; refused says why. */
+export function googleAccountStatus(who: { signedIn: boolean; email: string }, refusal: string | null): AccountStatus {
+  if (!who.signedIn) return { ready: false, detail: '', error: '', models: [] };
+  return { ready: !refusal, detail: who.email, error: refusal ?? '', models: [] };
+}
+
+const HOUR = 3_600_000;
+const verdicts = new Map<string, { stamp: string; refusal: string | null; until: number }>();
+const asking = new Map<string, Promise<string | null>>();
+
+/** Which sign-in it is: its refresh token, hashed (a session's hourly token refresh rewrites the file, not that). */
+function signInStamp(home: string): string {
+  try {
+    const creds = obj(JSON.parse(readFileSync(join(geminiDir(home), 'oauth_creds.json'), 'utf8')));
+    return typeof creds.refresh_token === 'string' ? createHash('sha256').update(creds.refresh_token).digest('hex') : '';
+  } catch {
+    return '';
+  }
+}
+
+/** A refusal a session met when it started: the next check says it at once. */
+export function noteGoogleRefusal(home: string, refusal: string, now = Date.now()): void {
+  verdicts.set(home, { stamp: signInStamp(home), refusal, until: now + 6 * HOUR });
+}
+
+/**
+ * Whether Google accepts an account's Google sign-in: the CLI is asked to authenticate, as a session does first, without
+ * calling a model nor opening a browser. The answer holds for this sign-in for 6 hours; one that says nothing about the
+ * account (no network, no answer) for 10 minutes, the account counting as accepted meanwhile.
+ */
+export function googleAccess(executable: string, home: string, env: Record<string, string>, now = Date.now()): Promise<string | null> {
+  const stamp = signInStamp(home);
+  const known = verdicts.get(home);
+  if (known && known.stamp === stamp && now < known.until) return Promise.resolve(known.refusal);
+  const pending = asking.get(home);
+  if (pending) return pending;
+  const ask = (async () => {
+    // No folder of its own to work in: one removed right after would still be held by the program on Windows.
+    // NO_BROWSER: a sign-in that no longer holds must not open a Google page nobody asked for.
+    const client = new AcpClient({ executable, env: { ...env, GEMINI_CLI_HOME: home, GEMINI_CLI_TRUST_WORKSPACE: 'true', NO_BROWSER: 'true' }, cwd: tmpdir(), version: '0.2' });
+    let refusal: string | null = null;
+    let sure = true;
+    try {
+      await Promise.race([
+        (async () => {
+          await client.start();
+          await client.request('authenticate', { methodId: 'oauth-personal' });
+        })(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 20_000).unref()),
+      ]);
+    } catch (err) {
+      refusal = googleRefusal(err instanceof Error ? err.message : String(err));
+      sure = refusal !== null;
+    } finally {
+      client.close();
+    }
+    verdicts.set(home, { stamp, refusal, until: now + (sure ? 6 * HOUR : 10 * 60_000) });
+    return refusal;
+  })().finally(() => asking.delete(home));
+  asking.set(home, ask);
+  return ask;
 }
 
 /** Checks a Gemini API key with the free list of models: null when accepted, else an error code. */
