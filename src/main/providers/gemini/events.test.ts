@@ -62,7 +62,9 @@ test('usage: the context is the last update, the tokens are summed per model acr
   s.turn({ stopReason: 'end_turn', _meta: { quota: { model_usage: [{ model: 'gemini-2.5-pro', token_count: { input_tokens: 100, output_tokens: 20 } }, { model: 'gemini-3.8-flash', token_count: { input_tokens: 5, output_tokens: 1 } }] } } });
   const events = s.turn({ stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2 } });
   const turn = events.at(-1);
-  assert.deepEqual(turn?.type === 'turn' && turn.usage.models['gemini-2.5-pro'], { cost: 0, input: 110, output: 22, cacheRead: 0, cacheWrite: 0 });
+  assert.ok(turn?.type === 'turn');
+  assert.ok(Math.abs(turn.usage.cost - .0003575) < 1e-12);
+  assert.deepEqual({ ...turn.usage.models['gemini-2.5-pro'], cost: 0 }, { cost: 0, input: 110, output: 22, cacheRead: 0, cacheWrite: 0 });
   assert.equal(turn?.type === 'turn' && turn.usage.models['gemini-3.8-flash'].input, 5);
   assert.deepEqual(turn?.type === 'turn' && turn.contextWindows, [1_000_000]);
 });
@@ -145,5 +147,30 @@ test('the post’s other folders and the attachments join the workspace, one fla
   ]);
   assert.deepEqual(workspaceArgs([]), []);
   // The CLI splits a value on commas: such a folder would be cut in two wrong ones.
-  assert.deepEqual(workspaceArgs(['', 'D:/a,b']), []);
+  assert.throws(() => workspaceArgs(['', 'D:/a,b']), /cannot include/);
+  assert.throws(() => workspaceArgs([' leading']), /cannot include/);
+});
+
+
+test('resuming Gemini retains the baseline and records only the new prompt, without mutating old totals', () => {
+  const first = stream();
+  first.turn({ usage: { inputTokens: 100, outputTokens: 10 } });
+  const base = first.usage;
+  const resumed = new GeminiStream(() => 'gemini-2.5-pro', base);
+  resumed.turn({ _meta: { quota: { token_count: { input_tokens: 20, output_tokens: 2 } } } });
+  assert.equal(base.models['gemini-2.5-pro'].input, 100);
+  assert.equal(resumed.usage.models['gemini-2.5-pro'].input, 120);
+  assert.equal(resumed.usage.cost, .00027);
+});
+
+test('standard ACP usage splits cached input and includes thoughts in output', () => {
+  const s = stream();
+  s.turn({ usage: { inputTokens: 100, outputTokens: 10, thoughtTokens: 5, cachedReadTokens: 60 } });
+  assert.deepEqual(s.usage.models['gemini-2.5-pro'], { cost: .0002075, input: 40, output: 15, cacheRead: 60, cacheWrite: 0 });
+});
+
+test('ACP command updates replace the command list, including clearing it', () => {
+  const s = stream();
+  assert.deepEqual(s.handle({ sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'explain', description: 'Explain code', input: { hint: 'file' } }] }), [{ type: 'commands', commands: [{ name: 'explain', description: 'Explain code', argumentHint: 'file' }] }]);
+  assert.deepEqual(s.handle({ sessionUpdate: 'available_commands_update', availableCommands: [] }), [{ type: 'commands', commands: [] }]);
 });

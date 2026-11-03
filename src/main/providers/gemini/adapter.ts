@@ -39,7 +39,11 @@ export const authMethodOf = (env: Record<string, string>) => (env.GEMINI_API_KEY
  * Gemini reads and writes only inside its workspace: the post's other folders and the attachments' join it. One flag
  * per folder (the CLI splits a value on commas, so a path holding one would be cut).
  */
-export const workspaceArgs = (dirs: string[]): string[] => dirs.filter((d) => d && !d.includes(',')).flatMap((d) => ['--include-directories', d]);
+export const workspaceArgs = (dirs: string[]): string[] => {
+  const invalid = dirs.find((d) => d.includes(',') || d.trim() !== d);
+  if (invalid) throw new Error(`Gemini CLI cannot include a directory containing a comma or surrounding whitespace: ${invalid}`);
+  return dirs.filter(Boolean).flatMap((d) => ['--include-directories', d]);
+};
 
 /** The prompt of a turn from the hub's blocks: text, and images the way the protocol wants them. */
 export function promptOf(content: string | Block[]): Json[] {
@@ -90,7 +94,7 @@ class GeminiProcess implements AgentProcess {
   constructor(private readonly spec: LaunchSpec) {
     this.mode = spec.mode;
     this.model = spec.model;
-    this.stream = new GeminiStream(() => this.model);
+    this.stream = new GeminiStream(() => this.model, spec.conversation.resume ? spec.initialUsage : undefined);
     this.client = new AcpClient({
       executable: spec.executable || 'gemini',
       env: { ...spec.env, GEMINI_CLI_TRUST_WORKSPACE: 'true' },
@@ -143,7 +147,6 @@ class GeminiProcess implements AgentProcess {
         try {
           session = obj(await client.request('session/load', { sessionId: spec.conversation.id, cwd: spec.cwd, mcpServers: this.mcpServers() }));
           this.sessionId = spec.conversation.id;
-          this.fresh = false;
         } catch (err) {
           // The CLI no longer has the conversation: a new one starts in its place (the hub says so by its new id).
           if (!(err instanceof AcpError)) throw err;
@@ -152,6 +155,7 @@ class GeminiProcess implements AgentProcess {
         }
       }
       if (!session) {
+        this.stream.usage = { cost: 0, models: {} };
         session = obj(await client.request('session/new', { cwd: spec.cwd, mcpServers: this.mcpServers() }));
         this.sessionId = str(session.sessionId);
       }
@@ -191,13 +195,20 @@ class GeminiProcess implements AgentProcess {
     this.prompting = true;
     this.queue.push({ type: 'promptTaken', text: textOfContent(input.content) });
     const parts = promptOf(input.content);
-    // The hub's instructions have no place of their own in the protocol: they open a new conversation's first message.
-    if (this.fresh && this.spec.instructions) {
-      parts.unshift({ type: 'text', text: `${this.spec.instructions}\n\n---\n` });
-      this.fresh = false;
+    // The CLI detects commands from the leading text before any non-text part. Keep their arguments intact.
+    let leadingText = '';
+    for (const part of parts) {
+      if (part.type !== 'text') break;
+      leadingText += str(part.text);
     }
+    const command = /^[/$]/.test(leadingText.trimStart());
+    // ACP has no system-instructions field: defer the refresh until the first conversational prompt,
+    // even if commands arrive first after a resume. Do not spend an extra model turn to prime instructions.
+    const refresh = this.fresh && !!this.spec.instructions && !command;
+    if (refresh) parts.unshift({ type: 'text', text: `${this.spec.instructions}\n\n---\n` });
     try {
       const response = obj(await this.client.request('session/prompt', { sessionId: this.sessionId, prompt: parts }));
+      if (refresh) this.fresh = false;
       for (const e of this.stream.turn(response)) this.queue.push(e);
     } catch (err) {
       if (this.closed) return;
@@ -223,7 +234,8 @@ class GeminiProcess implements AgentProcess {
 
   private onNotification(method: string, params: Json): void {
     // The conversation the agent tells again on a load is already in the hub's items.
-    if (method !== 'session/update' || this.replaying) return;
+    if (method !== 'session/update') return;
+    if (this.replaying && obj(params.update).sessionUpdate !== 'available_commands_update') return;
     this.spec.onSignal();
     for (const e of this.stream.handle(obj(params.update))) this.queue.push(e);
   }
@@ -268,7 +280,9 @@ class GeminiProcess implements AgentProcess {
   }
 
   /** Gemini takes no effort setting. */
-  async setEffort(_effort: Effort): Promise<void> {}
+  async setEffort(_effort: Effort): Promise<void> {
+    throw new Error('Gemini ACP does not expose a reasoning effort setting');
+  }
 
   /** Ultracode is Claude Code's. */
   async setUltracode(): Promise<void> {
@@ -284,8 +298,9 @@ class GeminiProcess implements AgentProcess {
     return { tokens: this.stream.contextTokens, size: this.stream.contextSize, model: this.model };
   }
 
-  /** Tokens spent by this process: a resumed conversation counts from zero (the CLI gives no running total). */
+  /** Per-prompt usage added to the previous process totals supplied by the manager. */
   async totals(): Promise<Totals> {
+    await this.readyP;
     return this.stream.usage;
   }
 
