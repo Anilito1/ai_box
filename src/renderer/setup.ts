@@ -1226,6 +1226,8 @@ export class SetupView {
       'rate-limited': 'setup.accounts.err.rateLimited',
       network: 'setup.accounts.err.network',
       working: 'setup.accounts.err.working',
+      'google-refused': 'setup.accounts.err.googleRefused',
+      'google-signed-out': 'setup.accounts.err.googleSignedOut',
     };
     return own[code] ? t(own[code]) : this.errorText(code, 'key');
   }

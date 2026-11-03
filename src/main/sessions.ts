@@ -1504,6 +1504,7 @@ export class SessionManager extends EventEmitter {
       name: s.name,
       cwd: s.cwd,
       extraDirs: post && post.folders.length > 1 ? post.folders.slice(1) : [],
+      readDirs: [this.attachDir],
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
       // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
@@ -2201,12 +2202,14 @@ export class SessionManager extends EventEmitter {
     return path;
   }
 
+  /** Removes the old attachments; the folder exists from the start, as a session's workspace may include it (Gemini). */
   private pruneAttachments(): void {
     let names: string[];
     try {
+      mkdirSync(this.attachDir, { recursive: true });
       names = readdirSync(this.attachDir);
     } catch {
-      return; // No attachments yet.
+      return;
     }
     for (const name of names) {
       try {

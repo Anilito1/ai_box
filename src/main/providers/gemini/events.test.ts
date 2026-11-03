@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { acpMode, authMethodOf, pickOption, promptOf } from './adapter';
+import { acpMode, authMethodOf, pickOption, promptOf, workspaceArgs } from './adapter';
 import { errorCodeOf, GeminiStream, historyOf, limitOfError, toolUse, waitSeconds } from './events';
 import { modelsOfSession } from './cli';
 
@@ -134,4 +134,16 @@ test('thoughts count for the estimate, as they are kept for their item', () => {
   assert.deepEqual(s.handle({ sessionUpdate: 'agent_thought_chunk', content: { text: '12345678' } }), [{ type: 'output', tokens: 2 }]);
   const [item] = s.flush();
   assert.equal(item.type === 'assistant' && item.blocks[0].thinking, '12345678');
+});
+
+test('the post’s other folders and the attachments join the workspace, one flag each', () => {
+  assert.deepEqual(workspaceArgs(['D:/repo-b', 'C:/Users/a/AppData/Roaming/claude-hub/attachments']), [
+    '--include-directories',
+    'D:/repo-b',
+    '--include-directories',
+    'C:/Users/a/AppData/Roaming/claude-hub/attachments',
+  ]);
+  assert.deepEqual(workspaceArgs([]), []);
+  // The CLI splits a value on commas: such a folder would be cut in two wrong ones.
+  assert.deepEqual(workspaceArgs(['', 'D:/a,b']), []);
 });
