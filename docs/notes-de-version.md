@@ -12,6 +12,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-03
 
+### Modifié
+
+- Les modèles proposés au maître suivent les fournisseurs connectés.
+
 ### Ajouté
 
 - Range les postes de l’Équipe dans des dossiers : bouton + à côté de « Équipe », glisser-déposer pour y mettre un poste ou réordonner, clic droit pour renommer, supprimer ou déplacer.
