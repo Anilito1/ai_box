@@ -2,6 +2,14 @@
 
 Electron + TypeScript. `npm run typecheck`, `npm test`, `npm run build` must be green before a merge.
 
+## Commit messages
+
+Use a concise English action-oriented subject, followed by a blank line and an explanatory body.
+Describe the concrete problem, the resulting behaviour and implementation choices that help a reviewer.
+Include relevant verification results when checks were run; state their scope accurately.
+For AI-assisted work, add an accurate `Co-Authored-By` trailer naming the assistant that helped.
+Never copy another contributor's or assistant's identity from an example commit.
+
 ## Release notes
 
 A change users can see adds one short French line, for users (no file, commit or jargon), at the top of
