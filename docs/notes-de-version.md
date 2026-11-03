@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- L’icône macOS est plus discrète dans le Dock et le Finder, avec des marges mieux équilibrées.
 - Les fichiers joints sont conservés dans une copie locale durable ; un plafond de stockage empêche leur accumulation excessive.
 - Les coûts Codex et Gemini sont estimés aux tarifs API connus, et Gemini retrouve ses commandes et les consignes à la reprise.
 - Le champ de clé API reçoit bien le curseur quand tu choisis ce mode de connexion.

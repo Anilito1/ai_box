@@ -10,8 +10,8 @@ set -eu
 dir=$(cd "$(dirname "$0")/.." && pwd)
 src="$dir/node_modules/electron/dist/Electron.app"
 node_bin="$HOME/.local/share/ai-box-node/bin"
-# Electron's version and this script's layout: a copy made by another one is made again.
-stamp() { printf '%s/1\n' "$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$dir/node_modules/electron/package.json")"; }
+# Refresh the wrapper when Electron, its layout or the macOS icon changes.
+stamp() { printf '%s/2/%s\n' "$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$dir/node_modules/electron/package.json")" "$(shasum -a 256 "$dir/assets/icon-macos.png" | cut -d ' ' -f 1)"; }
 
 make_app() {
   app=$1
@@ -41,8 +41,8 @@ make_app() {
   icons=$(mktemp -d)/ai-box.iconset
   mkdir -p "$icons"
   for s in 16 32 128 256 512; do
-    sips -z $s $s "$dir/assets/icon.png" --out "$icons/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s * 2)) $((s * 2)) "$dir/assets/icon.png" --out "$icons/icon_${s}x${s}@2x.png" >/dev/null
+    sips -z $s $s "$dir/assets/icon-macos.png" --out "$icons/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s * 2)) $((s * 2)) "$dir/assets/icon-macos.png" --out "$icons/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$icons" -o "$new/Contents/Resources/ai-box.icns"
   rm -rf "$(dirname "$icons")"
