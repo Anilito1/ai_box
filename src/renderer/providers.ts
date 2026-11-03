@@ -114,10 +114,8 @@ export class ProvidersPanel {
     if (this.views) list.append(this.form?.id === '' ? this.customItem() : this.addRow());
     el.append(list);
     if (this.focusKey) {
-      const input = list.querySelector<HTMLInputElement>(`[data-provider="${this.focusKey}"] input`);
+      list.querySelector<HTMLInputElement>(`[data-provider="${this.focusKey}"] input`)?.focus();
       this.focusKey = '';
-      // The settings attach this freshly built section after mount returns.
-      queueMicrotask(() => { if (input?.isConnected) input.focus(); });
     }
   }
 
@@ -191,7 +189,6 @@ export class ProvidersPanel {
     if (code === 'no-node') return t('provider.err.noNode', { tool });
     if (code === 'install-failed') return t('provider.err.install', { tool });
     if (code === 'no-terminal') return t('provider.err.noWindow');
-    if (id === 'anthropic' && code === 'signout-failed') return t('provider.anthropic.signoutFailed');
     return this.host.errorText(code);
   }
 
@@ -521,19 +518,13 @@ export class ProvidersPanel {
     // An account added beside the user's own is removed with its sign-in; the user's own is signed out.
     if (id === 'anthropic' && v.method === 'cli' && active?.removable) return this.accountAction('remove', active.id);
     const method = v.method as ProviderMethod;
-    delete this.errors[id];
     this.phases.set(id, 'disconnect');
     this.host.rerender();
-    try {
-      const r = await this.hub.disconnectProvider(id, method);
-      if (r.views.length > 0) this.views = r.views;
-      if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.disconnect(id, v));
-    } catch {
-      this.fail(id, 'unknown', () => void this.disconnect(id, v));
-    } finally {
-      this.phases.delete(id);
-      this.host.rerender();
-    }
+    const r = await this.hub.disconnectProvider(id, method);
+    this.phases.delete(id);
+    if (r.views.length > 0) this.views = r.views;
+    if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.disconnect(id, v));
+    this.host.rerender();
   }
 
   /** Checks the states again (an error that came from a check, not from an action of the row). */

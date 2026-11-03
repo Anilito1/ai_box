@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ClaudeStatus } from '../../../shared/types';
 import type { HubConfig } from '../../config';
 import { errorCode, httpCode } from '../../errors';
@@ -12,8 +13,6 @@ const require = createRequire(import.meta.url);
 const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';
 /** Cloud switches a user may have in their own environment: with an API key chosen, the key must win over them. */
 const CLOUD_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
-/** Authentication variables inherited from a shell are not Claude Code's saved CLI sign-in. */
-const AUTH_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN'];
 
 /** The Claude Code binary npm installed with the Agent SDK (absent from a packaged build, which never ships it). */
 function bundledExecutable(): string {
@@ -81,8 +80,8 @@ export async function checkApiKey(key: string): Promise<string | null> {
 }
 
 /**
- * Asks Claude Code for its authentication status, without opening a session or sending a prompt.
- * `loggedIn` is authoritative: an email or plan alone does not prove that credentials remain.
+ * Starts Claude Code once, with no prompt (nothing is sent to the API) and nothing saved, and asks it which
+ * credentials it would use. The hub only reads this summary: the sign-in itself stays inside Claude Code.
  */
 export async function claudeStatus(cfg: HubConfig, env: Record<string, string>): Promise<{ executable: string; status: ClaudeStatus }> {
   const executable = await claudeExecutable(cfg);
@@ -94,33 +93,34 @@ export async function claudeStatus(cfg: HubConfig, env: Record<string, string>):
     status.account = { ready: true, provider: 'cloud', email: '', plan: '', source: '' };
     return { executable, status };
   }
-  // In Claude Code mode, report the CLI's own sign-in state. A shell-level API key can still
-  // authorize requests, but must not keep the CLI sign-out control active after auth logout.
-  const probeEnv = { ...env };
-  if (cfg.provider === 'claude-code') for (const key of AUTH_ENV_VARS) delete probeEnv[key];
-  // User/project settings can inject env credentials or an apiKeyHelper after the environment was cleaned.
-  // This probe is about the saved CLI sign-in; loading those settings would reconnect it after logout.
-  const args = [...(cfg.provider === 'claude-code' ? ['--setting-sources', ''] : []), 'auth', 'status', '--json'];
-  await new Promise<void>((resolve) => {
-    execFile(executable, args, { cwd: homedir(), env: probeEnv, timeout: 30_000, windowsHide: true }, (err, stdout) => {
-      try {
-        // Claude Code exits with 1 when signed out, and still returns a valid status.
-        if (err && (err.killed || err.code !== 1)) throw err;
-        const info = JSON.parse(stdout);
-        if (typeof info.loggedIn !== 'boolean') throw new Error('probe-failed');
-        const text = (value: unknown) => typeof value === 'string' ? value : '';
-        status.account = {
-          ready: info.loggedIn,
-          provider: text(info.apiProvider) || 'firstParty',
-          email: text(info.email),
-          plan: text(info.subscriptionType),
-          source: info.apiKeySource === 'none' ? '' : text(info.apiKeySource),
-        };
-      } catch (error) {
-        status.error = err?.killed ? 'timeout' : 'probe-failed';
-      }
-      resolve();
-    });
+  let close = () => undefined as void;
+  const prompt: AsyncIterable<SDKUserMessage> = {
+    [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => (close = () => resolve({ value: undefined, done: true }))) }),
+  };
+  const q = query({
+    prompt,
+    options: { cwd: homedir(), pathToClaudeCodeExecutable: executable, env, persistSession: false, strictMcpConfig: true, mcpServers: {} },
   });
+  try {
+    const info = await Promise.race([
+      q.accountInfo(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 30_000)),
+    ]);
+    const provider = info.apiProvider ?? 'firstParty';
+    // An API key names its source; a Claude account sign-in shows as the account's email and plan.
+    const source = info.apiKeySource && info.apiKeySource !== 'none' ? info.apiKeySource : '';
+    status.account = {
+      ready: provider !== 'firstParty' || source !== '' || !!info.subscriptionType || !!info.email,
+      provider,
+      email: info.email ?? '',
+      plan: info.subscriptionType ?? '',
+      source,
+    };
+  } catch (err) {
+    status.error = err instanceof Error ? err.message : String(err);
+  } finally {
+    close();
+    q.close();
+  }
   return { executable, status };
 }
