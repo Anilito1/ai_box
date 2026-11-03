@@ -231,6 +231,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
    */
   usageBase: Promise<Totals | null | 'unknown'>;
   usageSeen: Totals | null;
+  /** Gemini ACP has per-prompt usage only; retain totals across process and app restarts. */
+  geminiUsage?: Totals;
   /** Commands and skills its Claude Code process offers. */
   commands: AgentCommand[];
 }
@@ -238,6 +240,7 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
 type Persisted = {
   /** What to do at the next start: deliver a mission never received, or resume work cut by the close. */
   resume?: 'mission' | 'work';
+  geminiUsage?: Totals;
 } & Pick<
   Session,
   | 'id'
@@ -1181,7 +1184,8 @@ export class SessionManager extends EventEmitter {
   /** Claude Code's commands and skills for a session's composer; one that has not run yet gets those of the last that did. */
   commands(id: string): CliCommand[] {
     const s = this.sessions.get(id);
-    const list = s?.commands.length ? s.commands : this.lastCommands;
+    const claude = !s || harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'claude';
+    const list = s?.commands.length ? s.commands : claude ? this.lastCommands : [];
     return list.map((c) => ({ name: c.name, description: c.description, argumentHint: c.argumentHint, aliases: c.aliases ?? [] })).filter(visibleCli);
   }
 
@@ -1461,6 +1465,7 @@ export class SessionManager extends EventEmitter {
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
     }
+    if (!resume) s.geminiUsage = undefined;
     if (resume) await this.loadHistory(s);
     // Everything of a conversation started now is already in `items`: reading its transcript later would duplicate it.
     else s.historyLoad ??= Promise.resolve();
@@ -1516,6 +1521,7 @@ export class SessionManager extends EventEmitter {
       mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
       env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
+      ...(harness === 'gemini' && resume && s.geminiUsage ? { initialUsage: s.geminiUsage } : {}),
       conversation: { id: s.sessionId, resume },
       input: inbox,
       // Not once this process is replaced: what it still says would pass for a sign of the next one.
@@ -1660,7 +1666,8 @@ export class SessionManager extends EventEmitter {
         this.compacted(s, ev.before, ev.after);
         break;
       case 'commands':
-        s.commands = this.lastCommands = ev.commands;
+        s.commands = ev.commands;
+        if (harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'claude') this.lastCommands = ev.commands;
         break;
       case 'compacting':
         if (ev.on && !s.compacting) this.event(s, 'compacting');
@@ -1881,7 +1888,10 @@ export class SessionManager extends EventEmitter {
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
       if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount)) && !this.pinned(s.runAccount)) this.modelInfos = init.models;
       else if (init.models.length > 0 && harnessOf(this.kindOf(s.runAccount)) !== 'claude') this.setCatalog(s.runAccount, init.models);
-      if (s.query === q && init.commands.length > 0) s.commands = this.lastCommands = init.commands;
+      if (s.query === q && init.commands.length > 0) {
+        s.commands = init.commands;
+        if (harnessOf(this.kindOf(s.runAccount)) === 'claude') this.lastCommands = init.commands;
+      }
     } catch {
       return; // The session failed to start: consume() reports it.
     }
@@ -1936,6 +1946,7 @@ export class SessionManager extends EventEmitter {
     // A zeroed result (a crash) or one below the last: the next real one carries the totals.
     if (Object.keys(totals.models).length === 0 || (prev && totals.cost + 1e-9 < prev.cost)) return;
     s.usageSeen = totals;
+    if (harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'gemini') s.geminiUsage = totals;
     const at = Date.now();
     const role = this.costRole(s);
     void (prev ? Promise.resolve(prev) : s.usageBase).then((before) => {
@@ -4019,6 +4030,7 @@ export class SessionManager extends EventEmitter {
       effort: s.effort,
       lastMessage: s.lastMessage,
       metrics: s.metrics,
+      ...(s.geminiUsage ? { geminiUsage: s.geminiUsage } : {}),
       createdAt: s.createdAt,
       sessionId: s.sessionId,
       started: s.started,
