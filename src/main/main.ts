@@ -740,10 +740,10 @@ class Hub {
       return out({ ok: true, error: '' });
     }
     if (provider === 'anthropic') {
-      const error = await claudeLogout(await claudeExecutable(this.cfg), this.mgr.environment());
+      const error = await claudeLogout(await claudeExecutable(this.cfg), this.mgr.environment(OWN_ACCOUNT));
       if (error) return out({ ok: false, error });
       const status = await claudeStatus(this.cfg, this.mgr.environment(OWN_ACCOUNT));
-      return out(status.status.account?.ready ? { ok: false, error: 'signout-failed' } : { ok: true, error: '' });
+      return out(status.status.error || status.status.account?.ready ? { ok: false, error: status.status.error || 'signout-failed' } : { ok: true, error: '' });
     }
     const account = this.managed(provider, method);
     if (!account) return out({ ok: true, error: '' });
