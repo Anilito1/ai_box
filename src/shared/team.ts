@@ -10,6 +10,8 @@ export const FOLDERS_MAX = 5;
 export const ROLE_LIMITS = { name: 24, description: 400, instructions: 8000 } as const;
 /** Modes a post may run in; "Allow everything" only once the user confirms it in the settings. */
 export const ROLE_MODES: Mode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+/** Models the settings offer for the master's choice, strongest first. */
+export const AUTO_MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 /** Never a leading dash: the name goes on Claude Code's command line. */
 const MODEL = /^\w[\w.:[\]-]{0,79}$/;
 const ABSOLUTE = /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/;

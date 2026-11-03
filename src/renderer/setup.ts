@@ -8,7 +8,7 @@ import { ProvidersPanel } from './providers';
 import { LANG_NAMES, LANGS } from '../shared/i18n';
 import { PARALLEL_LIMITS } from '../shared/parallel';
 import { checkGroup, GROUP_LIMITS, GROUPS_MAX, isPostRef, normalizeGroup, refName, type GroupError } from '../shared/groups';
-import { checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
+import { AUTO_MODELS, checkRole, FOLDERS_MAX, fromTemplate, normalizeRole, ROLE_LIMITS, ROLE_MODES, sessionNameOf, slugify, TEAM_MAX, TEMPLATE_IDS, type RoleError } from '../shared/team';
 import {
   APP_NAME,
   EFFORTS,
@@ -983,10 +983,7 @@ export class SetupView {
     const grid = h('div', 'setup-grid');
     const f = this.field(t('setup.sessions.auto'), t('setup.sessions.auto.hint'));
     const checks = h('div', 'setup-checks');
-    // Offer the models of connected providers. Keep saved choices visible so they can be removed
-    // after an account is disconnected, but never seed the menu with Claude-only aliases.
-    const connectedModels = this.providerList().filter((p) => p.connected).flatMap((p) => p.models.map((m) => m.value));
-    const models = [...new Set([...connectedModels, ...s.workerModels])];
+    const models = [...new Set([...AUTO_MODELS, ...s.workerModels])];
     for (const m of models) {
       const label = h('label', 'setup-check');
       const box = h('input');
