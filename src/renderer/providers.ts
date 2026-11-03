@@ -114,8 +114,10 @@ export class ProvidersPanel {
     if (this.views) list.append(this.form?.id === '' ? this.customItem() : this.addRow());
     el.append(list);
     if (this.focusKey) {
-      list.querySelector<HTMLInputElement>(`[data-provider="${this.focusKey}"] input`)?.focus();
+      const input = list.querySelector<HTMLInputElement>(`[data-provider="${this.focusKey}"] input`);
       this.focusKey = '';
+      // The settings attach this freshly built section after mount returns.
+      queueMicrotask(() => { if (input?.isConnected) input.focus(); });
     }
   }
 
@@ -306,6 +308,17 @@ export class ProvidersPanel {
       ];
     }
     const own = this.errors[id];
+    // Trying again changes nothing here: Google refuses the account (the way out is a key), or its sign-in has to be redone.
+    const google = !own && this.methodOf(id, v) === 'google' ? v.methods.google?.error : '';
+    if (error && google === 'google-refused') {
+      return [
+        this.button(t('provider.useKey'), 'btn small', () => {
+          this.shown[id] = 'apikey';
+          this.start(id);
+        }),
+      ];
+    }
+    if (error && google === 'google-signed-out') return [this.button(t('provider.connect'), 'btn small', () => void this.signIn(id, 'google'))];
     if (error) return [this.button(t('provider.retry'), 'btn small', () => (own ? own.retry() : void this.recheck(id)))];
     return [this.button(t('provider.connect'), 'btn small', () => this.start(id))];
   }
