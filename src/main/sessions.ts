@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
@@ -11,7 +11,7 @@ import { resolveTopicRepo } from '../shared/topicGroups';
 import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from '../shared/groups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
-import { FILE_LIMITS, safeFileName, type AttachedFile, type FileInput } from '../shared/attachments';
+import { FILE_LIMITS, type AttachedFile, type FileInput } from '../shared/attachments';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
@@ -62,6 +62,7 @@ import { mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, ty
 import type { CostLog } from './costLog';
 import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
+import { AttachmentLimitError, AttachmentStore } from './attachments';
 import {
   defaultMasterName,
   groupInfo,
@@ -317,7 +318,6 @@ const REPORT_ITEMS = 12;
 const SILENCE_MS = 5_000;
 // Deltas can come by the hundred per second: what they say reaches the windows at this pace.
 const PULSE_MS = 1000;
-const ATTACHMENTS_MAX_AGE = 30 * 86_400_000;
 // Session costs (USD) the mascot celebrates when a turn crosses them.
 const COST_MILESTONES = [5, 10, 25, 50, 100, 250, 500, 1000];
 const IMAGE_EXT: Record<ImageInput['mediaType'], string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -555,12 +555,9 @@ export class SessionManager extends EventEmitter {
     if (this.ended(s)) return this.refuse(id, text, t('refuse.ended'));
     if (!s.inbox && this.orphan(s)) return this.refuse(id, text, t('refuse.orphan'));
     // Saved images get their path in the text, so the master can hand them to a worker (which opens them with Read).
-    let paths: string[] = [];
-    try {
-      paths = this.saveImages(images);
-    } catch (err) {
-      this.notice(s, t('notice.imagesNotSaved'), 'error', errorText(err));
-    }
+    const captures = this.saveImages(s, images);
+    images = captures.map((capture) => capture.image);
+    const paths = captures.map((capture) => capture.path);
     const saved = this.saveFiles(s, files);
     if (!shown && images.length === 0 && saved.length === 0) return;
     const command = parseSlash(shown) !== null;
@@ -2153,72 +2150,52 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
-  /** Images of a user message kept on disk (decoded bytes), each under a fresh random name. */
-  private saveImages(images: ImageInput[]): string[] {
-    if (images.length === 0) return [];
-    mkdirSync(this.attachDir, { recursive: true });
-    return images.map((img) => {
-      const path = join(this.attachDir, `capture-${randomUUID()}.${IMAGE_EXT[img.mediaType]}`);
-      writeFileSync(path, Buffer.from(img.data, 'base64'));
-      return path;
-    });
-  }
-
-  /**
-   * Files of a user message, each copied into a folder of its own under its own (made safe) name, so the session opens a
-   * copy nobody moves. Copies block the app: past a budget per message, a file stays where it is. One that fails is told,
-   * not sent.
-   */
-  private saveFiles(s: Session, files: FileInput[]): Required<AttachedFile>[] {
-    let budget = FILE_LIMITS.copyBytes;
-    return files.flatMap((file) => {
+  /** Captures use the same durable store and quota as attached files. */
+  private saveImages(s: Session, images: ImageInput[]): { image: ImageInput; path: string }[] {
+    const store = new AttachmentStore(this.attachDir);
+    return images.flatMap((img) => {
       try {
-        if (file.path) {
-          const st = statSync(file.path);
-          if (!st.isFile()) throw new Error('not a file');
-          if (st.size > budget) return [{ path: file.path, name: file.name, size: st.size }];
-          budget -= st.size;
-          const dest = this.attachPath(file.name);
-          copyFileSync(file.path, dest, constants.COPYFILE_EXCL);
-          return [{ path: dest, name: file.name, size: st.size }];
-        }
-        const data = file.data ?? new Uint8Array();
-        const dest = this.attachPath(file.name);
-        writeFileSync(dest, data, { flag: 'wx' });
-        return [{ path: dest, name: file.name, size: data.byteLength }];
+        const saved = store.save({
+          name: `capture.${IMAGE_EXT[img.mediaType]}`,
+          size: 0,
+          data: Buffer.from(img.data, 'base64'),
+        });
+        return [{ image: img, path: saved.path }];
       } catch (err) {
-        this.notice(s, t('notice.fileNotSaved', { name: file.name }), 'error', errorText(err));
+        this.notice(s, `${lang() === 'fr' ? 'Image refusée : sa copie durable n’a pas pu être enregistrée.' : 'Image refused: its durable copy could not be saved.'} ${this.attachmentFailure(err)}`.trim(), 'error', errorText(err));
         return [];
       }
     });
   }
 
-  /** A new file's path in a fresh folder of the attachments one; the name cannot lead out of it. */
-  private attachPath(name: string): string {
-    const dir = join(this.attachDir, randomUUID());
-    const path = join(dir, safeFileName(name));
-    if (dirname(path) !== dir) throw new Error('unsafe file name');
-    mkdirSync(dir, { recursive: true });
-    return path;
+  private attachmentFailure(err: unknown): string {
+    if (!(err instanceof AttachmentLimitError)) return '';
+    if (lang() !== 'fr') return err.message;
+    return err.reason === 'quota'
+      ? 'Stockage des pièces jointes plein (1 Gio ou 10 000 entrées). Aucune ancienne copie supprimée.'
+      : 'Limite de copie dépassée (50 Mo par message pour les fichiers sur disque).';
   }
 
-  /** Removes the old attachments; the folder exists from the start, as a session's workspace may include it (Gemini). */
-  private pruneAttachments(): void {
-    let names: string[];
-    try {
-      mkdirSync(this.attachDir, { recursive: true });
-      names = readdirSync(this.attachDir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
+  /** Every accepted file has a durable copy; oversize/full storage never falls back to external paths. */
+  private saveFiles(s: Session, files: FileInput[]): Required<AttachedFile>[] {
+    const store = new AttachmentStore(this.attachDir);
+    let budget = FILE_LIMITS.copyBytes as number;
+    return files.flatMap((file) => {
       try {
-        const path = join(this.attachDir, name);
-        if (Date.now() - statSync(path).mtimeMs > ATTACHMENTS_MAX_AGE) rmSync(path, { recursive: true, force: true });
-      } catch {
-        // In use or not a file: next start.
+        const saved = store.save(file, file.path ? budget : FILE_LIMITS.dataBytes);
+        if (file.path) budget -= saved.size;
+        return [saved];
+      } catch (err) {
+        const reason = this.attachmentFailure(err);
+        this.notice(s, `${t('notice.fileNotSaved', { name: file.name })}${reason ? ` ${reason}` : ''}`, 'error', errorText(err));
+        return [];
       }
-    }
+    });
+  }
+
+  /** Only unfinished temporary copies expire. Published paths must survive transcript replay. */
+  private pruneAttachments(): void {
+    try { new AttachmentStore(this.attachDir).prune(); } catch { /* Admission will report storage errors. */ }
   }
 
   /** Once per session: concurrent callers share the same read, and a failed read is retried next time. */

@@ -2,7 +2,7 @@
 export type FileKind = 'pdf' | 'doc' | 'sheet' | 'slides' | 'archive' | 'code' | 'data' | 'text' | 'audio' | 'video' | 'image' | 'other';
 
 export const FILE_LIMITS = {
-  /** Copied into the hub's folder up to this size per message; past it a file is referenced where it is (a copy blocks the app). */
+  /** Disk files copied up to this budget per message; larger files are refused to preserve durable access. */
   copyBytes: 50 * 1024 * 1024,
   /** A file without a path on disk (pasted from the clipboard) travels as bytes: each one, and all of a message's. */
   dataBytes: 50 * 1024 * 1024,
