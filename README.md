@@ -45,24 +45,27 @@ You talk to one master. It delegates to workers that run in parallel, and report
 
 More time. Everything in parallel. Peace of mind.
 
-## Quick start
+## Install
 
-You need [Node.js](https://nodejs.org) 22.12+ and [git](https://git-scm.com).
+**Windows**: [download AI Box](https://github.com/Anilito1/ai_box/archive/refs/heads/main.zip), unzip it and double-click **`install.cmd`**. It installs what is missing (git, Node.js), puts AI Box in `%LOCALAPPDATA%\Programs\AI Box`, adds an **AI Box** icon to your Desktop and Start menu, and opens it. You can then delete the downloaded folder.
+
+**macOS and Linux**: in a terminal (needs git and [Node.js](https://nodejs.org) 22.12+):
 
 ```sh
-git clone https://github.com/Anilito1/ai_box.git
-cd ai_box
-npm install
-npm start
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Anilito1/ai_box/main/install.sh)"
 ```
 
-A short setup asks for your language, your providers and the folders that hold your repos. AI Box then updates itself in one click.
+It adds **AI Box** to `~/Applications` on macOS, to your applications menu and Desktop on Linux, and opens it.
 
-To build an installer: `npm run dist`. Before a merge: `npm run typecheck`, `npm test` and `npm run build` must be green.
+**Already cloned?** Run `install.cmd` (Windows) or `./install.sh` in your checkout: it installs that checkout and gives it its icon.
+
+At first start, a short setup asks for your language, your providers and the folders that hold your repos. Claude Code comes with AI Box: you sign in from the setup. AI Box then updates itself in one click.
+
+To work on AI Box: `npm install`, then `npm start`. Before a merge: `npm run typecheck`, `npm test` and `npm run build` must be green. `npm run dist` builds a standalone installer, but that build does not update itself: prefer the install above.
 
 ## Updating
 
-AI Box checks `Anilito1/ai_box` at start and every few hours. When `main` has something new, an **Update** button appears: one click fast-forwards your checkout, installs new dependencies, rebuilds and restarts the app, and puts the previous version back if anything fails. Nothing is touched if the checkout has local changes or is not the official repository.
+AI Box checks `Anilito1/ai_box` at start and every few hours. When `main` has something new, an **Update** button appears: one click fast-forwards your checkout, installs new dependencies, rebuilds and restarts the app, and puts the previous version back if anything fails. Nothing is touched if the checkout has local changes or is not the official repository. The install above is such a checkout.
 
 > [!WARNING]
 > Agents act as you: they read and change files and run commands, within the permission mode you choose. Only send them into repos you trust. AI Box has no telemetry, never sees your passwords (accounts sign in through each provider's own CLI) and stores API keys encrypted by your OS.

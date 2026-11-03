@@ -1,6 +1,10 @@
-# Windows dev launch: gives the shortcuts that start this checkout (Desktop, Start menu, taskbar pin) the AI Box icon,
+# Windows: gives the shortcuts that start this checkout (Desktop, Start menu, taskbar pin) the AI Box icon,
 # the right arguments and the AppUserModelID the app sets at runtime (src/shared/brand.ts APP_ID), so the taskbar
-# groups the window under them instead of showing Electron's own icon. Run: powershell -File scripts/windows-shortcuts.ps1
+# groups the window under them instead of showing Electron's own icon. Run by install.cmd; alone: powershell -File scripts/windows-shortcuts.ps1
+param(
+  [string]$Desktop = [Environment]::GetFolderPath('Desktop'),
+  [string]$StartMenu = [Environment]::GetFolderPath('Programs')
+)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $appId = (Select-String -Path (Join-Path $repo 'src/shared/brand.ts') -Pattern "APP_ID = '([^']+)'").Matches[0].Groups[1].Value
@@ -30,8 +34,8 @@ public static class ShortcutId {
 
 $shell = New-Object -ComObject WScript.Shell
 $targets = @(
-  (Join-Path ([Environment]::GetFolderPath('Desktop')) 'AI Box.lnk'),
-  (Join-Path ([Environment]::GetFolderPath('Programs')) 'AI Box.lnk')
+  (Join-Path $Desktop 'AI Box.lnk'),
+  (Join-Path $StartMenu 'AI Box.lnk')
 )
 $pinned = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
 $targets += Get-ChildItem $pinned -Filter *.lnk -ErrorAction SilentlyContinue |
