@@ -3950,6 +3950,66 @@ kbd,
   height: 10px;
   stroke-width: 2;
 }
+.attach-file {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: auto;
+  max-width: 240px;
+  padding: 0 28px 0 12px;
+}
+.file-ico {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--text-2);
+}
+.attach-file .file-ico {
+  width: 24px;
+  height: 24px;
+}
+[data-kind='pdf'] > .file-ico {
+  color: var(--danger-text);
+}
+[data-kind='sheet'] > .file-ico {
+  color: var(--add-text);
+}
+[data-kind='doc'] > .file-ico,
+[data-kind='slides'] > .file-ico,
+[data-kind='image'] > .file-ico,
+[data-kind='video'] > .file-ico,
+[data-kind='audio'] > .file-ico {
+  color: var(--accent-text);
+}
+.file-text {
+  min-width: 0;
+}
+.file-name {
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.file-meta {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+.user-files {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.user-file {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 280px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--raise);
+}
 .attach-note {
   margin-bottom: 6px;
   color: var(--danger-text);

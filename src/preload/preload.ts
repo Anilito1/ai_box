@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { DictationEvent } from '../shared/dictation';
 import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, SessionPulse, TeamRole } from '../shared/types';
 import type { NewsToast } from '../shared/news';
@@ -33,7 +33,8 @@ const api: HubApi = {
   repoBranches: (path) => ipcRenderer.invoke('repo:branches', path),
   repoAction: (path, action) => ipcRenderer.invoke('repo:action', path, action),
   open: (id) => ipcRenderer.send('session:open', id),
-  send: (id, text, images, topic) => ipcRenderer.send('session:send', id, text, images, topic),
+  send: (id, text, images, topic, files) => ipcRenderer.send('session:send', id, text, images, topic, files),
+  pathOf: (file) => webUtils.getPathForFile(file),
   interrupt: (id) => ipcRenderer.send('session:interrupt', id),
   setModel: (id, model) => ipcRenderer.send('session:model', id, model),
   setEffort: (id, effort) => ipcRenderer.send('session:effort', id, effort),

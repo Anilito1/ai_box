@@ -1,3 +1,4 @@
+import type { AttachedFile, FileInput } from './attachments';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { DayCost, TurnRecord } from './costs';
 import type { DictationEvent, DictationSettings, DictationSupport } from './dictation';
@@ -30,7 +31,7 @@ export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissi
 /** Image formats the Messages API accepts. */
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const;
 export type ImageType = (typeof IMAGE_TYPES)[number];
-/** Images per message, checked by the composer and again by the main process (decoded bytes; the API caps a request near 32 MB). */
+/** Attachments (images and files) per message; images are also capped in bytes, checked by the composer and again by the main process (decoded bytes; the API caps a request near 32 MB). */
 export const ATTACH_LIMITS = { count: 10, imageBytes: 2.5 * 1024 * 1024, totalBytes: 20 * 1024 * 1024 } as const;
 export const base64Bytes = (data: string) => Math.floor((data.length * 3) / 4);
 /** Pasted or dropped image, base64 without the data: prefix. */
@@ -557,7 +558,7 @@ export interface CustomProviderResult extends ProviderResult {
  * topics of a request about several jobs.
  */
 export type ChatItem = (
-  | { kind: 'user'; id: string; text: string; images: string[] }
+  | { kind: 'user'; id: string; text: string; images: string[]; files?: AttachedFile[] }
   | { kind: 'peer'; id: string; from: string; text: string }
   | { kind: 'assistant'; id: string; text: string; live: boolean }
   | { kind: 'thinking'; id: string; text: string }
@@ -767,7 +768,9 @@ export interface HubApi {
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
   /** `topic`: the master's topic the message is written in, else null. */
-  send(id: string, text: string, images: ImageInput[], topic: string | null): void;
+  send(id: string, text: string, images: ImageInput[], topic: string | null, files: FileInput[]): void;
+  /** Where a picked, dropped or pasted file is on disk ('' for one that only exists in memory, like a screenshot). */
+  pathOf(file: File): string;
   interrupt(id: string): void;
   setModel(id: string, model: string): void;
   setEffort(id: string, effort: Effort): void;

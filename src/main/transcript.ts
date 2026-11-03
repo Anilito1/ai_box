@@ -1,3 +1,4 @@
+import type { AttachedFile } from '../shared/attachments';
 import { IMAGE_TYPES, type ChatItem } from '../shared/types';
 import { lang, t } from './i18n';
 import { blocksOf, type Block } from './providers/blocks';
@@ -173,7 +174,13 @@ const attr = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"`)
 const TAGGED = /^\[(Mission du maître[^\]\n]*|Message du maître|Mission from the master[^\]\n]*|Message from the master|Hub|Message du worker "([^"\n]+)"|Message from worker "([^"\n]+)")\]\s*/;
 /** Appended for each image saved to disk, so the model can hand its path to another session. */
 export const capturedLine = (path: string) => (lang() === 'fr' ? `[Capture jointe : ${path}]` : `[Attached image: ${path}]`);
-const CAPTURED = /^\[(?:Capture jointe :|Attached image:) [^\]\n]+\]\n?/gm;
+/** Appended for each attached file (a document, an image the model cannot read inline...): the model opens it by its path. */
+export const fileLine = (path: string) => (lang() === 'fr' ? `[Fichier joint : ${path}]` : `[Attached file: ${path}]`);
+const CAPTURED = /^\[(?:Capture jointe :|Attached image:|Fichier joint :|Attached file:) [^\]\n]+\]\n?/gm;
+const FILE_LINE = /^\[(?:Fichier joint :|Attached file:) ([^\]\n]+)\]$/gm;
+
+/** The files a message carried, from its attached-file lines (a name is the last part of its path). */
+export const attachedFiles = (text: string): AttachedFile[] => [...text.matchAll(FILE_LINE)].map((m) => ({ name: m[1].split(/[\\/]/).pop() || m[1] }));
 
 /**
  * What the hub adds to a message for the model alone: a changed team or post, a handoff note, or the instructions
@@ -234,5 +241,6 @@ export function userTextItem(blocks: Block[], id: string): Extract<ChatItem, { k
   if (peer) return { kind: 'peer', id, from: attr(peer[1], 'from-name') || attr(peer[1], 'from'), text: peer[2].trim() };
   const tagged = taggedSender(text);
   if (tagged) return { kind: 'peer', id, ...tagged };
-  return { kind: 'user', id, text: visibleText(text), images };
+  const files = attachedFiles(text);
+  return { kind: 'user', id, text: visibleText(text), images, ...(files.length > 0 ? { files } : {}) };
 }

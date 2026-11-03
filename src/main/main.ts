@@ -20,6 +20,7 @@ import {
 } from 'electron';
 import { ACCOUNTS_MAX, canonAccount, checkAccount, CUSTOM_SLUG, customSlug, isAccountRef, isLocalUrl, isServerUrl, normalizeAccount, OPENAI_URL, OWN_ACCOUNT } from '../shared/accounts';
 import { backgroundTokens } from '../shared/background';
+import { parseFiles } from '../shared/attachments';
 import { APP_ID } from '../shared/brand';
 import { capabilitiesText } from '../shared/capabilities';
 import { DEEPSEEK_URL, isCustomAccount, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
@@ -969,10 +970,11 @@ class Hub {
       for (const repo of repoWatchers) sender.send('hub:repo', repo.status);
       rendererReady = true;
     });
-    on('session:send', (id, text, images, topic) => {
+    on('session:send', (id, text, images, topic, files) => {
       if (!isStr(id) || !isStr(text)) return;
       const parsed = parseImages(images);
-      if (parsed) mgr.send(id, text, parsed, isTopicId(topic) ? topic : null);
+      const attached = parsed && parseFiles(files, ATTACH_LIMITS.count - parsed.length);
+      if (parsed && attached) mgr.send(id, text, parsed, isTopicId(topic) ? topic : null, attached);
       else mgr.refuse(id, text, t('images.invalid'));
     });
     on('session:interrupt', (id) => isStr(id) && mgr.interrupt(id));

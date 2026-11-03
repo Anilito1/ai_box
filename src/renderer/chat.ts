@@ -13,12 +13,13 @@ import {
   type ProviderBadge,
   type SessionView,
 } from '../shared/types';
+import { FILE_LIMITS, type FileInput } from '../shared/attachments';
 import { canSend } from '../shared/dictation';
 import { HistoryCursor, sentMessages, wantsHistory } from '../shared/inputHistory';
 import { effortsFor, splitRecent } from '../shared/models';
 import { modelKey } from '../shared/news';
 import { isProviderId } from '../shared/providers';
-import { toAttachment, type Attachment } from './attachments';
+import { fileChip, fileInput, toAttachment, type Attachment } from './attachments';
 import { Avatar } from './avatar';
 import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
@@ -234,15 +235,14 @@ export class ChatView {
       }
     });
     this.input.addEventListener('paste', (e) => {
-      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'));
+      const files = [...(e.clipboardData?.files ?? [])];
       if (files.length === 0) return;
-      // A screenshot comes alone; an image copied from a page may also carry text, which still pastes as usual.
+      // A screenshot or a file copied in the explorer comes alone; an image copied from a page may also carry text, which still pastes as usual.
       if (!e.clipboardData?.getData('text/plain')) e.preventDefault();
       void this.addFiles(files);
     });
 
     this.fileInput.type = 'file';
-    this.fileInput.accept = 'image/*';
     this.fileInput.multiple = true;
     this.fileInput.hidden = true;
     this.fileInput.addEventListener('change', () => {
@@ -271,10 +271,7 @@ export class ChatView {
       pane.classList.remove('drop-target');
       if (!e.dataTransfer?.types.includes('Files')) return;
       e.preventDefault();
-      const files = [...e.dataTransfer.files];
-      const images = files.filter((f) => f.type.startsWith('image/'));
-      if (images.length < files.length) this.attachError(t('chat.onlyImages'));
-      void this.addFiles(images);
+      void this.addFiles([...e.dataTransfer.files]);
       this.input.focus();
     });
 
@@ -558,14 +555,22 @@ export class ChatView {
     this.submitting = true;
     void this.slash
       .intercept(text.trim())
-      .then((r) => {
+      .then(async (r) => {
         // Another conversation was opened while the commands loaded: the draft stays where it was.
         if (r.handled || this.session?.id !== id) return;
+        let files: FileInput[];
+        try {
+          files = await Promise.all(attachments.flatMap((a) => (a.kind === 'file' ? [fileInput(a)] : [])));
+        } catch (err) {
+          return this.attachError(err instanceof Error ? err.message : String(err));
+        }
+        if (this.session?.id !== id) return;
         this.hub.send(
           id,
           r.text,
-          attachments.map((a) => a.image),
+          attachments.flatMap((a) => (a.kind === 'image' ? [a.image] : [])),
           topic,
+          files,
         );
         // Only what was sent leaves the composer: text typed or images added meanwhile stay.
         if (this.input.value === text) this.input.value = '';
@@ -581,20 +586,23 @@ export class ChatView {
       .finally(() => (this.submitting = false));
   }
 
-  /** Adds images to the draft they were picked for, even if another session is shown by the time they are ready. */
+  /** Adds files to the draft they were picked for, even if another session is shown by the time they are ready. */
   private async addFiles(files: File[]): Promise<void> {
     const target = this.attachments;
     const batch = files.slice(0, ATTACH_LIMITS.count);
-    if (files.length > batch.length) this.attachError(t('chat.maxImages', { n: ATTACH_LIMITS.count }));
+    if (files.length > batch.length) this.attachError(t('chat.maxAttachments', { n: ATTACH_LIMITS.count }));
     this.preparing += batch.length;
     this.syncSend();
     for (const file of batch) {
       try {
-        const attachment = await toAttachment(file);
+        const attachment = await toAttachment(file, (f) => this.hub.pathOf(f));
         // Checked once ready: concurrent pastes or drops all fill the same draft.
-        const total = target.reduce((sum, a) => sum + base64Bytes(a.image.data), base64Bytes(attachment.image.data));
-        if (target.length >= ATTACH_LIMITS.count) this.attachError(t('chat.maxImages', { n: ATTACH_LIMITS.count }));
-        else if (total > ATTACH_LIMITS.totalBytes) this.attachError(t('chat.tooHeavy'));
+        const all = [...target, attachment];
+        const images = all.reduce((sum, a) => sum + (a.kind === 'image' ? base64Bytes(a.image.data) : 0), 0);
+        const pasted = all.reduce((sum, a) => sum + (a.kind === 'file' && !a.path ? a.size : 0), 0);
+        if (target.length >= ATTACH_LIMITS.count) this.attachError(t('chat.maxAttachments', { n: ATTACH_LIMITS.count }));
+        else if (images > ATTACH_LIMITS.totalBytes) this.attachError(t('chat.tooHeavy'));
+        else if (pasted > FILE_LIMITS.dataTotalBytes) this.attachError(t('chat.pastedTooHeavy'));
         else target.push(attachment);
       } catch (err) {
         this.attachError(err instanceof Error ? err.message : String(err));
@@ -609,14 +617,17 @@ export class ChatView {
     this.attachStrip.hidden = this.attachments.length === 0;
     this.attachStrip.replaceChildren(
       ...this.attachments.map((a) => {
-        const chip = h('div', 'attach');
-        const img = h('img');
-        img.src = a.url;
-        img.alt = t('chat.image');
-        img.addEventListener('click', () => openLightbox(a.url));
+        const chip = a.kind === 'image' ? h('div', 'attach') : fileChip(a, 'attach attach-file', a.type);
+        if (a.kind === 'image') {
+          const img = h('img');
+          img.src = a.url;
+          img.alt = t('chat.image');
+          img.addEventListener('click', () => openLightbox(a.url));
+          chip.append(img);
+        }
         const remove = h('button', 'attach-remove');
         remove.title = t('chat.removeShort');
-        remove.setAttribute('aria-label', t('chat.removeImage'));
+        remove.setAttribute('aria-label', t(a.kind === 'image' ? 'chat.removeImage' : 'chat.removeFile'));
         remove.append(icon(ICONS.remove));
         remove.addEventListener('click', () => {
           this.attachments.splice(this.attachments.indexOf(a), 1);
@@ -624,7 +635,7 @@ export class ChatView {
           this.syncSend();
           this.input.focus();
         });
-        chip.append(img, remove);
+        chip.append(remove);
         return chip;
       }),
     );
@@ -910,6 +921,11 @@ export class ChatView {
             grid.append(img);
           }
           col.append(grid);
+        }
+        if (item.files?.length) {
+          const row = h('div', 'user-files');
+          row.append(...item.files.map((file) => fileChip(file, 'user-file')));
+          col.append(row);
         }
         if (item.text) col.append(h('div', 'bubble', item.text), this.actions(item.text));
         wrap.append(col);

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
@@ -11,6 +11,7 @@ import { resolveTopicRepo } from '../shared/topicGroups';
 import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from '../shared/groups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
+import { FILE_LIMITS, safeFileName, type AttachedFile, type FileInput } from '../shared/attachments';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
@@ -87,6 +88,7 @@ import { findRepos, realPath, repoOf, samePath } from './repos';
 import {
   assistantItems,
   capturedLine,
+  fileLine,
   commandOutcome,
   resultText,
   taggedSender,
@@ -336,6 +338,8 @@ interface Prompt {
   command?: boolean;
   /** For the master: the topic it is filed under (the one the user wrote in, the worker's a hub message is about). */
   topic?: string;
+  /** Files the user attached: their paths are in the text, the conversation shows them by name. */
+  files?: AttachedFile[];
 }
 
 /** Tools whose input a permission card shows as it is: the command to run, the edit to make. */
@@ -544,10 +548,10 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A message typed by the user in a session's composer; `topic`: the master's topic it is written in. */
-  send(id: string, text: string, images: ImageInput[] = [], topic: string | null = null): void {
+  send(id: string, text: string, images: ImageInput[] = [], topic: string | null = null, files: FileInput[] = []): void {
     const s = this.sessions.get(id);
     const shown = text.trim();
-    if (!s || (!shown && images.length === 0)) return;
+    if (!s || (!shown && images.length === 0 && files.length === 0)) return;
     if (this.ended(s)) return this.refuse(id, text, t('refuse.ended'));
     if (!s.inbox && this.orphan(s)) return this.refuse(id, text, t('refuse.orphan'));
     // Saved images get their path in the text, so the master can hand them to a worker (which opens them with Read).
@@ -557,15 +561,20 @@ export class SessionManager extends EventEmitter {
     } catch (err) {
       this.notice(s, t('notice.imagesNotSaved'), 'error', errorText(err));
     }
+    const saved = this.saveFiles(s, files);
+    if (!shown && images.length === 0 && saved.length === 0) return;
     const command = parseSlash(shown) !== null;
     // Written in one of the master's topics: the master is told which, the user does not see it.
     // A command goes as typed: it is only filed.
     const filed = s.id === MASTER_ID && topic ? this.topics.get(topic) : undefined;
-    const textForModel = [shown, ...paths.map(capturedLine), filed && !command ? topicBlock(filed, 'user') : ''].filter(Boolean).join('\n');
+    const textForModel = [shown, ...paths.map(capturedLine), ...saved.map((f) => fileLine(f.path)), filed && !command ? topicBlock(filed, 'user') : '']
+      .filter(Boolean)
+      .join('\n');
     // The user took the worker over: its turn no longer answers the master, and it stays open.
     s.owesReport = false;
     s.closeWhenDone = false;
-    this.deliver(s, { text: textForModel, images, shown, command, ...(filed ? { topic: filed.id } : {}) });
+    const attached = saved.map(({ name, size }) => ({ name, size }));
+    this.deliver(s, { text: textForModel, images, shown, command, ...(attached.length > 0 ? { files: attached } : {}), ...(filed ? { topic: filed.id } : {}) });
   }
 
   interrupt(id: string): void {
@@ -2114,7 +2123,7 @@ export class SessionManager extends EventEmitter {
     return { ...prompt, text: `${prompt.text}\n\n${news}` };
   }
 
-  private pushUser(s: Session, { text, images, from, shown, handoff, topic }: Prompt): void {
+  private pushUser(s: Session, { text, images, from, shown, handoff, topic, files }: Prompt): void {
     const content =
       images.length === 0
         ? text
@@ -2134,7 +2143,7 @@ export class SessionManager extends EventEmitter {
       this.upsert(s, { kind: 'peer', id, from, text: shown ?? taggedSender(text)?.text ?? visibleText(text), ...tag });
     } else {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
-      this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...tag });
+      this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...(files ? { files } : {}), ...tag });
     }
     s.inbox?.push({ content });
     s.queued++;
@@ -2155,6 +2164,41 @@ export class SessionManager extends EventEmitter {
     });
   }
 
+  /**
+   * Files of a user message, each copied into a folder of its own under its own (made safe) name, so the session opens a
+   * copy nobody moves; one too large to copy without blocking the app stays where it is. One that fails is told, not sent.
+   */
+  private saveFiles(s: Session, files: FileInput[]): { path: string; name: string; size: number }[] {
+    return files.flatMap((file) => {
+      try {
+        if (file.path) {
+          const st = statSync(file.path);
+          if (!st.isFile()) throw new Error('not a file');
+          if (st.size > FILE_LIMITS.copyBytes) return [{ path: file.path, name: file.name, size: st.size }];
+          const dest = this.attachPath(file.name);
+          copyFileSync(file.path, dest, constants.COPYFILE_EXCL);
+          return [{ path: dest, name: file.name, size: st.size }];
+        }
+        const data = file.data ?? new Uint8Array();
+        const dest = this.attachPath(file.name);
+        writeFileSync(dest, data, { flag: 'wx' });
+        return [{ path: dest, name: file.name, size: data.byteLength }];
+      } catch (err) {
+        this.notice(s, t('notice.fileNotSaved', { name: file.name }), 'error', errorText(err));
+        return [];
+      }
+    });
+  }
+
+  /** A new file's path in a fresh folder of the attachments one; the name cannot lead out of it. */
+  private attachPath(name: string): string {
+    const dir = join(this.attachDir, randomUUID());
+    const path = join(dir, safeFileName(name));
+    if (dirname(path) !== dir) throw new Error('unsafe file name');
+    mkdirSync(dir, { recursive: true });
+    return path;
+  }
+
   private pruneAttachments(): void {
     let names: string[];
     try {
@@ -2165,7 +2209,7 @@ export class SessionManager extends EventEmitter {
     for (const name of names) {
       try {
         const path = join(this.attachDir, name);
-        if (Date.now() - statSync(path).mtimeMs > ATTACHMENTS_MAX_AGE) unlinkSync(path);
+        if (Date.now() - statSync(path).mtimeMs > ATTACHMENTS_MAX_AGE) rmSync(path, { recursive: true, force: true });
       } catch {
         // In use or not a file: next start.
       }
