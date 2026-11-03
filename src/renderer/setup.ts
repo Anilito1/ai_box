@@ -365,6 +365,57 @@ export class SetupView {
     return f;
   }
 
+  /** Imports a text snapshot beside an instruction field, preserving what is already typed. */
+  private instructionFile(field: HTMLElement, area: HTMLTextAreaElement): void {
+    const picker = h('input', 'setup-instructions-file');
+    picker.type = 'file';
+    picker.accept = '.md,.markdown,.mdx,.txt,.rst,.adoc,text/*';
+    picker.hidden = true;
+    const note = h('div', 'setup-hint setup-instructions-note');
+    note.setAttribute('role', 'status');
+    note.hidden = true;
+    const add = this.button(t('instructions.file.add'), 'btn ghost small', () => picker.click());
+    add.title = t('instructions.file.hint');
+    const header = field.querySelector<HTMLElement>('.setup-label');
+    header?.classList.add('setup-instructions-label');
+    header?.append(add, picker);
+    field.append(note);
+    picker.addEventListener('change', () => {
+      const file = picker.files?.[0];
+      picker.value = '';
+      if (!file) return;
+      void (async () => {
+        add.disabled = true;
+        note.hidden = true;
+        const show = (text: string, error: boolean) => {
+          note.textContent = text;
+          note.classList.toggle('err', error);
+          note.hidden = false;
+        };
+        try {
+          const max = area.maxLength;
+          // A UTF-8 character takes at most four bytes: bound the read before decoding it.
+          if (file.size > max * 4) return show(t('instructions.file.large', { max }), true);
+          const content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+          if (!area.isConnected) return;
+          if (/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(content)) return show(t('instructions.file.unreadable'), true);
+          if (!content.trim()) return show(t('instructions.file.empty'), true);
+          const combined = area.value + (area.value && !area.value.endsWith('\n\n') ? (area.value.endsWith('\n') ? '\n' : '\n\n') : '') + content;
+          if (combined.length > max) return show(t('instructions.file.limit', { count: combined.length, max }), true);
+          area.value = combined;
+          area.dispatchEvent(new Event('input', { bubbles: true }));
+          area.dispatchEvent(new Event('change', { bubbles: true }));
+          show(t('instructions.file.added', { name: file.name }), false);
+          area.focus();
+        } catch {
+          show(t('instructions.file.unreadable'), true);
+        } finally {
+          add.disabled = false;
+        }
+      })();
+    });
+  }
+
   private input(value: string, placeholder: string, type = 'text'): HTMLInputElement {
     const i = h('input', 'setup-input');
     i.type = type;
@@ -948,11 +999,14 @@ export class SetupView {
     const area = h('textarea', 'setup-textarea');
     area.value = this.pending.masterInstructions ?? s.masterInstructions;
     area.rows = 7;
+    area.maxLength = 20_000;
+    area.setAttribute('aria-label', t('setup.sessions.instructions'));
     area.placeholder = t('setup.sessions.instructions.placeholder');
     area.spellcheck = false;
     area.addEventListener('input', () => this.stage({ masterInstructions: area.value }));
     area.addEventListener('change', () => void this.flush(false));
     f.append(area);
+    this.instructionFile(f, area);
     el.append(f);
   }
 
@@ -1619,12 +1673,14 @@ export class SetupView {
     instr.maxLength = ROLE_LIMITS.instructions;
     instr.spellcheck = false;
     instr.value = d.instructions;
+    instr.setAttribute('aria-label', t('team.field.instructions'));
     instr.placeholder = t('team.instructions.placeholder');
     instr.addEventListener('input', () => {
       d.instructions = instr.value;
       changed();
     });
     instrField.append(instr);
+    this.instructionFile(instrField, instr);
     mark('instructions', instrField, instr);
     el.append(instrField);
 
