@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les fichiers joints sont conservés dans une copie locale durable ; un plafond de stockage empêche leur accumulation excessive.
 - Le champ de clé API reçoit bien le curseur quand tu choisis ce mode de connexion.
 - Les réglages des fournisseurs retrouvent leur fonctionnement précédent.
 - Un compte Gemini que Google refuse n’apparaît plus « connecté » : Réglages › Comptes le dit et propose d’utiliser une clé API Gemini à la place.
