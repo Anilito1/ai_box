@@ -126,7 +126,7 @@ class GeminiProcess implements AgentProcess {
         throw new Error('Gemini is not signed in: connect it in Settings › Accounts.');
       }
       await client.request('authenticate', { methodId: method }).catch((err: unknown) => {
-        const refusal = method === 'oauth-personal' && err instanceof AcpError ? googleRefusal(err.message) : null;
+        const refusal = method === 'oauth-personal' && err instanceof Error ? googleRefusal(err.message) : null;
         if (!refusal) throw err;
         // Google refuses the account: Settings › Accounts says so from now on, and the session stops with why.
         noteGoogleRefusal(spec.env.GEMINI_CLI_HOME ?? '', refusal);

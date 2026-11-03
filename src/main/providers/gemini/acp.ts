@@ -118,8 +118,10 @@ export class AcpClient {
       const w = this.waiting.get(id);
       if (!w) return;
       this.waiting.delete(id);
-      const error = m.error as { message?: string; code?: number } | undefined;
-      if (error) w.reject(new AcpError(error.message ?? 'request failed', error.code ?? -32603));
+      const error = m.error as { message?: string; code?: number; data?: { details?: unknown } } | undefined;
+      // A wrapped error says "Internal error" and puts the reason in its data.
+      const details = typeof error?.data?.details === 'string' ? `: ${error.data.details}` : '';
+      if (error) w.reject(new AcpError(`${error.message ?? 'request failed'}${details}`, error.code ?? -32603));
       else w.resolve(m.result);
     }
   }

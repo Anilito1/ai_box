@@ -305,16 +305,17 @@ export class ProvidersPanel {
       ];
     }
     const own = this.errors[id];
-    // Google will not take this account back by trying again: the way out is a key, whose form opens.
-    if (error && !own && v.methods.google?.error === 'google-refused' && this.methodOf(id, v) === 'google') {
+    // Trying again changes nothing here: Google refuses the account (the way out is a key), or its sign-in has to be redone.
+    const google = !own && this.methodOf(id, v) === 'google' ? v.methods.google?.error : '';
+    if (error && google === 'google-refused') {
       return [
         this.button(t('provider.useKey'), 'btn small', () => {
-          this.open.add(id);
           this.shown[id] = 'apikey';
-          this.host.rerender();
+          this.start(id);
         }),
       ];
     }
+    if (error && google === 'google-signed-out') return [this.button(t('provider.connect'), 'btn small', () => void this.signIn(id, 'google'))];
     if (error) return [this.button(t('provider.retry'), 'btn small', () => (own ? own.retry() : void this.recheck(id)))];
     return [this.button(t('provider.connect'), 'btn small', () => this.start(id))];
   }
