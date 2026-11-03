@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les postes Claude retrouvent des modèles compatibles par défaut.
 - La déconnexion de Claude Code retire bien son état connecté, même si le terminal fournit une clé API.
 - Les modèles proposés au maître suivent les fournisseurs connectés.
 

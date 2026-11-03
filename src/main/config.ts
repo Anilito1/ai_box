@@ -45,7 +45,7 @@ function defaults(lang: Lang): HubConfig {
     mainRepos: [],
     master: { model: '', effort: '' },
     worker: { model: '', effort: '' },
-    workerModels: ['gpt-5', 'gpt-5-mini'],
+    workerModels: ['opus', 'sonnet'],
     workerMaxEffort: 'xhigh',
     team: [],
     groups: [],
