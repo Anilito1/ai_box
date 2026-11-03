@@ -189,6 +189,7 @@ export class ProvidersPanel {
     if (code === 'no-node') return t('provider.err.noNode', { tool });
     if (code === 'install-failed') return t('provider.err.install', { tool });
     if (code === 'no-terminal') return t('provider.err.noWindow');
+    if (id === 'anthropic' && code === 'signout-failed') return t('provider.anthropic.signoutFailed');
     return this.host.errorText(code);
   }
 

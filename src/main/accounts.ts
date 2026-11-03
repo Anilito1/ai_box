@@ -320,9 +320,15 @@ export async function checkAnthropicCompatible(baseUrl: string, key: string): Pr
 }
 
 /** Claude Code's own sign-out for an account's folder, quietly: the folder goes right after. */
-export function claudeLogout(executable: string, env: Record<string, string>): Promise<void> {
+export function claudeLogout(executable: string, env: Record<string, string>): Promise<string | null> {
   return new Promise((resolve) => {
-    if (!executable) return resolve();
-    execFile(executable, ['auth', 'logout'], { env, timeout: 20_000, windowsHide: true }, () => resolve());
+    if (!executable) return resolve('no-claude');
+    // A parent shell may inject an API key or alternate endpoint. Those can make Claude
+    // appear connected even after its own saved sign-in has been removed.
+    const cleanEnv = { ...env };
+    for (const key of ACCESS_VARS) delete cleanEnv[key];
+    execFile(executable, ['auth', 'logout'], { env: cleanEnv, timeout: 20_000, windowsHide: true }, (err) =>
+      resolve(err ? (err.killed ? 'timeout' : 'signout-failed') : null),
+    );
   });
 }

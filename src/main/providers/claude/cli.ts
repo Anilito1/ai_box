@@ -13,6 +13,8 @@ const require = createRequire(import.meta.url);
 const EXE = process.platform === 'win32' ? 'claude.exe' : 'claude';
 /** Cloud switches a user may have in their own environment: with an API key chosen, the key must win over them. */
 const CLOUD_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
+/** Authentication variables inherited from a shell are not Claude Code's saved CLI sign-in. */
+const AUTH_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
 
 /** The Claude Code binary npm installed with the Agent SDK (absent from a packaged build, which never ships it). */
 function bundledExecutable(): string {
@@ -93,13 +95,17 @@ export async function claudeStatus(cfg: HubConfig, env: Record<string, string>):
     status.account = { ready: true, provider: 'cloud', email: '', plan: '', source: '' };
     return { executable, status };
   }
+  // In Claude Code mode, report the CLI's own sign-in state. A shell-level API key can still
+  // authorize requests, but must not keep the CLI sign-out control active after auth logout.
+  const probeEnv = { ...env };
+  if (cfg.provider === 'claude-code') for (const key of AUTH_ENV_VARS) delete probeEnv[key];
   let close = () => undefined as void;
   const prompt: AsyncIterable<SDKUserMessage> = {
     [Symbol.asyncIterator]: () => ({ next: () => new Promise((resolve) => (close = () => resolve({ value: undefined, done: true }))) }),
   };
   const q = query({
     prompt,
-    options: { cwd: homedir(), pathToClaudeCodeExecutable: executable, env, persistSession: false, strictMcpConfig: true, mcpServers: {} },
+    options: { cwd: homedir(), pathToClaudeCodeExecutable: executable, env: probeEnv, persistSession: false, strictMcpConfig: true, mcpServers: {} },
   });
   try {
     const info = await Promise.race([
