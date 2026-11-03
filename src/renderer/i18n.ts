@@ -989,6 +989,7 @@ const en = {
   'provider.method.cli': 'Claude account',
   'provider.method.chatgpt': 'ChatGPT account',
   'provider.method.apikey': 'API key',
+  'provider.useKey': 'Use an API key',
   'provider.method.google': 'Google account',
   'provider.anthropic.cli': 'Your Claude subscription, signed in through your browser.',
   'provider.anthropic.apikey': 'A key from the Anthropic console, billed per use.',
@@ -1072,6 +1073,8 @@ const en = {
   'setup.accounts.err.notFound': 'This account no longer exists.',
   'setup.accounts.err.notFoundUrl': 'Nothing answers at this address: check that it ends in /v1.',
   'setup.accounts.err.refused': 'The server refused this key: check that it is complete and still active.',
+  'setup.accounts.err.googleRefused': 'Account refused by Google: it no longer accepts Google sign-in for Gemini here. Use a Gemini API key instead (created at aistudio.google.com/apikey).',
+  'setup.accounts.err.googleSignedOut': 'Google sign-in expired: sign in again, or use a Gemini API key.',
 };
 
 export type Key = keyof typeof en;
@@ -2066,6 +2069,7 @@ const fr: Record<Key, string> = {
   'provider.method.cli': 'Compte Claude',
   'provider.method.chatgpt': 'Compte ChatGPT',
   'provider.method.apikey': 'Clé API',
+  'provider.useKey': 'Utiliser une clé API',
   'provider.method.google': 'Compte Google',
   'provider.anthropic.cli': 'Ton abonnement Claude, connecté depuis ton navigateur.',
   'provider.anthropic.apikey': 'Une clé de la console Anthropic, facturée à l’usage.',
@@ -2149,6 +2153,8 @@ const fr: Record<Key, string> = {
   'setup.accounts.err.notFound': 'Ce compte n’existe plus.',
   'setup.accounts.err.notFoundUrl': 'Rien ne répond à cette adresse : vérifie qu’elle finit par /v1.',
   'setup.accounts.err.refused': 'Le serveur a refusé cette clé : vérifie qu’elle est complète et toujours active.',
+  'setup.accounts.err.googleRefused': 'Compte refusé par Google : il n’accepte plus la connexion Google pour Gemini ici. Utilise une clé API Gemini (à créer sur aistudio.google.com/apikey).',
+  'setup.accounts.err.googleSignedOut': 'Connexion Google expirée : reconnecte-toi, ou utilise une clé API Gemini.',
 };
 
 const query = new URLSearchParams(location.search);

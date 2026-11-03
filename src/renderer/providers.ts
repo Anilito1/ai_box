@@ -305,6 +305,16 @@ export class ProvidersPanel {
       ];
     }
     const own = this.errors[id];
+    // Google will not take this account back by trying again: the way out is a key, whose form opens.
+    if (error && !own && v.methods.google?.error === 'google-refused' && this.methodOf(id, v) === 'google') {
+      return [
+        this.button(t('provider.useKey'), 'btn small', () => {
+          this.open.add(id);
+          this.shown[id] = 'apikey';
+          this.host.rerender();
+        }),
+      ];
+    }
     if (error) return [this.button(t('provider.retry'), 'btn small', () => (own ? own.retry() : void this.recheck(id)))];
     return [this.button(t('provider.connect'), 'btn small', () => this.start(id))];
   }

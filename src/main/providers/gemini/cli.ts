@@ -1,10 +1,11 @@
 import { execFile, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { errorCode } from '../../errors';
 import { geminiScript, localTool, toolCommand } from '../tools';
-import { AcpClient } from './acp';
+import { AcpClient, AcpError } from './acp';
+import type { AccountStatus } from '../../../shared/types';
 import type { AgentModel } from '../types';
 
 type Json = Record<string, unknown>;
@@ -56,6 +57,67 @@ export function googleSignIn(home: string): { signedIn: boolean; email: string }
     return { signedIn: true, email: typeof accounts.active === 'string' ? accounts.active : '' };
   } catch {
     return { signedIn: true, email: '' };
+  }
+}
+
+/**
+ * What Google's answer to a sign-in says when it is a refusal: an account Google no longer serves through the CLI (an
+ * individual Code Assist account, a country it is not offered in), or a sign-in that no longer holds. Null otherwise
+ * (the network, a server error): nothing is known about the account then.
+ */
+export function googleRefusal(message: string): 'google-refused' | 'google-signed-out' | null {
+  if (/no longer supported|ineligible|not eligible|antigravity|unsupported[_ ]location|not available in your (country|region)|not supported in your (country|region)/i.test(message)) return 'google-refused';
+  if (/invalid_grant|unauthenticated|permission[_ ]denied|token (has been )?(expired|revoked)|login required|please re-?authenticate|\b40[13]\b/i.test(message)) return 'google-signed-out';
+  return null;
+}
+
+const verdicts = new Map<string, { stamp: number; refusal: string | null }>();
+const signInStamp = (home: string) => {
+  try {
+    return statSync(join(geminiDir(home), 'oauth_creds.json')).mtimeMs;
+  } catch {
+    return 0;
+  }
+};
+
+/** A Google sign-in's state in Settings › Accounts: signed in and accepted is connected; refused says why. */
+export function googleAccountStatus(who: { signedIn: boolean; email: string }, refusal: string | null): AccountStatus {
+  if (!who.signedIn) return { ready: false, detail: '', error: '', models: [] };
+  return { ready: !refusal, detail: who.email, error: refusal ?? '', models: [] };
+}
+
+/** A refusal seen elsewhere (a session that could not start): kept for this sign-in, so the next check says it at once. */
+export function noteGoogleRefusal(home: string, refusal: string): void {
+  verdicts.set(home, { stamp: signInStamp(home), refusal });
+}
+
+/**
+ * Whether Google accepts an account's Google sign-in: the CLI is asked to authenticate, as a session does first, without
+ * calling a model. Asked once per sign-in (the date of its credentials); null when accepted or when the answer says
+ * nothing about the account (asked again next time).
+ */
+export async function googleAccess(executable: string, home: string, env: Record<string, string>): Promise<string | null> {
+  const stamp = signInStamp(home);
+  const known = verdicts.get(home);
+  if (known && known.stamp === stamp) return known.refusal;
+  // No folder of its own to work in: one removed right after would still be held by the program on Windows.
+  const client = new AcpClient({ executable, env: { ...env, GEMINI_CLI_HOME: home, GEMINI_CLI_TRUST_WORKSPACE: 'true' }, cwd: tmpdir(), version: '0.2' });
+  try {
+    await Promise.race([
+      (async () => {
+        await client.start();
+        await client.request('authenticate', { methodId: 'oauth-personal' });
+      })(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 30_000).unref()),
+    ]);
+    verdicts.set(home, { stamp, refusal: null });
+    return null;
+  } catch (err) {
+    const refusal = err instanceof AcpError ? googleRefusal(err.message) : null;
+    if (refusal) verdicts.set(home, { stamp, refusal });
+    return refusal;
+  } finally {
+    client.close();
   }
 }
 

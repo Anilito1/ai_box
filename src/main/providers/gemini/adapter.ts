@@ -4,7 +4,7 @@ import type { Block } from '../blocks';
 import { EventQueue } from '../queue';
 import type { AgentEvent, AgentInput, AgentModel, AgentProcess, LaunchSpec, ProviderAdapter } from '../types';
 import { AcpClient, AcpError, type AcpRequest } from './acp';
-import { googleSignIn, modelsOfSession } from './cli';
+import { googleRefusal, googleSignIn, modelsOfSession, noteGoogleRefusal } from './cli';
 import { errorCodeOf, GeminiStream, historyOf, limitOfError, toolUse } from './events';
 
 type Json = Record<string, unknown>;
@@ -125,7 +125,18 @@ class GeminiProcess implements AgentProcess {
         this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: 'gemini:not-signed-in' } });
         throw new Error('Gemini is not signed in: connect it in Settings › Accounts.');
       }
-      await client.request('authenticate', { methodId: method });
+      await client.request('authenticate', { methodId: method }).catch((err: unknown) => {
+        const refusal = method === 'oauth-personal' && err instanceof AcpError ? googleRefusal(err.message) : null;
+        if (!refusal) throw err;
+        // Google refuses the account: Settings › Accounts says so from now on, and the session stops with why.
+        noteGoogleRefusal(spec.env.GEMINI_CLI_HOME ?? '', refusal);
+        this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: `gemini:${refusal}` } });
+        throw new Error(
+          refusal === 'google-refused'
+            ? 'Google refuses this account for Gemini: use a Gemini API key in Settings › Accounts.'
+            : 'The Google sign-in of Gemini expired: sign in again in Settings › Accounts.',
+        );
+      });
       let session: Json | null = null;
       if (spec.conversation.resume) {
         this.replaying = true;
