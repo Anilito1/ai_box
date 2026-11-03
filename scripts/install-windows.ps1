@@ -65,6 +65,7 @@ function Install-Node-Direct {
   $nodeDir = Join-Path $env:LOCALAPPDATA 'Programs\AI Box Node'
   $unpacked = Join-Path $env:TEMP $name
   Remove-Item $unpacked, $nodeDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force (Split-Path $nodeDir) | Out-Null
   Expand-Archive $zip $env:TEMP -Force
   Move-Item $unpacked $nodeDir
   Remove-Item $zip -Force
@@ -88,9 +89,9 @@ function Run($exe, [string[]]$arguments) {
 if (-not (Has git)) { Winget-Install 'Git.Git' 'git' }
 if (-not (Has git)) { Install-Git-Direct }
 if (-not (Has git)) { Fail 'git was installed but is not found yet: close this window and run the installer again.' }
-if (Has node) {
-  if (-not (Node-Ok)) { Fail "Node.js $(node -v) is too old: update it to 22.12 or newer (https://nodejs.org), then run this installer again." }
-} else { Winget-Install 'OpenJS.NodeJS.LTS' 'Node.js' }
+if (-not (Node-Ok)) { Winget-Install 'OpenJS.NodeJS.LTS' 'Node.js' }
+# An older Node.js would stay first on the PATH, before the one of the fallback: the user updates it.
+if ((Has node) -and -not (Node-Ok)) { Fail "Node.js $(node -v) is too old: update it to 22.12 or newer (https://nodejs.org), then run this installer again." }
 if (-not (Node-Ok)) { Install-Node-Direct }
 if (-not (Node-Ok)) { Fail 'Node.js 22.12 or newer is needed and was not found: close this window and run the installer again.' }
 

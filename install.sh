@@ -9,8 +9,9 @@
 set -euo pipefail
 
 REPO_URL=https://github.com/Anilito1/ai_box.git
-# Where the Node.js this installer brings lives: scripts/macos-app.sh and scripts/linux-app.sh look there too.
-NODE_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/ai-box-node"
+# Where the Node.js this installer brings lives: scripts/macos-app.sh and scripts/linux-app.sh look there too, from
+# the Dock or the menu, which do not get the shell's variables.
+NODE_HOME="$HOME/.local/share/ai-box-node"
 
 say() { printf '\033[36m-> %s\033[0m\n' "$1"; }
 fail() { printf '\n\033[31m%s\033[0m\n' "$1" >&2; exit 1; }

@@ -47,15 +47,32 @@ More time. Everything in parallel. Peace of mind.
 
 ## Install
 
-**Windows**: [download **install.cmd**](https://github.com/Anilito1/ai_box/releases/latest/download/install.cmd) and double-click it. It installs what is missing (git, Node.js), puts AI Box in `%LOCALAPPDATA%\Programs\AI Box`, adds an **AI Box** icon to your Desktop and Start menu, and opens it. You can then delete the downloaded file.
+Nothing to set up beforehand: the installer brings what is missing (git, Node.js), installs AI Box and opens it.
 
-**macOS and Linux**: in a terminal (needs git and [Node.js](https://nodejs.org) 22.12+):
+**Windows**
+1. [Download **install.cmd**](https://github.com/Anilito1/ai_box/releases/latest/download/install.cmd).
+2. Double-click it. If Windows warns about it, click **More info**, then **Run anyway**.
 
-```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/Anilito1/ai_box/main/install.sh)"
-```
+AI Box gets an icon on your Desktop and in the Start menu.
 
-It adds **AI Box** to `~/Applications` on macOS, to your applications menu and Desktop on Linux, and opens it.
+**macOS** (Apple Silicon or Intel)
+1. Open **Terminal** (⌘ Space, type *Terminal*, Enter).
+2. Paste this line and press Enter:
+   ```sh
+   curl -fsSL https://github.com/Anilito1/ai_box/releases/latest/download/install.sh | bash
+   ```
+
+If macOS offers to install its command line tools, click **Install** and let the installer wait for them. AI Box then sits in Applications and Launchpad.
+
+**Linux** (Ubuntu, Debian, Fedora...)
+1. Open a terminal.
+2. Paste this line and press Enter:
+   ```sh
+   wget -qO- https://github.com/Anilito1/ai_box/releases/latest/download/install.sh | bash
+   ```
+   (No `wget`? `curl -fsSL https://github.com/Anilito1/ai_box/releases/latest/download/install.sh | bash`.)
+
+Your password may be asked once: to install git when missing, and on Ubuntu 23.10+ to let AI Box use its security sandbox. AI Box then sits in your applications menu.
 
 **Already cloned?** Run `install.cmd` (Windows) or `./install.sh` in your checkout: it installs that checkout and gives it its icon.
 

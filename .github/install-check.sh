@@ -5,7 +5,7 @@
 # OUT: the folder for the logs and captures.
 set -euo pipefail
 dir="$HOME/.local/share/ai-box"
-node_home="${XDG_DATA_HOME:-$HOME/.local/share}/ai-box-node"
+node_home="$HOME/.local/share/ai-box-node"
 out=${OUT:-$PWD}
 log="$out/app.log"
 mkdir -p "$out"
@@ -52,6 +52,7 @@ else
   if [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ] && [ -d /etc/apparmor.d ]; then
     step "AppArmor restricts the sandbox here: AI Box's profile"
     cat /etc/apparmor.d/ai-box || fail "no AppArmor profile"
+    grep -qF "\"$exe\"" /etc/apparmor.d/ai-box || fail "the profile is not for this Electron"
   fi
   if [ -z "${DISPLAY:-}" ]; then
     Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
@@ -95,7 +96,7 @@ check_running() {
   ps -o pid=,command= -p "$pid"
   pgrep -f -- "--type=renderer" >/dev/null || fail "$1: no renderer process"
   named || fail "$1: the app is not shown under AI Box's name"
-  if [ "$(uname)" != Darwin ] && [ -e /etc/apparmor.d/ai-box ]; then
+  if [ "$(uname)" != Darwin ] && grep -qsF "\"$exe\"" /etc/apparmor.d/ai-box; then
     ps -o command= -p "$pid" | grep -q -- --no-sandbox && fail "$1: started without the sandbox"
   fi
   if [ -x "$node_home/bin/node" ]; then

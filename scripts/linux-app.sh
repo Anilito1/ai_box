@@ -13,6 +13,8 @@ as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 # Ubuntu 23.10+ lets only the programs an AppArmor profile allows create the namespaces Chromium's sandbox runs in.
 restricted() { [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" = 1 ]; }
 # The other way out: a chrome-sandbox set up by root (setuid). npm replaces it at the updates that reinstall Electron.
+# The profile for this checkout's Electron: another install's does not cover it.
+allowed() { grep -qsF "\"$electron\"" "$profile"; }
 setuid_sandbox() { [ -u "$dir/node_modules/electron/dist/chrome-sandbox" ] && [ "$(stat -c %u "$dir/node_modules/electron/dist/chrome-sandbox")" = 0 ]; }
 
 # A profile on Electron's path, as Ubuntu ships for Chrome: it outlives the updates, which put Electron at the same path.
@@ -70,18 +72,18 @@ EOF
     # GNOME opens a launcher on the Desktop only once trusted.
     gio set "$desk/AI Box.desktop" metadata::trusted true 2>/dev/null || true
   fi
-  if restricted && [ ! -e "$profile" ] && ! setuid_sandbox; then allow_sandbox; fi
+  if restricted && ! allowed && ! setuid_sandbox; then allow_sandbox; fi
 }
 
 launch() {
-  node_bin="$data/ai-box-node/bin"
+  node_bin="$HOME/.local/share/ai-box-node/bin"
   # The Node.js install.sh brought, when the computer had none recent enough: the app's updates run npm with it.
   if [ -x "$node_bin/node" ]; then
     PATH="$node_bin:$PATH" AI_BOX_NODE=$node_bin
     export PATH AI_BOX_NODE
   fi
   # Last resort, when the password was not given: Electron would stop at its start, it runs without the sandbox.
-  if restricted && [ ! -e "$profile" ] && ! setuid_sandbox; then set -- --no-sandbox; else set --; fi
+  if restricted && ! allowed && ! setuid_sandbox; then set -- --no-sandbox; else set --; fi
   cd "$dir"
   exec "$electron" "$@" "$dir"
 }

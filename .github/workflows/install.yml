@@ -91,15 +91,24 @@ jobs:
           if-no-files-found: ignore
 
   windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Without winget (older Windows 10): Node.js comes from nodejs.org.
+        winget: [with winget, without winget]
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
       - name: Install from the link, without Node.js
         shell: pwsh
+        env:
+          HIDE: ${{ matrix.winget == 'without winget' && 'node.exe winget.exe' || 'node.exe' }}
         run: |
           # A new user has no Node.js: the folders that hold one leave the PATH.
-          $env:Path = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'node.exe')) }) -join ';'
+          $hide = $env:HIDE -split ' '
+          $env:Path = ($env:Path -split ';' | Where-Object { $d = $_; $d -and -not ($hide | Where-Object { Test-Path (Join-Path $d $_) }) }) -join ';'
           if (Get-Command node -ErrorAction SilentlyContinue) { throw 'node is still on the PATH' }
+          Get-Command winget -ErrorAction SilentlyContinue | ForEach-Object Source
           Invoke-WebRequest $env:CMD_URL -OutFile "$env:RUNNER_TEMP\install.cmd"
           $env:AIBOX_REF = $env:REF
           cmd /c "$env:RUNNER_TEMP\install.cmd" -NoLaunch

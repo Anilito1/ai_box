@@ -9,12 +9,17 @@
 set -eu
 dir=$(cd "$(dirname "$0")/.." && pwd)
 src="$dir/node_modules/electron/dist/Electron.app"
-node_bin="${XDG_DATA_HOME:-$HOME/.local/share}/ai-box-node/bin"
+node_bin="$HOME/.local/share/ai-box-node/bin"
 # Electron's version and this script's layout: a copy made by another one is made again.
 stamp() { printf '%s/1\n' "$(sed -n 's/^  "version": "\(.*\)",$/\1/p' "$dir/node_modules/electron/package.json")"; }
 
 make_app() {
   app=$1
+  # Another app at that place (the packaged build) is left alone.
+  if [ -e "$app" ] && [ ! -f "$app/Contents/Resources/ai-box-stamp" ]; then
+    echo "$app is another build of AI Box: move it to the Trash, then run this installer again." >&2
+    exit 1
+  fi
   # An update's npm ci leaves Electron's package without its binary: its installer fetches it again.
   [ -d "$src" ] || (cd "$dir" && node node_modules/electron/install.js)
   new="$app.new"
@@ -28,9 +33,10 @@ make_app() {
   set_key CFBundleIdentifier io.github.anilito1.hub
   set_key CFBundleExecutable 'AI Box'
   set_key CFBundleIconFile ai-box.icns
-  # The microphone and speech prompts of dictation, as the packaged build has them.
-  node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).build.mac.extendInfo)) console.log(`${k}\t${v}`)' "$dir/package.json" |
-    while IFS="$(printf '\t')" read -r key value; do set_key "$key" "$value"; done
+  # The microphone and speech prompts of dictation, as the packaged build has them (without them macOS stops the app).
+  keys=$(node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).build.mac.extendInfo)) console.log(`${k}\t${v}`)' "$dir/package.json")
+  [ -n "$keys" ]
+  printf '%s\n' "$keys" | while IFS="$(printf '\t')" read -r key value; do set_key "$key" "$value"; done
 
   icons=$(mktemp -d)/ai-box.iconset
   mkdir -p "$icons"
@@ -66,7 +72,8 @@ launch() {
     export PATH AI_BOX_NODE
   fi
   if [ "$(cat "$app/Contents/Resources/ai-box-stamp" 2>/dev/null)" != "$(stamp)" ]; then
-    PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+    # Node.js for Electron's installer: also where the user's shell finds it (nvm, Homebrew...).
+    PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$("${SHELL:-/bin/zsh}" -ilc 'printf %s "$PATH"' 2>/dev/null </dev/null || true)"
     osascript -e 'display notification "Getting AI Box ready after its update (about a minute)." with title "AI Box"' >/dev/null 2>&1 || true
     # In its own shell, so that a failing step stops it; failed (offline), the copy as it is starts.
     sh "$dir/scripts/macos-app.sh" make "$app" >/dev/null 2>&1 || true
