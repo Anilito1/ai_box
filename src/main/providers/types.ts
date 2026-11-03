@@ -128,6 +128,8 @@ export interface LaunchSpec {
   name: string;
   cwd: string;
   extraDirs: string[];
+  /** Folders the session reads without working in them: the files the user attaches. */
+  readDirs: string[];
   readOnly: boolean;
   /** Empty = the program's own choice (its settings). */
   model: string;

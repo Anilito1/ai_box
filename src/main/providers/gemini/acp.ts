@@ -25,6 +25,8 @@ export interface AcpOptions {
   env: Record<string, string>;
   cwd?: string;
   version: string;
+  /** Arguments after --acp. */
+  args?: string[];
 }
 
 const STDERR_KEEP = 4000;
@@ -48,7 +50,7 @@ export class AcpClient {
 
   /** Starts the agent and completes the handshake; answers what the agent says it can do. */
   async start(): Promise<Json> {
-    const [file, args] = toolCommand(this.opts.executable, ['--acp']);
+    const [file, args] = toolCommand(this.opts.executable, ['--acp', ...(this.opts.args ?? [])]);
     const child = spawn(file, args, { cwd: this.opts.cwd, env: this.opts.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
     child.stderr?.on('data', (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-STDERR_KEEP)));
