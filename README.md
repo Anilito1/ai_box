@@ -47,7 +47,7 @@ More time. Everything in parallel. Peace of mind.
 
 ## Install
 
-**Windows**: [download AI Box](https://github.com/Anilito1/ai_box/archive/refs/heads/main.zip), unzip it and double-click **`install.cmd`**. It installs what is missing (git, Node.js), puts AI Box in `%LOCALAPPDATA%\Programs\AI Box`, adds an **AI Box** icon to your Desktop and Start menu, and opens it. You can then delete the downloaded folder.
+**Windows**: [download **install.cmd**](https://github.com/Anilito1/ai_box/releases/latest/download/install.cmd) and double-click it. It installs what is missing (git, Node.js), puts AI Box in `%LOCALAPPDATA%\Programs\AI Box`, adds an **AI Box** icon to your Desktop and Start menu, and opens it. You can then delete the downloaded file.
 
 **macOS and Linux**: in a terminal (needs git and [Node.js](https://nodejs.org) 22.12+):
 
