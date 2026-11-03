@@ -1,6 +1,7 @@
 @echo off
 rem AI Box for Windows: double-click. Installs git and Node.js when missing, then AI Box with its Desktop and Start
 rem menu icons, and opens it. From a checkout it installs that checkout; alone (downloaded file) it fetches the rest.
+rem AIBOX_REF: a commit to install instead of main (tests).
 setlocal
 set "SCRIPT=%~dp0scripts\install-windows.ps1"
 set "LOCAL="
@@ -9,7 +10,7 @@ if defined LOCAL (
   powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
 ) else (
   set "AIBOX_ARGS=%*"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$s = [scriptblock]::Create((Invoke-RestMethod 'https://raw.githubusercontent.com/Anilito1/ai_box/main/scripts/install-windows.ps1')); Invoke-Expression ('& $s ' + $env:AIBOX_ARGS)"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ref = if ($env:AIBOX_REF) { $env:AIBOX_REF } else { 'main' }; $s = [scriptblock]::Create((Invoke-RestMethod ('https://raw.githubusercontent.com/Anilito1/ai_box/' + $ref + '/scripts/install-windows.ps1'))); Invoke-Expression ('& $s ' + $env:AIBOX_ARGS)"
 )
 if errorlevel 1 (
   echo.

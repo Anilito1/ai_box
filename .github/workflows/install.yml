@@ -1,0 +1,128 @@
+# Installs AI Box as a new user would, from the link of the commit (or of the release), on Windows, macOS (Apple
+# Silicon and Intel) and Linux (Ubuntu 22.04 and 24.04, Fedora), without Node.js: then checks the app, its start under
+# AI Box's name and that its updates still work (.github/install-check.sh).
+name: Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_release:
+        description: Use the installers of the latest release (main) instead of this commit's
+        type: boolean
+        default: false
+  push:
+    paths:
+      - install.sh
+      - install.cmd
+      - scripts/install-windows.ps1
+      - scripts/windows-shortcuts.ps1
+      - scripts/macos-app.sh
+      - scripts/linux-app.sh
+      - src/main/shellPath.ts
+      - .github/install-check.sh
+      - .github/workflows/install.yml
+
+permissions:
+  contents: read
+
+env:
+  SH_URL: ${{ inputs.from_release && 'https://github.com/Anilito1/ai_box/releases/latest/download/install.sh' || format('https://raw.githubusercontent.com/{0}/{1}/install.sh', github.repository, github.sha) }}
+  CMD_URL: ${{ inputs.from_release && 'https://github.com/Anilito1/ai_box/releases/latest/download/install.cmd' || format('https://raw.githubusercontent.com/{0}/{1}/install.cmd', github.repository, github.sha) }}
+  REF: ${{ !inputs.from_release && github.sha || '' }}
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel, ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - name: Tools for the checks
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb xdotool x11-utils imagemagick >/dev/null
+      - name: Install from the link, without Node.js
+        run: |
+          # A new user has no Node.js: the folders that hold one leave the PATH.
+          clean=""
+          IFS=: read -ra dirs <<< "$PATH"
+          for d in "${dirs[@]}"; do
+            if [ -e "$d/node" ]; then
+              case "$d" in /usr/bin | /bin) sudo mv "$d/node" "$d/node.hidden" ;; *) continue ;; esac
+            fi
+            clean="$clean${clean:+:}$d"
+          done
+          export PATH=$clean
+          ! command -v node
+          curl -fsSL "$SH_URL" | AI_BOX_REF="$REF" AI_BOX_NO_LAUNCH=1 bash
+      - name: Check
+        run: OUT="$RUNNER_TEMP/out" bash ~/.local/share/ai-box/.github/install-check.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-${{ matrix.os }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: ignore
+
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 40
+    steps:
+      - name: A desktop's libraries, a user, no git and no Node.js
+        run: |
+          dnf install -y -q sudo procps-ng findutils curl tar gzip which xorg-x11-server-Xvfb xdotool xprop ImageMagick \
+            gtk3 nss alsa-lib mesa-libgbm at-spi2-atk libdrm cups-libs libxkbcommon libXcomposite libXdamage libXrandr \
+            libXScrnSaver pango xdg-user-dirs >/dev/null
+          ! command -v git
+          useradd -m tester
+          echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
+          mkdir -p /out && chmod 777 /out
+      - name: Install from the link
+        run: su - tester -c "curl -fsSL '$SH_URL' | AI_BOX_REF='$REF' AI_BOX_NO_LAUNCH=1 bash"
+      - name: Check
+        run: su - tester -c "OUT=/out bash ~/.local/share/ai-box/.github/install-check.sh"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: install-fedora
+          path: /out
+          if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Install from the link, without Node.js
+        shell: pwsh
+        run: |
+          # A new user has no Node.js: the folders that hold one leave the PATH.
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -and -not (Test-Path (Join-Path $_ 'node.exe')) }) -join ';'
+          if (Get-Command node -ErrorAction SilentlyContinue) { throw 'node is still on the PATH' }
+          Invoke-WebRequest $env:CMD_URL -OutFile "$env:RUNNER_TEMP\install.cmd"
+          $env:AIBOX_REF = $env:REF
+          cmd /c "$env:RUNNER_TEMP\install.cmd" -NoLaunch
+          if ($LASTEXITCODE -ne 0) { throw "install.cmd: $LASTEXITCODE" }
+      - name: Check
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\AI Box'
+          $status = git -C $dir status --porcelain
+          if ($status) { $status; throw 'the checkout has local changes' }
+          if ((git -C $dir remote get-url origin) -ne 'https://github.com/Anilito1/ai_box.git') { throw 'origin' }
+          $shell = New-Object -ComObject WScript.Shell
+          foreach ($folder in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) {
+            $lnk = Join-Path $folder 'AI Box.lnk'
+            if (-not (Test-Path $lnk)) { throw "no $lnk" }
+            $s = $shell.CreateShortcut($lnk)
+            "$lnk -> $($s.TargetPath) $($s.Arguments) [$($s.IconLocation)]"
+          }
+          Start-Process (Join-Path ([Environment]::GetFolderPath('Desktop')) 'AI Box.lnk')
+          Start-Sleep 30
+          $main = Get-CimInstance Win32_Process -Filter "Name = 'electron.exe'" | Where-Object { $_.CommandLine -notmatch '--type=' }
+          if (-not $main) { throw 'AI Box is not running' }
+          $main | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }
+          if (-not (Get-CimInstance Win32_Process -Filter "Name = 'electron.exe'" | Where-Object { $_.CommandLine -match '--type=renderer' })) { throw 'no renderer process' }
+          Get-Process electron | Where-Object MainWindowTitle | ForEach-Object { "window: $($_.MainWindowTitle)" }
+          'All checks passed.'

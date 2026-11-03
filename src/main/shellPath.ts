@@ -21,7 +21,9 @@ function loadShellPath(): void {
   }
   // Where Homebrew and the native installers put claude, gh and git, last: the shell's own order wins.
   const usual = process.platform === 'darwin' ? ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', join(homedir(), '.local', 'bin')] : [join(homedir(), '.local', 'bin')];
-  process.env.PATH = [...new Set([...found.split(':'), ...(process.env.PATH ?? '').split(':'), ...usual].filter(Boolean))].join(':');
+  // The Node.js install.sh brought when the computer had none recent enough, first: the updates run npm with it.
+  const own = process.env.AI_BOX_NODE ? [process.env.AI_BOX_NODE] : [];
+  process.env.PATH = [...new Set([...own, ...found.split(':'),...(process.env.PATH ?? '').split(':'), ...usual].filter(Boolean))].join(':');
 }
 
 loadShellPath();
