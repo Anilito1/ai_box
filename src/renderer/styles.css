@@ -336,6 +336,185 @@ kbd,
 .card-list:empty {
   display: none;
 }
+/* The Team section's folders: a header that folds it (chevron, name, count), then its posts. */
+#team-group .side-label {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+#team-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.side-add {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 16px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    color var(--dur-2);
+}
+.side-add:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.side-add .ico {
+  width: 12px;
+  height: 12px;
+}
+#team-list {
+  position: relative;
+}
+.team-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: var(--r-md);
+  transition:
+    background-color var(--dur-2),
+    box-shadow var(--dur-2);
+}
+.team-folder.collapsed > .team-folder-list {
+  display: none;
+}
+/* A guide on the left says which cards are in the folder; the root starts a little below the last folder. */
+.team-folder-list {
+  margin-left: 10px;
+  padding-left: 5px;
+  border-left: 1px solid var(--line);
+}
+.team-folder ~ .team-root {
+  margin-top: 6px;
+}
+.team-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--ctl-sm);
+  padding-right: var(--sp-2);
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.team-folder-head:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+.team-folder-new {
+  padding-left: 4px;
+}
+.team-folder-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: var(--ctl-sm);
+  padding: 0 0 0 4px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.team-folder-toggle:focus-visible {
+  outline-offset: -2px;
+}
+.team-folder-chevron {
+  flex: none;
+  transition: transform var(--dur-2);
+}
+.team-folder.collapsed .team-folder-chevron {
+  transform: rotate(-90deg);
+}
+.team-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-folder-count {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.team-folder-count .dot {
+  width: 6px;
+  height: 6px;
+}
+.team-folder-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  outline: none;
+  background: var(--field);
+  box-shadow: var(--focus-ring);
+  color: var(--text);
+  font: inherit;
+}
+.team-folder-input::placeholder {
+  color: var(--text-3);
+  font-weight: 400;
+}
+/* While a post or a folder is dragged: what it leaves faded, where it lands framed, and a line at the place. */
+.card.dragging,
+.team-folder.dragging {
+  opacity: 0.4;
+}
+.team-dragging .card {
+  transform: none;
+}
+.team-folder.drop-zone,
+.team-root.drop-zone {
+  background: color-mix(in srgb, var(--selected) 55%, transparent);
+}
+.team-folder.drop-into,
+.team-root-drop.drop-into {
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.team-root-drop {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 4px var(--sp-2);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.team-root-drop[hidden] {
+  display: none;
+}
+.team-drop-line {
+  position: absolute;
+  top: 0;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.team-drop-line[hidden] {
+  display: none;
+}
 .side-closed summary {
   display: flex;
   align-items: center;

@@ -6,7 +6,9 @@ import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { dayOf } from '../shared/costs';
+import { arrangeTeam, type Arranged } from '../shared/teamFolders';
 import { windowFigure } from '../shared/usage';
+import { syncList, TeamFolders, type Block } from './folders';
 import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
@@ -36,6 +38,7 @@ const closedList = $('closed-list');
 const closedGroup = $<HTMLDetailsElement>('closed-group');
 const teamList = $('team-list');
 const teamGroup = $('team-group');
+const folders = new TeamFolders(window.hub, teamList, teamGroup.querySelector('.side-label') as HTMLElement, () => render());
 const reposRoot = $('repos');
 
 translateDom();
@@ -131,11 +134,22 @@ function renderActions(c: Card, s: SessionView): void {
   if (isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
 }
 
+interface Layout {
+  /** In the sidebar's order, folded folders included. */
+  team: SessionView[];
+  /** In a folded folder: no shortcut. */
+  folded: Set<SessionView>;
+  tree: Arranged<Block>;
+  extra: Block[];
+  active: SessionView[];
+  closed: SessionView[];
+}
+
 /**
- * Who goes where in the sidebar: each post with its instances at work, the posts of its groups under a lead, the
- * other active workers, the closed ones.
+ * Who goes where in the sidebar: each post with its instances at work, the posts of its groups under a lead, in the
+ * user's folders or not; the other active workers, the closed ones.
  */
-function layout(sessions: SessionView[]): { team: SessionView[]; active: SessionView[]; closed: SessionView[] } {
+function layout(sessions: SessionView[]): Layout {
   const posts = sessions.filter((s) => s.post).sort((a, b) => (a.post?.order ?? 0) - (b.post?.order ?? 0));
   const under = (p: SessionView) => sessions.filter((s) => s.instance && s.instance.postId === p.post?.id && !isClosed(s));
   const placed = new Set<SessionView>();
@@ -144,12 +158,15 @@ function layout(sessions: SessionView[]): { team: SessionView[]; active: Session
     placed.add(p);
     return [p, ...under(p), ...posts.filter((m) => m.group?.leadId === p.id).flatMap(block)];
   };
-  const top = posts.filter((p) => !inGroup(p));
   // A lead that is itself a member goes with its own lead; what a loop would leave out comes last.
-  const team = [...top.flatMap(block), ...posts.flatMap(block)];
+  const blocks = posts.filter((p) => !inGroup(p)).map(block);
+  const extra = posts.map(block).filter((b) => b.length > 0);
+  const tree = arrangeTeam(blocks, (b) => b[0]?.id ?? '', folders.current);
+  const team = [...tree.folders.flatMap((f) => f.posts.flat()), ...tree.root.flat(), ...extra.flat()];
+  const folded = new Set(tree.folders.filter((f) => f.folder.collapsed).flatMap((f) => f.posts.flat()));
   const rest = sessions.filter((s) => s.role === 'worker' && !team.includes(s));
   // Newest first: the latest missions are the ones worth a look.
-  return { team, active: rest.filter((s) => !isClosed(s)), closed: rest.filter(isClosed).reverse() };
+  return { team, folded, tree, extra, active: rest.filter((s) => !isClosed(s)), closed: rest.filter(isClosed).reverse() };
 }
 
 /** A post shown under its group's lead, when the lead is a post too. */
@@ -255,12 +272,6 @@ function renderCard(s: SessionView): void {
   renderActions(c, s);
 }
 
-/** Re-inserts the cards only when their order or list changed, so hover and focus survive renders. */
-function syncList(list: HTMLElement, nodes: HTMLElement[]): void {
-  const current = [...list.children];
-  if (current.length !== nodes.length || current.some((n, i) => n !== nodes[i])) list.replaceChildren(...nodes);
-}
-
 try {
   closedGroup.open = localStorage.getItem('closedOpen') === '1';
 } catch {
@@ -364,10 +375,10 @@ function render(): void {
   if (opened && !ids.has(opened)) opened = null;
 
   for (const s of sessions) renderCard(s);
-  const { team, active, closed } = layout(sessions);
+  const { team, tree, extra, active, closed } = layout(sessions);
   const posts = team.filter((s) => s.post).length;
   const nodeOf = (s: SessionView) => (cards.get(s.id) as Card).root;
-  syncList(teamList, team.map(nodeOf));
+  folders.render(tree, extra, nodeOf);
   teamGroup.hidden = posts === 0;
   $('team-count').textContent = posts ? String(posts) : '';
   syncList(activeList, active.map(nodeOf));
@@ -426,16 +437,21 @@ splitter.addEventListener('pointerdown', (e) => {
 
 // ---------- keyboard ----------
 
-/** The team (posts and their instances), then the active workers, as the sidebar shows them: Ctrl/Cmd+2 to 9 open them in that order. */
-function sidebarOrder(): SessionView[] {
-  const { team, active } = layout(snapshot.sessions);
-  return [...team, ...active];
+/**
+ * The team (posts and their instances), then the active workers, as the sidebar shows them: Ctrl/Cmd+2 to 9 open them
+ * in that order. A folded folder's posts are not shown: they come last, without a shortcut.
+ */
+function sidebarOrder(): { shown: SessionView[]; folded: SessionView[] } {
+  const { team, folded, active } = layout(snapshot.sessions);
+  return { shown: [...team.filter((s) => !folded.has(s)), ...active], folded: team.filter((s) => folded.has(s)) };
 }
 
 /** Everything the hub can do from the keyboard, with its shortcut when it has one. */
 function commands(): Command[] {
   const list: Command[] = [{ title: t('palette.master'), keys: shortcut('1'), run: () => openWorker(null) }];
-  sidebarOrder().forEach((s, i) => list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), keys: i < 8 ? shortcut(String(i + 2)) : undefined, run: () => openWorker(s.id) }));
+  const { shown, folded } = sidebarOrder();
+  shown.forEach((s, i) => list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), keys: i < 8 ? shortcut(String(i + 2)) : undefined, run: () => openWorker(s.id) }));
+  for (const s of folded) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), run: () => openWorker(s.id) });
   if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
   list.push(
     { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
@@ -468,7 +484,7 @@ document.addEventListener('keydown', (e) => {
     // keyboard the digits are shifted.
     e.preventDefault();
     const n = Number(e.code.slice(-1));
-    const target = n === 1 ? null : sidebarOrder()[n - 2];
+    const target = n === 1 ? null : sidebarOrder().shown[n - 2];
     if (n === 1 || target) openWorker(target ? target.id : null);
   }
 });
@@ -503,8 +519,11 @@ hub.onPulse((pulses) => {
 hub.onEvent((id, kind) => clawdEvent(id, kind));
 reposRoot.append(repoPanel.root);
 hub.onRepo((status) => repoPanel.update(status));
-// The master changed the team: an open Team section shows it.
-hub.onTeam(() => setup.teamChanged());
+// The master changed the team: an open Team section shows it, the folders forget a post it deleted.
+hub.onTeam(() => {
+  setup.teamChanged();
+  folders.reload();
+});
 // A notice that points to a section of the settings (a provider's program missing, for one).
 window.addEventListener('hub:open-settings', (e) => {
   const section = (e as CustomEvent<unknown>).detail;

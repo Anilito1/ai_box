@@ -5,7 +5,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { builtStamp, sourceStamp } from './sourceStamp.mjs';
@@ -17,12 +17,14 @@ const { _electron } = require('playwright-core');
 const HELP = `Usage: npm run ui -- [options] <step> [+ <step> ...]   or   npm run ui -- [options] steps.json
 Options: --config <json|@file>  settings merged over {"onboarded":true,"language":"fr"}
          --keep                 keep the temporary data folder (its path is printed)
+         --data <dir>           run again on a folder an earlier --keep printed (a restart), never removed
          --show                 leave the window where it opens (default: moved off screen)
 Steps (separated by "+"; the app starts once, whatever the number of steps):
   shot <file> [--width W --height H] [--selector S] [--scale device]   capture at CSS size (a resize stays)
   size <W> <H>                                         resize the window content (the sidebar takes ~380px of it)
   fit <sel> <W>                                        resize the window so that <sel> is W px wide (ex: fit .composer 360)
-  click <sel> | hover <sel> | type <sel> <text> | press <key>
+  click <sel> [--button right] [--count 2] | hover <sel> | type <sel> <text> | press <key>
+  drag <from> <to> [--at top|bottom] [--shot F] [--eval JS]  mouse drag (HTML5 drag and drop too); --shot captures the sidebar before the drop
   text <sel> [--max N]                                 visible text of the first match
   count <sel>                                          number of matches
   eval <js>                                            JS expression in the page, result printed (short)
@@ -46,12 +48,16 @@ const jsonArg = (v) => JSON.parse(v.startsWith('@') ? readFileSync(v.slice(1), '
 
 // ---------- arguments ----------
 const argv = process.argv.slice(2);
-const opts = { config: {}, keep: false, show: false };
-while (argv[0]?.startsWith('--') && ['--config', '--keep', '--show'].includes(argv[0])) {
+const opts = { config: {}, keep: false, show: false, data: '' };
+while (argv[0]?.startsWith('--') && ['--config', '--keep', '--show', '--data'].includes(argv[0])) {
   const o = argv.shift();
   if (o === '--config') Object.assign(opts.config, jsonArg(argv.shift() ?? '{}'));
+  else if (o === '--data') opts.data = argv.shift() ?? '';
   else opts[o.slice(2)] = true;
 }
+// Only a folder a previous --keep left in the temporary folder: never the installed app's data.
+if (opts.data !== '' && (!/^hub-ui-/.test(basename(resolve(opts.data))) || resolve(dirname(resolve(opts.data))) !== resolve(tmpdir()) || !existsSync(join(opts.data, 'config.json')))) fail('--data: a folder printed by an earlier --keep run');
+if (opts.data && Object.keys(opts.config).length > 0) fail('--data runs on the folder as it is: no --config with it');
 if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
   say(HELP);
   process.exit(argv.length === 0 ? 1 : 0);
@@ -82,8 +88,8 @@ if (builtStamp(root) !== sourceStamp(root)) {
 }
 
 // ---------- the isolated instance ----------
-const dataDir = mkdtempSync(join(tmpdir(), 'hub-ui-'));
-writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ onboarded: true, language: 'fr', ...opts.config }));
+const dataDir = opts.data ? resolve(opts.data) : mkdtempSync(join(tmpdir(), 'hub-ui-'));
+if (!opts.data) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ onboarded: true, language: 'fr', ...opts.config }));
 const electronPath = require('electron');
 const env = { ...process.env, AI_BOX_REBUILT: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
@@ -93,7 +99,7 @@ let exitCode = 0;
 const cleanup = async () => {
   await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
   child.kill('SIGKILL');
-  if (opts.keep) say(`data kept: ${dataDir}`);
+  if (opts.keep || opts.data) say(`data kept: ${dataDir}`);
   else rmSync(dataDir, { recursive: true, force: true });
 };
 
@@ -149,9 +155,32 @@ try {
     },
     size: async (a) => `content ${await resize(a._[0], a._[1])}`,
     async click(a) {
-      await page.locator(a._[0]).first().click();
+      await page.locator(a._[0]).first().click({ button: a.button ?? 'left', clickCount: Number(a.count) || 1 });
       await settle();
       return 'ok';
+    },
+    async drag(a) {
+      const box = async (sel) => (await page.locator(sel).first().boundingBox()) ?? (() => { throw new Error(`drag: ${sel} not shown`); })();
+      const from = await box(a._[0]);
+      const to = await box(a._[1]);
+      const y = a.at === 'top' ? to.y + 3 : a.at === 'bottom' ? to.y + to.height - 3 : to.y + to.height / 2;
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2 + 10, { steps: 4 });
+      // A pause at each step: the page sees a drag over each place, as a real drag that the system repeats.
+      const [x0, y0, x1] = [from.x + from.width / 2, from.y + from.height / 2 + 10, to.x + to.width / 2];
+      for (let i = 1; i <= 8; i++) {
+        await page.mouse.move(x0 + ((x1 - x0) * i) / 8, y0 + ((y - y0) * i) / 8);
+        await page.waitForTimeout(60);
+      }
+      await page.mouse.move(x1 + 1, y);
+      await page.waitForTimeout(60);
+      await settle();
+      if (a.shot) await page.locator('.sidebar').screenshot({ path: resolve(a.shot) });
+      const seen = a.eval ? ` -> ${clip(JSON.stringify(await page.evaluate(a.eval)), 300)}` : "";
+      await page.mouse.up();
+      await settle();
+      return `${a.shot ? `ok, ${resolve(a.shot)}` : 'ok'}${seen}`;
     },
     async hover(a) {
       await page.locator(a._[0]).first().hover();

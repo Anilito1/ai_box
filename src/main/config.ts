@@ -9,6 +9,7 @@ import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkGroup, GROUP_ID, GROUPS_MAX, normalizeGroup, withoutPosts, type GroupError } from '../shared/groups';
 import { isGroupPrefs } from '../shared/topicGroups';
+import { isFolderPrefs, pruneFolders } from '../shared/teamFolders';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
 import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamGroup, type TeamRole } from '../shared/types';
 import { UPDATE_MODES, type UpdateMode } from '../shared/update';
@@ -59,6 +60,7 @@ function defaults(lang: Lang): HubConfig {
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
     updates: 'auto',
     topicGroups: { order: [], collapsed: [] },
+    teamFolders: { folders: [], root: [] },
     background: '',
     dictation: { ...DICTATION_DEFAULTS },
   };
@@ -110,6 +112,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   take('updates', raw.updates, (v): v is UpdateMode => UPDATE_MODES.includes(v as UpdateMode), (v) => (cfg.updates = v));
   take('background', raw.background, (v): v is string => v === '' || isStr(v, 7, /^#[0-9a-f]{6}$/), (v) => (cfg.background = v));
   take('topicGroups', raw.topicGroups, isGroupPrefs, (v) => (cfg.topicGroups = { order: v.order, collapsed: v.collapsed }));
+  take('teamFolders', raw.teamFolders, isFolderPrefs, (v) => (cfg.teamFolders = v));
   if (raw.dictation !== undefined) {
     const d = obj(raw.dictation);
     take('dictation.enabled', d.enabled, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.dictation.enabled = v));
@@ -205,6 +208,8 @@ export function loadConfig(dataDir: string, systemLang: Lang): HubConfig {
   merge(cfg, raw);
   mergeOwn(cfg, raw);
   knownAccounts(cfg);
+  // A post deleted while the folders were not saved leaves them here.
+  cfg.teamFolders = pruneFolders(cfg.teamFolders, cfg.team.map((r) => r.id));
   return cfg;
 }
 
@@ -242,6 +247,8 @@ export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null 
   if (!known(next.masterAccount)) return 'masterAccount';
   if (!known(next.workerAccount)) return 'workerAccount';
   if (next.fallback.chain.some((s) => !known(s.account)) || next.fallback.paidOk.some((id) => !known(id))) return 'fallback';
+  // A sidebar that missed a post's deletion does not bring it back.
+  next.teamFolders = pruneFolders(next.teamFolders, cfg.team.map((r) => r.id));
   Object.assign(cfg, next);
   return null;
 }

@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
+import { pruneFolders } from '../shared/teamFolders';
 import { resolveTopicRepo } from '../shared/topicGroups';
 import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from '../shared/groups';
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
@@ -3090,6 +3091,7 @@ export class SessionManager extends EventEmitter {
     if ((s?.inbox && !this.settled(s)) || this.instancesBusy(id)) return false;
     if (s?.inbox) this.stop(id);
     cfg.team = cfg.team.filter((r) => r.id !== id);
+    cfg.teamFolders = pruneFolders(cfg.teamFolders, cfg.team.map((r) => r.id));
     this.teamChanged();
     this.dropFromGroups(id);
     return true;

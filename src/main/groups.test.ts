@@ -146,8 +146,11 @@ test('a lead reaches its members only; their report comes back to it, a later ma
     // The lead's post deleted: the group goes, the member reports to the master.
     lead.status = 'exited';
     lead.inbox = null;
+    cfg.teamFolders = { folders: [{ id: 'f-00000001', name: 'LBC', collapsed: false, posts: [post('sous-chef-lbc').id, post('other').id] }], root: [post('sous-chef-lbc').id] };
     assert.ok(inner.deleteRole(post('sous-chef-lbc').id));
     assert.deepEqual(cfg.groups, []);
+    // Gone from the sidebar's folders too.
+    assert.deepEqual(cfg.teamFolders, { folders: [{ id: 'f-00000001', name: 'LBC', collapsed: false, posts: [post('other').id] }], root: [] });
     assert.throws(() => inner.messageLead(member, 'hello?'), /not in a group/);
   } finally {
     done();

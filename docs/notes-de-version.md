@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-03
+
+### Ajouté
+
+- Range les postes de l’Équipe dans des dossiers : bouton + à côté de « Équipe », glisser-déposer pour y mettre un poste ou réordonner, clic droit pour renommer, supprimer ou déplacer.
+
 ## 2026-10-30
 
 ### Ajouté

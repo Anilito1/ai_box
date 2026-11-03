@@ -8,6 +8,7 @@ import type { KeepReason } from './parallel';
 import type { Notes } from './releaseNotes';
 import type { CliCommand } from './slash';
 import type { AgentDrop } from './team';
+import type { TeamFolderPrefs } from './teamFolders';
 import type { TopicGroupPrefs } from './topicGroups';
 import type { Topic } from './topics';
 import type { UltracodeAccess } from './ultracode';
@@ -653,6 +654,8 @@ export interface HubSettings {
   updates: UpdateMode;
   /** The topics column of the master: its groups' order and the folded ones. */
   topicGroups: TopicGroupPrefs;
+  /** The sidebar's folders of posts: only how the Team section is arranged. */
+  teamFolders: TeamFolderPrefs;
   /** Background colour of the window ("#rrggbb"), the surfaces derived from it; empty = the system's appearance. */
   background: string;
   dictation: DictationSettings;
