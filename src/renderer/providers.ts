@@ -508,13 +508,19 @@ export class ProvidersPanel {
     // An account added beside the user's own is removed with its sign-in; the user's own is signed out.
     if (id === 'anthropic' && v.method === 'cli' && active?.removable) return this.accountAction('remove', active.id);
     const method = v.method as ProviderMethod;
+    delete this.errors[id];
     this.phases.set(id, 'disconnect');
     this.host.rerender();
-    const r = await this.hub.disconnectProvider(id, method);
-    this.phases.delete(id);
-    if (r.views.length > 0) this.views = r.views;
-    if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.disconnect(id, v));
-    this.host.rerender();
+    try {
+      const r = await this.hub.disconnectProvider(id, method);
+      if (r.views.length > 0) this.views = r.views;
+      if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.disconnect(id, v));
+    } catch {
+      this.fail(id, 'unknown', () => void this.disconnect(id, v));
+    } finally {
+      this.phases.delete(id);
+      this.host.rerender();
+    }
   }
 
   /** Checks the states again (an error that came from a check, not from an action of the row). */
