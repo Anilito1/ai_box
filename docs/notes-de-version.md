@@ -24,6 +24,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Ajoute les consignes d’un fichier Markdown ou texte aux instructions du maître ou d’un poste depuis les réglages.
 - Range les postes de l’Équipe dans des dossiers : bouton + à côté de « Équipe », glisser-déposer pour y mettre un poste ou réordonner, clic droit pour renommer, supprimer ou déplacer.
 - Joins n’importe quel fichier à un message (PDF, Word, Excel, ZIP, audio, vidéo, photos HEIC…) avec le trombone, en le glissant ou en le collant : la session l’ouvre et le lit.
 
