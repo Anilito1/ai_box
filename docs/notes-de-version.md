@@ -15,6 +15,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Modifié
 
 - Le champ de clé API reçoit bien le curseur quand tu choisis ce mode de connexion.
+- Les réglages des fournisseurs retrouvent leur fonctionnement précédent.
 - Un compte Gemini que Google refuse n’apparaît plus « connecté » : Réglages › Comptes le dit et propose d’utiliser une clé API Gemini à la place.
 - Claude reste affiché déconnecté même si ses réglages contiennent une clé API.
 - Les postes Claude retrouvent des modèles compatibles par défaut.
