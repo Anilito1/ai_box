@@ -6265,6 +6265,7 @@ input[type='radio']:focus-visible {
 }
 .acct-sub.err {
   color: var(--danger-text);
+  white-space: normal;
 }
 .acct-state {
   display: inline-flex;

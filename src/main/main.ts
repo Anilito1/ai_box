@@ -61,7 +61,7 @@ import { CapabilityStore } from './capabilities';
 import { Dictation } from './dictation';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
-import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
+import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleAccess, googleAccountStatus, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
 import { checkCodex, CODEX_MIN_VERSION, codexExecutable, codexLogout, codexVersion, versionAtLeast } from './providers/codex/cli';
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus, claudeVersion } from './providers/claude/cli';
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
@@ -815,8 +815,10 @@ class Hub {
         const refused = await checkGeminiKey(key);
         return refused ? { ...none, error: refused } : { ...none, ready: true, detail: 'API key' };
       }
-      const who = googleSignIn(accountDir(this.dataDir, a.id));
-      return who.signedIn ? { ...none, ready: true, detail: who.email } : none;
+      const home = accountDir(this.dataDir, a.id);
+      const who = googleSignIn(home);
+      // Signed in is not enough: Google may refuse the account (it no longer serves individual accounts through the CLI).
+      return googleAccountStatus(who, who.signedIn ? await googleAccess(this.gemini, home, this.mgr.environment(a.id)) : null);
     }
     if (a.kind === 'anthropic-key') {
       if (!key) return { ...none, error: 'no-key' };
