@@ -3,6 +3,8 @@ rem AI Box for Windows: double-click. Installs git and Node.js when missing, the
 rem menu icons, and opens it. From a checkout it installs that checkout; alone (downloaded file) it fetches the rest.
 rem AIBOX_REF: a commit to install instead of main (tests).
 setlocal
+rem Started from PowerShell 7, Windows PowerShell would load its modules (Get-FileHash...) and fail: its own ones.
+set "PSModulePath="
 set "SCRIPT=%~dp0scripts\install-windows.ps1"
 set "LOCAL="
 if exist "%~dp0.git" if exist "%SCRIPT%" set "LOCAL=1"
