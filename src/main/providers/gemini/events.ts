@@ -1,4 +1,5 @@
-import type { Totals } from '../../../shared/costs';
+import { addUsage, sumUsage, type Totals } from '../../../shared/costs';
+import { estimateUsage } from '../pricing';
 import { tokensOf } from '../../../shared/pulse';
 import type { Block } from '../blocks';
 import type { AgentEvent, HistoryMessage, LimitSignal } from '../types';
@@ -101,7 +102,9 @@ export class GeminiStream {
   private n = 0;
   private readonly seen = new Set<string>();
 
-  constructor(private model: () => string) {}
+  constructor(private model: () => string, initial?: Totals) {
+    if (initial) this.usage = initial;
+  }
 
   private id = () => `g-${++this.n}`;
 
@@ -156,6 +159,8 @@ export class GeminiStream {
         const status = str(update.status);
         return status === 'completed' || status === 'failed' ? [this.result(update)] : ACTIVITY;
       }
+      case 'available_commands_update':
+        return [{ type: 'commands', commands: list(update.availableCommands).filter((c) => str(c.name)).map((c) => ({ name: str(c.name), description: str(c.description), argumentHint: str(obj(c.input).hint) })) }];
       case 'usage_update':
         this.contextTokens = num(update.used);
         this.contextSize = num(update.size) || this.contextSize;
@@ -173,13 +178,22 @@ export class GeminiStream {
   /** The prompt answered: what it cost in tokens (per model when the CLI says), and how it ended. */
   turn(response: Json): AgentEvent[] {
     const events = this.flush();
-    const models = list(obj(obj(response._meta).quota).model_usage);
-    const add = (model: string, input: number, output: number) => {
+    const quota = obj(obj(response._meta).quota);
+    const models = list(quota.model_usage);
+    const add = (model: string, input: number, output: number, cached = 0) => {
       const before = this.usage.models[model] ?? { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-      this.usage = { cost: 0, models: { ...this.usage.models, [model]: { ...before, input: before.input + input, output: before.output + output } } };
+      const spent = estimateUsage(model, { input: Math.max(0, input - cached), output, cacheRead: cached, cacheWrite: 0 }, input);
+      const next = { ...this.usage.models, [model]: addUsage(before, spent) };
+      this.usage = { cost: sumUsage(next).cost, models: next };
     };
-    if (models.length > 0) for (const m of models) add(str(m.model) || this.model(), num(obj(m.token_count).input_tokens), num(obj(m.token_count).output_tokens));
-    else if (response.usage) add(this.model(), num(obj(response.usage).inputTokens), num(obj(response.usage).outputTokens));
+    if (models.length === 1 && response.usage) {
+      const u = obj(response.usage);
+      add(str(models[0].model) || this.model(), num(u.inputTokens), num(u.outputTokens) + num(u.thoughtTokens), num(u.cachedReadTokens));
+    } else if (models.length > 0) for (const m of models) add(str(m.model) || this.model(), num(obj(m.token_count).input_tokens), num(obj(m.token_count).output_tokens));
+    else if (response.usage) {
+      const u = obj(response.usage);
+      add(this.model(), num(u.inputTokens), num(u.outputTokens) + num(u.thoughtTokens), num(u.cachedReadTokens));
+    } else if (quota.token_count) add(this.model(), num(obj(quota.token_count).input_tokens), num(obj(quota.token_count).output_tokens));
     const reason = str(response.stopReason);
     events.push({
       type: 'turn',

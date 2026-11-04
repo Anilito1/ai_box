@@ -145,7 +145,7 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     minWidth: 960,
     minHeight: 600,
     title: APP_NAME,
-    icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
+    icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon-macos.png' : 'icon.png'),
     backgroundColor: chrome().color,
     titleBarStyle: 'hidden',
     titleBarOverlay: controls(),
@@ -1336,7 +1336,7 @@ async function start(): Promise<void> {
     // The window menus above are Windows and Linux only; a Mac keeps an app menu, with Edit for Cmd+C/V in the fields.
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]));
     // Run from source, the Dock would show Electron's icon.
-    if (!app.isPackaged) app.dock?.setIcon(join(here, '..', 'assets', 'icon.png'));
+    if (!app.isPackaged) app.dock?.setIcon(join(here, '..', 'assets', 'icon-macos.png'));
   }
   background = hub.cfg.background;
   createWindow(mgr, hub.cfg.language);

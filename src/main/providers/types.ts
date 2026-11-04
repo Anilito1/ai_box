@@ -147,6 +147,8 @@ export interface LaunchSpec {
   /** Absolute path of the program, empty = its default. */
   executable: string;
   env: Record<string, string>;
+  /** Prior process totals, for providers whose protocol only reports per-prompt usage. */
+  initialUsage?: Totals;
   conversation: { id: string; resume: boolean };
   input: AsyncIterable<AgentInput>;
   /** Something really came from the process: called at reception, before any translation. No timer of its own. */

@@ -1,4 +1,5 @@
-import type { Totals } from '../../../shared/costs';
+import { addUsage, sumUsage, type Totals } from '../../../shared/costs';
+import { estimateUsage } from '../pricing';
 import { tokensOf } from '../../../shared/pulse';
 import type { Block } from '../blocks';
 import type { AgentEvent, HistoryMessage, LimitSignal } from '../types';
@@ -185,6 +186,7 @@ export class CodexStream {
   contextSize = 0;
   /** The last snapshot of the account's limits. */
   limits: Json | null = null;
+  private previousTokens: Record<string, number> = {};
   private outputBase: number | null = null;
   private outputTotal: number | null = null;
   private readonly started = new Set<string>();
@@ -213,19 +215,16 @@ export class CodexStream {
         const total = obj(usage.total);
         const last = obj(usage.last);
         const cached = num(total.cachedInputTokens);
-        this.usage = {
-          cost: 0,
-          models: {
-            [this.model()]: {
-              cost: 0,
-              // OpenAI counts cached tokens inside the input: the hub counts them apart.
-              input: Math.max(0, num(total.inputTokens) - cached),
-              output: num(total.outputTokens),
-              cacheRead: cached,
-              cacheWrite: num(total.cacheWriteInputTokens),
-            },
-          },
-        };
+        const model = this.model();
+        const counters = { input: Math.max(0, num(total.inputTokens) - cached), output: num(total.outputTokens), cacheRead: cached, cacheWrite: num(total.cacheWriteInputTokens) };
+        // The thread counters span models: attribute only the increase to the model currently running.
+        const reset = Object.entries(counters).some(([key, value]) => value < (this.previousTokens[key] ?? 0));
+        const delta = Object.fromEntries(Object.entries(counters).map(([key, value]) => [key, Math.max(0, value - (reset ? 0 : this.previousTokens[key] ?? 0))])) as typeof counters;
+        this.previousTokens = counters;
+        const estimated = estimateUsage(model, delta, num(last.inputTokens));
+        const before = this.usage.models[model] ?? { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        const models = { ...this.usage.models, [model]: addUsage(before, estimated) };
+        this.usage = { cost: sumUsage(models).cost, models };
         this.contextTokens = num(last.inputTokens);
         this.contextSize = num(usage.modelContextWindow) || this.contextSize;
         // Totals of the thread: the turn's share runs from the last total seen, or for a thread resumed from the first
