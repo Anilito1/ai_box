@@ -64,6 +64,7 @@ import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
 import { AttachmentLimitError, AttachmentStore } from './attachments';
 import {
+  clientDataVariant,
   defaultMasterName,
   groupInfo,
   groupsText,
@@ -1488,7 +1489,7 @@ export class SessionManager extends EventEmitter {
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
     const base = isMaster
       ? masterPrompt(cfg)
-      : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)));
+      : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
     // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
     const append = harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message');
     // What the session asked for, if its account has it (a fallback step's own model first).

@@ -5032,6 +5032,13 @@ kbd,
   color: var(--text-2);
   cursor: pointer;
 }
+.setup-rule {
+  margin: 0 0 var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-family: inherit;
+  white-space: pre-wrap;
+}
 .setup-folders {
   display: flex;
   flex-direction: column;
