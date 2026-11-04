@@ -201,3 +201,19 @@ test('reasoning counts for the estimate; what a command prints does not', () => 
   assert.deepEqual(s.handle('item/reasoning/textDelta', { delta: '1234' }), [{ type: 'output', tokens: 1 }]);
   assert.deepEqual(s.handle('item/commandExecution/outputDelta', { delta: 'npm test' }), [{ type: 'activity' }]);
 });
+
+test('Codex estimates usage without repricing earlier turns after a model change', () => {
+  let model = 'gpt-5.3-codex';
+  const s = new CodexStream(() => model);
+  const report = (input: number, output: number) => s.handle('thread/tokenUsage/updated', { tokenUsage: { total: { inputTokens: input, outputTokens: output, cachedInputTokens: 0 }, last: { inputTokens: 100, outputTokens: 10 } } });
+  report(100, 10);
+  const first = s.usage.cost;
+  assert.equal(first, .000315);
+  report(100, 10);
+  assert.equal(s.usage.cost, first, 'duplicate snapshot costs nothing');
+  model = 'gpt-6.1-sol';
+  report(200, 20);
+  assert.equal(s.usage.models['gpt-5.3-codex'].input, 100);
+  assert.equal(s.usage.models[model].input, 100);
+  assert.equal(s.usage.models[model].cost, .0003);
+});
