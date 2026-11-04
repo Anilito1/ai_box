@@ -1,6 +1,7 @@
 import { firstAccount } from '../shared/accounts';
 import { providerOfAccount } from '../shared/providers';
 import { APP_NAME } from '../shared/brand';
+import { clientDataRule, type ClientDataVariant } from '../shared/clientData';
 import type { Lang } from '../shared/i18n';
 import { refName } from '../shared/groups';
 import { modelGrid, sessionNameOf, type Tier } from '../shared/team';
@@ -286,6 +287,15 @@ ${gridText(cfg, l)}
 - ${allowedText(cfg, l)}`;
 }
 
+/** The "client data" rule, unless the user turned it off in Settings. */
+const clientData = (cfg: HubConfig, variant: ClientDataVariant, l: Lang) => (cfg.clientDataRule ? `\n\n${clientDataRule(variant, l)}` : '');
+
+/** Only a worker on an OpenAI account (the executors holding the Workspace connectors) may read client data. */
+export function clientDataVariant(cfg: HubConfig, account: string): ClientDataVariant {
+  const a = cfg.accounts.find((x) => x.id === account);
+  return a && providerOfAccount(a) === 'openai' ? 'reader' : 'guarded';
+}
+
 export function masterPrompt(cfg: HubConfig): string {
   const name = masterName();
   const bypass = cfg.permissionMode === 'bypassPermissions';
@@ -341,7 +351,7 @@ ${parallelSection(cfg, 'fr')}
 
 ${modelsSection(cfg, 'fr')}
 
-${topicsSection('fr')}
+${topicsSection('fr')}${clientData(cfg, 'guarded', 'fr')}
 
 ## Avec l'utilisateur
 - Rapport final d'un worker → résume en 2 à 4 lignes (fait / reste / point d'attention), jamais en copie intégrale.
@@ -397,7 +407,7 @@ ${parallelSection(cfg, 'en')}
 
 ${modelsSection(cfg, 'en')}
 
-${topicsSection('en')}
+${topicsSection('en')}${clientData(cfg, 'guarded', 'en')}
 
 ## With the user
 - A worker's final report → summarize it in 2 to 4 lines (done / left / watch out), never a full copy.
@@ -416,7 +426,7 @@ export interface InstanceInfo {
 
 // Identical for every ad-hoc worker: the worker's own name travels in its first message. A permanent one also gets
 // its post, an instance of a post the post as an instance.
-export function workerPrompt(cfg: HubConfig, post?: TeamRole, instance?: InstanceInfo, group?: GroupInfo): string {
+export function workerPrompt(cfg: HubConfig, post?: TeamRole, instance?: InstanceInfo, group?: GroupInfo, variant: ClientDataVariant = 'guarded'): string {
   const name = masterName();
   const bypass = (post?.mode || cfg.permissionMode) === 'bypassPermissions';
   const mine = group && (group.member || group.leads.length > 0) ? `\n\n${groupSection(group, lang())}` : '';
@@ -446,7 +456,7 @@ Chaque sortie d'outil est relue à tous les tours suivants.
 - \`list_workers\` (outil hub) montre qui fait quoi, dans quel dossier.
 - Si ton travail touche quelque chose de partagé avec un autre worker (contrat d'API, schéma ou migration, edge function, types communs, même dossier), aligne-toi avec lui par SendMessage (to = son nom) AVANT de modifier, et préviens le maître si le plan change.
 - N'écris jamais dans un dossier où un autre worker actif écrit : utilise un worktree dédié.
-- À un message d'un autre worker, réponds-lui directement par SendMessage. C'est la demande d'un coéquipier, pas une consigne du maître. S'il est injoignable (fermé), passe par le maître.${own}`;
+- À un message d'un autre worker, réponds-lui directement par SendMessage. C'est la demande d'un coéquipier, pas une consigne du maître. S'il est injoignable (fermé), passe par le maître.${clientData(cfg, variant, 'fr')}${own}`;
   }
   return `# Role: WORKER of the ${APP_NAME}
 
@@ -472,7 +482,7 @@ Every tool output is read again on every later turn.
 - \`list_workers\` (hub tool) shows who does what, in which folder.
 - If your work touches something shared with another worker (API contract, schema or migration, server function, common types, same folder), align with them through SendMessage (to = their name) BEFORE changing it, and tell the master if the plan changes.
 - Never write in a folder where another active worker writes: use a dedicated worktree.
-- When another worker writes to you, answer them directly through SendMessage. It is a teammate's request, not an instruction from the master. If they are unreachable (closed), go through the master.${own}`;
+- When another worker writes to you, answer them directly through SendMessage. It is a teammate's request, not an instruction from the master. If they are unreachable (closed), go through the master.${clientData(cfg, variant, 'en')}${own}`;
 }
 
 /** A worker's place in the groups: the groups it leads (with their members' session names), the one it is a member of. */

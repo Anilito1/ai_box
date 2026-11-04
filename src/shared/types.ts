@@ -643,6 +643,8 @@ export interface HubSettings {
   permissionMode: Mode | '';
   /** The user's own guidance, appended to the master's system prompt. */
   masterInstructions: string;
+  /** The "client data" rule in every session's system prompt (shared/clientData); on by default. */
+  clientDataRule: boolean;
   github: {
     /** Client ID of the GitHub OAuth App used for the device flow; empty = the build's default. */
     clientId: string;

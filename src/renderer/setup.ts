@@ -2,6 +2,7 @@ import { effortsFor, splitRecent } from '../shared/models';
 import { providerOfAccount } from '../shared/providers';
 import { CHAIN_MAX, FALLBACK_BACKS, isPaid, type FallbackConfig } from '../shared/fallback';
 import { DEFAULT_ACCOUNT } from '../shared/accounts';
+import { clientDataRule } from '../shared/clientData';
 import { parseHex } from '../shared/background';
 import { applyBackground } from './background';
 import { ProvidersPanel } from './providers';
@@ -1007,7 +1008,30 @@ export class SetupView {
     area.addEventListener('change', () => void this.flush(false));
     f.append(area);
     this.instructionFile(f, area);
-    el.append(f);
+    el.append(f, this.clientDataField(s));
+  }
+
+  /** The "client data" rule every session gets: on or off, and the exact text, as the master and the workers read it. */
+  private clientDataField(s: HubSettings): HTMLElement {
+    const f = h('div', 'setup-field');
+    const on = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = s.clientDataRule;
+    box.addEventListener('change', () => void this.save({ clientDataRule: box.checked }));
+    const text = h('span', 'setup-choice-text');
+    text.append(h('span', 'setup-choice-title', t('setup.sessions.clientData')), h('span', 'setup-choice-hint', t('setup.sessions.clientData.hint')));
+    on.append(box, text);
+    const rule = h('details', 'setup-advanced');
+    rule.append(
+      h('summary', '', t('setup.sessions.clientData.show')),
+      h('p', 'setup-hint', t('setup.sessions.clientData.guarded')),
+      h('pre', 'setup-rule', clientDataRule('guarded', LANG)),
+      h('p', 'setup-hint', t('setup.sessions.clientData.reader')),
+      h('pre', 'setup-rule', clientDataRule('reader', LANG)),
+    );
+    f.append(on, rule);
+    return f;
   }
 
   /** "Allow everything" only takes effect once the user ticks that they understand what it lets the sessions do. */

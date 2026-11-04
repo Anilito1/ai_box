@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-04
+
+### Ajouté
+
+- Une règle « Données clients » tient les données de tes clients loin de Claude : seuls les workers OpenAI les lisent, et ils les anonymisent avant de les transmettre. Elle se voit et se désactive dans Réglages › Sessions.
+
 ## 2026-11-03
 
 ### Modifié
