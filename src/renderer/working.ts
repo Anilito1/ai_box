@@ -1,3 +1,4 @@
+import { taskView } from '../shared/backgroundTask';
 import { pulseState, shortTokens } from '../shared/pulse';
 import type { ChatItem, SessionView } from '../shared/types';
 import { workView } from '../shared/workView';
@@ -67,8 +68,9 @@ function reopening(resetsAt: number | null, now: number): string {
 /**
  * "✻ Cogitation… (12 s · Bash npm test · ↓ 3,2 k tokens) ● signal il y a 4 s": shown while a turn runs. The
  * starburst, verbs and clock only tell that the app runs; the dot and the tokens tell what came out of the process.
- * Background tasks (subagents, shells) that outlive the turn are a still list under it, "En arrière-plan  [Serveur
- * 8821] [Point 1…]": nothing moves there, so a session with only those does not look like it is thinking.
+ * Background tasks (subagents, shells) that outlive the turn are a still list under it, one per line ("En
+ * arrière-plan / calculette V1 · localhost:8821 / Point 1…"; a local server's address opens in the browser): nothing
+ * moves there, so a session with only those does not look like it is thinking.
  */
 export class WorkingLine {
   readonly root = h('div', 'working-stack');
@@ -90,7 +92,8 @@ export class WorkingLine {
   private session: SessionView | undefined;
   private mode: 'busy' | 'waiting' = 'busy';
 
-  constructor() {
+  /** `open`: how a link leaves the app (the default browser). */
+  constructor(private readonly open: (url: string) => void) {
     this.pulse.title = t('work.signalTip');
     this.pulse.append(h('span', 'working-pulse-dot'), this.pulseLong, this.pulseShort);
     const hint = h('span', 'working-hint');
@@ -108,7 +111,7 @@ export class WorkingLine {
   update(session: SessionView | null | undefined, activity: string): void {
     this.session = session ?? undefined;
     const { turn, tasks } = workView(session);
-    this.showTasks(tasks);
+    this.showTasks(tasks, session?.backgroundPorts ?? {});
     this.root.hidden = !turn && tasks.length === 0;
     this.line.hidden = !turn;
     if (!turn) {
@@ -129,18 +132,31 @@ export class WorkingLine {
     this.tick(Date.now());
   }
 
-  /** "En arrière-plan" and one chip per task; rebuilt only when the list changes (it renders 25 times a second while a reply streams). */
-  private showTasks(tasks: string[]): void {
+  /** "En arrière-plan" and one line per task; rebuilt only when the list changes (it renders 25 times a second while a reply streams). */
+  private showTasks(tasks: string[], ports: Record<string, number>): void {
     this.tasks.hidden = tasks.length === 0;
-    const key = tasks.join('\n');
+    const key = tasks.map((task) => `${task}\t${ports[task] ?? ''}`).join('\n');
     if (key === this.tasksKey) return;
     this.tasksKey = key;
     this.tasks.replaceChildren(
       h('span', 'working-tasks-label', t('work.background')),
       ...tasks.map((task) => {
-        const chip = h('span', 'working-task', oneLine(task));
-        chip.title = task;
-        return chip;
+        const view = taskView(task, ports[task]);
+        const row = h('div', 'working-task');
+        row.title = view.label;
+        row.append(h('span', 'working-task-text', view.summary));
+        if (view.url) {
+          const { url } = view;
+          const link = h('a', 'working-task-link', `localhost:${view.port}`);
+          link.href = url;
+          link.title = url;
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.open(url);
+          });
+          row.append(h('span', 'working-task-sep', '·'), link);
+        }
+        return row;
       }),
     );
   }

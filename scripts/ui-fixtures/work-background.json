@@ -36,14 +36,18 @@
    "status": "idle",
    "busySince": null,
    "background": [
-    "Serveur 8821",
-    "Point 1 : Équipement seul",
+    "Relaunch calculette layout variant V1 on port 8821",
+    "Serve calculette layout variant V2 (maquette)",
+    "Run the full test suite",
     "Relaunch calculette layout validation finale complète avec un libellé très très long pour tester la troncature"
    ],
    "pulse": {
     "signalAt": null,
     "tokens": 0,
     "estimated": false
+   },
+   "backgroundPorts": {
+    "Serve calculette layout variant V2 (maquette)": 8822
    }
   }
  ]

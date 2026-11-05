@@ -5,6 +5,7 @@ import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
+import { taskView } from '../shared/backgroundTask';
 import { dayOf } from '../shared/costs';
 import { arrangeTeam, type Arranged } from '../shared/teamFolders';
 import { windowFigure } from '../shared/usage';
@@ -224,6 +225,12 @@ function setText(el: HTMLElement, text: string): void {
 }
 
 /** What the card says under the meter: live activity while working, else the latest news. */
+/** The first background task for the compact card: its summary and, for a server, its address. */
+function cardTask(s: SessionView): string {
+  const task = taskView(s.background[0], s.backgroundPorts?.[s.background[0]]);
+  return oneLine(task.port === null ? task.summary : `${task.summary} · localhost:${task.port}`);
+}
+
 function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
   if (s.status === 'attention') return { text: t('card.attention'), cls: 'warn' };
   if (s.tree?.install === 'running' && !isClosed(s)) return { text: t('card.installing'), cls: 'live' };
@@ -233,7 +240,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
     const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
-  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: [oneLine(s.background[0]), s.background.length > 1 ? `+${s.background.length - 1}` : ''].filter(Boolean).join(' · ') }), cls: 'live' };
+  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: [cardTask(s), s.background.length > 1 ? `+${s.background.length - 1}` : ''].filter(Boolean).join(' · ') }), cls: 'live' };
   if (failed(s)) return { text: t('card.failed', { error: s.error }), cls: 'error' };
   if (s.post && asleep(s)) return { text: oneLine(s.post.description), cls: '' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
