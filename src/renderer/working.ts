@@ -1,7 +1,8 @@
 import { pulseState, shortTokens } from '../shared/pulse';
 import type { ChatItem, SessionView } from '../shared/types';
+import { workView } from '../shared/workView';
 import { h, oneLine } from './dom';
-import { LANG, t, tn } from './i18n';
+import { LANG, t } from './i18n';
 
 // Claude Code's spinner: the starburst breathes in and out while a verb rotates.
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
@@ -64,12 +65,16 @@ function reopening(resetsAt: number | null, now: number): string {
 }
 
 /**
- * "✻ Cogitation… (12 s · Bash npm test · ↓ 3,2 k tokens) ● signal il y a 4 s": shown while a session works. The
+ * "✻ Cogitation… (12 s · Bash npm test · ↓ 3,2 k tokens) ● signal il y a 4 s": shown while a turn runs. The
  * starburst, verbs and clock only tell that the app runs; the dot and the tokens tell what came out of the process.
- * Between turns it stays up while background tasks (subagents, shells) are still running.
+ * Background tasks (subagents, shells) that outlive the turn are a still list under it, "En arrière-plan  [Serveur
+ * 8821] [Point 1…]": nothing moves there, so a session with only those does not look like it is thinking.
  */
 export class WorkingLine {
-  readonly root = h('div', 'working');
+  readonly root = h('div', 'working-stack');
+  private readonly line = h('div', 'working');
+  private readonly tasks = h('div', 'working-tasks');
+  private tasksKey = '';
   private readonly glyph = h('span', 'working-glyph');
   private readonly verb = h('span', 'working-verb');
   private readonly meta = h('span', 'working-meta');
@@ -83,7 +88,7 @@ export class WorkingLine {
   private seed = 0;
   private activity = '';
   private session: SessionView | undefined;
-  private mode: 'busy' | 'waiting' | 'background' = 'busy';
+  private mode: 'busy' | 'waiting' = 'busy';
 
   constructor() {
     this.pulse.title = t('work.signalTip');
@@ -92,38 +97,52 @@ export class WorkingLine {
     hint.append(this.hintState, this.hintEsc);
     const info = h('span', 'working-info');
     info.append(this.meta, this.facts);
-    this.root.append(this.glyph, this.verb, info, this.pulse, hint);
+    this.line.append(this.glyph, this.verb, info, this.pulse, hint);
+    this.root.append(this.line, this.tasks);
     this.root.hidden = true;
+    this.line.hidden = true;
+    this.tasks.hidden = true;
   }
 
-  /** Busy: animated from the turn's start. Attention: frozen on the permission prompt. Otherwise shown only for background tasks. */
+  /** Busy: animated from the turn's start. Attention: frozen on the permission prompt. Background tasks: a still list, whatever the turn does. */
   update(session: SessionView | null | undefined, activity: string): void {
     this.session = session ?? undefined;
-    const status = session?.status;
-    const working = status === 'busy' || status === 'attention';
-    const on = working || (status !== 'exited' && !!session?.background.length);
-    this.root.hidden = !on;
-    if (!on) {
+    const { turn, tasks } = workView(session);
+    this.showTasks(tasks);
+    this.root.hidden = !turn && tasks.length === 0;
+    this.line.hidden = !turn;
+    if (!turn) {
       active.delete(this);
       this.since = 0;
       return;
     }
-    this.mode = status === 'attention' ? 'waiting' : working ? 'busy' : 'background';
-    this.root.classList.toggle('waiting', this.mode === 'waiting');
-    this.root.classList.toggle('background', this.mode === 'background');
+    this.mode = session?.status === 'attention' ? 'waiting' : 'busy';
+    this.line.classList.toggle('waiting', this.mode === 'waiting');
     this.activity = activity;
-    if (working) {
-      const start = session?.busySince ?? (this.since || Date.now());
-      if (start !== this.since) {
-        this.since = start;
-        this.seed = Math.floor(Math.random() * VERBS.length);
-      }
-    } else {
-      this.since = 0;
+    const start = session?.busySince ?? (this.since || Date.now());
+    if (start !== this.since) {
+      this.since = start;
+      this.seed = Math.floor(Math.random() * VERBS.length);
     }
     active.add(this);
     startTicker();
     this.tick(Date.now());
+  }
+
+  /** "En arrière-plan" and one chip per task; rebuilt only when the list changes (it renders 25 times a second while a reply streams). */
+  private showTasks(tasks: string[]): void {
+    this.tasks.hidden = tasks.length === 0;
+    const key = tasks.join('\n');
+    if (key === this.tasksKey) return;
+    this.tasksKey = key;
+    this.tasks.replaceChildren(
+      h('span', 'working-tasks-label', t('work.background')),
+      ...tasks.map((task) => {
+        const chip = h('span', 'working-task', oneLine(task));
+        chip.title = task;
+        return chip;
+      }),
+    );
   }
 
   private limitText(s: SessionView, now: number): string {
@@ -133,20 +152,13 @@ export class WorkingLine {
 
   /** "(2 min 14 s · Bash npm test": cut when short of room. The tool's length and the tokens keep theirs, in `facts`. */
   private tickInfo(s: SessionView, now: number): void {
-    const n = s.background.length;
-    if (this.mode === 'background') {
-      setText(this.meta, `(${[oneLine(s.background[0]).slice(0, 90), n > 1 ? `+${n - 1}` : ''].filter(Boolean).join(' · ')})`);
-      setText(this.facts, '');
-      return;
-    }
     const tool = this.mode === 'waiting' ? null : s.tool;
     const doing = tool ? oneLine(`${tool.name} ${tool.summary}`).slice(0, 90) : this.activity;
     const head = [fmtElapsed(now - this.since), doing].filter(Boolean).join(' · ');
     const length = tool && now - tool.since >= TOOL_SHOWN_MS ? t('work.toolFor', { time: fmtShort(now - tool.since) }) : '';
     const { tokens, estimated } = s.pulse;
     const count = tokens > 0 ? t('work.tokens', { count: `${estimated ? '~' : ''}${shortTokens(tokens, LANG)}` }) : '';
-    const more = [n ? tn('work.tasks', n) : '', count].filter(Boolean).join(' · ');
-    const tail = [length, more && `· ${more}`].filter(Boolean).join(' ');
+    const tail = [length, count && `· ${count}`].filter(Boolean).join(' ');
     setText(this.meta, tail ? `(${head}` : `(${head})`);
     setText(this.facts, tail && `${tail})`);
   }
@@ -154,7 +166,7 @@ export class WorkingLine {
   private tickPulse(s: SessionView, now: number): void {
     const state = pulseState(s, now);
     this.pulse.hidden = !state;
-    this.root.classList.toggle('stuck', state?.tone === 'stuck');
+    this.line.classList.toggle('stuck', state?.tone === 'stuck');
     setText(this.hintEsc, state?.tone === 'stuck' ? ` · ${t('work.escHint')}` : t('work.escHint'));
     if (!state) return;
     if (this.pulse.dataset.tone !== state.tone) this.pulse.dataset.tone = state.tone;
@@ -173,15 +185,13 @@ export class WorkingLine {
     const verb =
       this.mode === 'waiting'
         ? t('work.waiting')
-        : this.mode === 'background'
-          ? t('work.background')
-          : limited
-            ? this.limitText(s, now)
-            : s.retrying
-              ? t('work.retry')
-              : s.compacting
-                ? t('slash.compacting')
-                : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
+        : limited
+          ? this.limitText(s, now)
+          : s.retrying
+            ? t('work.retry')
+            : s.compacting
+              ? t('slash.compacting')
+              : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
       if (!reducedMotion.matches)

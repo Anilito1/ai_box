@@ -2157,11 +2157,35 @@ kbd,
 .working.waiting .working-verb {
   color: var(--warn);
 }
-.working.background .working-glyph {
-  color: var(--text-3);
+/* Background tasks: a still list under the turn's line, highlighted but never animated. */
+.working-tasks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-sm);
+  user-select: none;
 }
-.working.background .working-hint {
+.working-tasks[hidden] {
   display: none;
+}
+.working-tasks-label {
+  flex: none;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.working-task {
+  min-width: 0;
+  max-width: 280px;
+  padding: 2px var(--sp-2);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Narrow: the secondary goes first, the hint, then the words around the time; "seems stuck" stays. */
 @container (max-width: 640px) {

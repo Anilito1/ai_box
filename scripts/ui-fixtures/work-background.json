@@ -1,0 +1,50 @@
+{
+ "sessions": [
+  {
+   "id": "master",
+   "role": "master",
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "name": "hub-maitre",
+   "mission": "",
+   "cwd": "/tmp/demo",
+   "model": "",
+   "modelLabel": "",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "",
+   "metrics": null,
+   "createdAt": 1793876621103,
+   "idleSince": null,
+   "agents": 0,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "tool": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "status": "idle",
+   "busySince": null,
+   "background": [
+    "Serveur 8821",
+    "Point 1 : Équipement seul",
+    "Relaunch calculette layout validation finale complète avec un libellé très très long pour tester la troncature"
+   ],
+   "pulse": {
+    "signalAt": null,
+    "tokens": 0,
+    "estimated": false
+   }
+  }
+ ]
+}
