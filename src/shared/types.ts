@@ -239,6 +239,8 @@ export interface SessionView {
   busySince: number | null;
   /** Descriptions of the background tasks (subagents, shells) still running in this session. */
   background: string[];
+  /** The port of those that serve on one and do not say it in their description, by description (read from the command or the output). */
+  backgroundPorts?: Record<string, number>;
   /** When it turned idle, else null. */
   idleSince: number | null;
   /** Subagents running, in the foreground or in the background. */

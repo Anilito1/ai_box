@@ -20,6 +20,8 @@ import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../
 import { buildHandoff, staleNote } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
 import { tokensOf, TurnTokens } from '../shared/pulse';
+import { portOf } from '../shared/backgroundTask';
+import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -186,6 +188,12 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   turnOver: boolean;
   /** Tools of the conversation called and not answered yet, by id, oldest first. */
   tools: Map<string, NonNullable<SessionView['tool']>>;
+  /** Shells started in the background, by tool call id: where a task's port is read from. */
+  bgRuns: Map<string, BackgroundRun>;
+  /** Port of each background task that serves one, by task description. */
+  bgPorts: Record<string, number>;
+  /** Looks for the ports again until the tasks have printed theirs. */
+  bgScan: NodeJS.Timeout | null;
   tokens: TurnTokens;
   /** Id of the post of a permanent worker, else null. */
   roleId: string | null;
@@ -320,6 +328,8 @@ const HISTORY_MAX = 400;
 const REPORT_ITEMS = 12;
 // A queued message starts its turn within this delay; only a worker still idle after it has really stopped.
 const SILENCE_MS = 5_000;
+/** When a background task's port is looked for again after the first reading, while it has none. */
+const PORT_SCAN_MS = [1_500, 3_000, 6_000, 15_000, 30_000];
 // Deltas can come by the hundred per second: what they say reaches the windows at this pace.
 const PULSE_MS = 1000;
 // Session costs (USD) the mascot celebrates when a turn crosses them.
@@ -1342,6 +1352,7 @@ export class SessionManager extends EventEmitter {
         createdAt: s.createdAt,
         busySince: s.busySince,
         background: s.background,
+        backgroundPorts: s.bgPorts,
         idleSince: s.status === 'idle' ? s.idleAt : null,
         agents: s.agents,
         compacting: s.compacting,
@@ -1596,6 +1607,9 @@ export class SessionManager extends EventEmitter {
   /** Background tasks, subagents, compaction and retries belong to one CLI process. */
   private resetActivity(s: Session): void {
     s.background = [];
+    s.bgRuns.clear();
+    s.bgPorts = {};
+    this.stopPortScan(s);
     s.agentTasks.clear();
     s.agents = 0;
     s.compacting = false;
@@ -1680,6 +1694,7 @@ export class SessionManager extends EventEmitter {
         break;
       case 'background':
         s.background = ev.tasks;
+        this.scanPorts(s);
         if (s.background.length === 0) this.lookAgainSoon(s, q);
         break;
       case 'agentTask':
@@ -1743,6 +1758,10 @@ export class SessionManager extends EventEmitter {
           this.upsert(s, withTopics(item, filed?.get(item.id)));
           if (item.kind === 'tool' && !s.tools.has(item.id)) s.tools.set(item.id, { name: item.name, summary: item.summary, since: Date.now() });
         }
+        for (const b of blocks) {
+          const run = b.type === 'tool_use' ? runOf(b.name, b.input) : null;
+          if (run) s.bgRuns.set(String(b.id), run);
+        }
         if (hasText) s.liveId = null;
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === masterName())) {
           s.owesReport = false;
@@ -1773,6 +1792,8 @@ export class SessionManager extends EventEmitter {
       case 'toolResults':
         for (const b of ev.blocks) {
           s.tools.delete(String(b.tool_use_id));
+          const run = s.bgRuns.get(String(b.tool_use_id));
+          if (run) run.outputFile = outputFileOf(resultText(b.content));
           const item = s.items.get(String(b.tool_use_id));
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
@@ -1847,6 +1868,42 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Chasing a report and closing a session give up on one that is not settled: called again once it may be. */
+  /**
+   * The port of each background task that serves one: named in its description (the list reads it there), else in the
+   * command that started it or in what it printed. A server prints its address a moment after it starts, so this
+   * looks again a few times while a task has none.
+   */
+  private scanPorts(s: Session, attempt = 0): void {
+    this.stopPortScan(s);
+    const labels = new Set(s.background);
+    for (const label of Object.keys(s.bgPorts)) if (!labels.has(label)) delete s.bgPorts[label];
+    const open = s.background.filter((label) => !(label in s.bgPorts) && portOf(label) === null && runFor(label, s.bgRuns.values()));
+    if (open.length === 0) return;
+    void (async () => {
+      let found = false;
+      for (const label of open) {
+        const run = runFor(label, s.bgRuns.values());
+        const port = run ? await portOfRun(run) : null;
+        if (port !== null && s.background.includes(label)) {
+          s.bgPorts[label] = port;
+          found = true;
+        }
+      }
+      if (found) {
+        s.bgPorts = { ...s.bgPorts };
+        this.changed();
+      }
+      if (attempt < PORT_SCAN_MS.length && s.background.some((label) => !(label in s.bgPorts) && portOf(label) === null)) {
+        s.bgScan = setTimeout(() => this.scanPorts(s, attempt + 1), PORT_SCAN_MS[attempt]);
+      }
+    })();
+  }
+
+  private stopPortScan(s: Session): void {
+    if (s.bgScan) clearTimeout(s.bgScan);
+    s.bgScan = null;
+  }
+
   private lookAgainSoon(s: Session, q: AgentProcess): void {
     if (s.role === 'worker' && s.owesReport) setTimeout(() => this.chaseSilence(s, q), SILENCE_MS);
     if (s.closeWhenDone) setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
@@ -3898,6 +3955,9 @@ export class SessionManager extends EventEmitter {
       approvedAt: null,
       turnOver: true,
       tools: new Map(),
+      bgRuns: new Map(),
+      bgPorts: {},
+      bgScan: null,
       tokens: new TurnTokens(),
       limit: null,
       error: '',

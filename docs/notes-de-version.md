@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les tâches en arrière-plan s’affichent une par ligne avec un petit résumé ; pour un serveur local, un lien « localhost:8822 » l’ouvre dans le navigateur.
 - Quand seules des tâches tournent en arrière-plan, l’animation s’arrête : elles s’affichent en liste fixe sous « En arrière-plan », et l’animation reste réservée à un tour en cours.
 
 ## 2026-11-04
