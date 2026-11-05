@@ -233,7 +233,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
     const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
-  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: oneLine(s.background[0]) }), cls: 'live' };
+  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: [oneLine(s.background[0]), s.background.length > 1 ? `+${s.background.length - 1}` : ''].filter(Boolean).join(' · ') }), cls: 'live' };
   if (failed(s)) return { text: t('card.failed', { error: s.error }), cls: 'error' };
   if (s.post && asleep(s)) return { text: oneLine(s.post.description), cls: '' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };

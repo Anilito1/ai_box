@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-05
+
+### Modifié
+
+- Quand seules des tâches tournent en arrière-plan, l’animation s’arrête : elles s’affichent en liste fixe sous « En arrière-plan », et l’animation reste réservée à un tour en cours.
+
 ## 2026-11-04
 
 ### Ajouté
