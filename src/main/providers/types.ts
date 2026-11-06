@@ -89,7 +89,24 @@ export type AgentEvent =
   | { type: 'retry' }
   /** Level signal: the background tasks running now (their descriptions). */
   | { type: 'background'; tasks: string[] }
-  | { type: 'agentTask'; id: string; state: 'start' | 'done' | 'failed' }
+  /**
+   * A subagent task starts or ends. What the program says of it besides (the tool call that launched it, its
+   * description and type, its summary at the end) comes only when it says it.
+   */
+  | {
+      type: 'agentTask';
+      id: string;
+      state: 'start' | 'done' | 'failed' | 'stopped';
+      toolUseId?: string;
+      description?: string;
+      agentType?: string;
+      background?: boolean;
+      summary?: string;
+    }
+  /** A subagent task goes on: the tool it last called, a line of progress, or its move to the background. */
+  | { type: 'agentProgress'; id: string; toolUseId?: string; lastTool?: string; summary?: string; background?: boolean }
+  /** What a subagent's model wrote or got back, by the id of the tool call that launched it. */
+  | { type: 'agentSteps'; parent: string; blocks: Block[] }
   | { type: 'limit'; signal: LimitSignal }
   /** A fragment of the reply being written: a text block starts, or text is added to it. */
   | { type: 'stream'; textStart: boolean; delta: string }

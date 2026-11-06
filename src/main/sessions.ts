@@ -22,6 +22,7 @@ import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, 
 import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
+import { Subagents } from './subagents';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -57,6 +58,7 @@ import {
   type Role,
   type SessionPulse,
   type SessionView,
+  type SubagentView,
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
@@ -123,7 +125,7 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -180,6 +182,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   activeAt: number;
   /** Ids of the subagent tasks still running (task_started until their notification). */
   agentTasks: Set<string>;
+  /** The subagents it launched, with their activity: what the sidebar and its view list under it. */
+  subagents: Subagents;
   /** When it last turned idle; unlike activeAt, frames arriving meanwhile (tasks, limits) leave it alone. */
   idleAt: number;
   /** Last event that really came from the process: unlike activeAt, nothing the hub does moves it. */
@@ -410,6 +414,21 @@ const withTopics = (item: ChatItem, topics: string[] = []): ChatItem => {
   const [topic, ...also] = topics;
   return topic ? { ...item, topic, ...(also.length > 0 ? { also } : {}) } : item;
 };
+/** "calculette V2 [Explore, sonnet] · en cours depuis 3 min · dernier : Bash npm test": how the master reads a subagent. */
+function subagentLine(a: SubagentView, max: number): string {
+  const ms = (a.endedAt ?? Date.now()) - a.startedAt;
+  const s = Math.max(0, Math.round(ms / 1000));
+  const time = s < 60 ? `${s} s` : `${Math.floor(s / 60)} min`;
+  const kind = [a.agentType, a.model].filter(Boolean).join(', ');
+  return [
+    `${oneLine(a.description || '?', max)}${kind ? ` [${kind}]` : ''}${a.background ? ' (bg)' : ''}`,
+    t(`subagent.${a.status}`, { time }),
+    a.activity ? t('subagent.last', { text: oneLine(a.activity, max) }) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 const oneLine = (text: string, max: number): string => {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
@@ -1355,6 +1374,7 @@ export class SessionManager extends EventEmitter {
         backgroundPorts: s.bgPorts,
         idleSince: s.status === 'idle' ? s.idleAt : null,
         agents: s.agents,
+        subagents: s.subagents.views(),
         compacting: s.compacting,
         retrying: s.retrying,
         limit: s.limit,
@@ -1611,6 +1631,7 @@ export class SessionManager extends EventEmitter {
     s.bgPorts = {};
     this.stopPortScan(s);
     s.agentTasks.clear();
+    s.subagents.stopAll();
     s.agents = 0;
     s.compacting = false;
     s.retrying = false;
@@ -1700,6 +1721,13 @@ export class SessionManager extends EventEmitter {
       case 'agentTask':
         if (ev.state === 'start') this.trackAgent(s, ev.id, true);
         else this.endAgent(s, ev.id, ev.state === 'failed');
+        s.subagents.task(ev);
+        break;
+      case 'agentProgress':
+        s.subagents.progress(ev);
+        break;
+      case 'agentSteps':
+        s.subagents.steps(ev.parent, ev.blocks);
         break;
       case 'limit':
         // Refused by a plan limit: the program waits or gives up; either way the session is stuck until the next frame.
@@ -1758,6 +1786,7 @@ export class SessionManager extends EventEmitter {
           this.upsert(s, withTopics(item, filed?.get(item.id)));
           if (item.kind === 'tool' && !s.tools.has(item.id)) s.tools.set(item.id, { name: item.name, summary: item.summary, since: Date.now() });
         }
+        s.subagents.calls(all);
         for (const b of blocks) {
           const run = b.type === 'tool_use' ? runOf(b.name, b.input) : null;
           if (run) s.bgRuns.set(String(b.id), run);
@@ -1790,6 +1819,7 @@ export class SessionManager extends EventEmitter {
         break;
       }
       case 'toolResults':
+        s.subagents.results(ev.blocks);
         for (const b of ev.blocks) {
           s.tools.delete(String(b.tool_use_id));
           const run = s.bgRuns.get(String(b.tool_use_id));
@@ -3601,7 +3631,11 @@ export class SessionManager extends EventEmitter {
       const tree = this.treeLine(s);
       if (tree) lines.push(tree);
       if (s.mission) lines.push(t('workers.mission', { text: oneLine(s.mission, 160) }));
-      if (s.background.length > 0) lines.push(t('workers.background', { text: oneLine(s.background.join(' ; '), 200) }));
+      // A running subagent has its own line: the background list keeps the shells and the like.
+      const running = s.subagents.views().filter((a) => a.status === 'running');
+      const others = s.background.filter((label) => !running.some((a) => a.description === label));
+      if (others.length > 0) lines.push(t('workers.background', { text: oneLine(others.join(' ; '), 200) }));
+      for (const a of running) lines.push(t('workers.subagent', { text: subagentLine(a, 80) }));
       if (s.lastMessage) lines.push(t('workers.last', { text: oneLine(s.lastMessage, 200) }));
       return lines.join('\n');
     };
@@ -3646,9 +3680,11 @@ export class SessionManager extends EventEmitter {
       })
       .filter((line): line is string => line !== null)
       .slice(-REPORT_ITEMS);
+    const subs = s.subagents.views();
     return [
       this.workerLine(s),
       s.background.length > 0 ? t('report.background', { text: s.background.join(' ; ') }) : '',
+      subs.length > 0 ? t('report.subagents', { text: subs.map((a) => `- ${subagentLine(a, 160)}${a.status !== 'running' && a.result ? ` · ${t('subagent.result', { text: oneLine(a.result, 200) })}` : ''}`).join('\n') }) : '',
       t('report.mission', { text: s.mission }),
       t('report.activity', { text: steps.join('\n') || t('report.nothing') }),
       t('report.last', { text: s.lastMessage || t('report.none') }),
@@ -3978,6 +4014,7 @@ export class SessionManager extends EventEmitter {
       closeWhenDone: false,
       activeAt: Date.now(),
       agentTasks: new Set(),
+      subagents: new Subagents(),
       idleAt: Date.now(),
       roleId: null,
       note: '',

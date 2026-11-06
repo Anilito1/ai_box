@@ -6704,3 +6704,273 @@ input[type='radio']:focus-visible {
   flex: 1;
   min-width: 0;
 }
+
+/* ---------- subagents: indented rows under a card and in a session's view; only a running one moves ---------- */
+.card-subs,
+.sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.card-subs {
+  grid-column: 2;
+  margin-top: var(--sp-1);
+}
+.card-subs[hidden],
+.sub-list[hidden],
+.sub-section[hidden] {
+  display: none;
+}
+.sub-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 3px 6px 3px var(--sp-3);
+  border: 0;
+  border-left: 2px solid var(--hairline);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.sub-row:hover,
+.sub-row:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+}
+.sub-row.s-running {
+  border-left-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text);
+}
+.sub-row.s-failed {
+  border-left-color: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+.sub-row.flash {
+  animation: sub-flash 1.2s var(--ease-out);
+}
+.sub-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sub-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sub-time {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.sub-act {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 14px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.sub-act-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sub-row.s-failed .sub-act-text {
+  color: var(--danger);
+}
+.sub-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.sub-dot.s-running {
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-soft);
+  animation: sub-breathe 1.6s ease-in-out infinite;
+}
+.sub-dot.s-done {
+  background: var(--ok);
+}
+.sub-dot.s-failed {
+  background: var(--danger);
+}
+.sub-dot.s-stopped {
+  border-radius: 2px;
+  background: var(--text-3);
+}
+@keyframes sub-breathe {
+  50% {
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+}
+@keyframes sub-flash {
+  from {
+    background: var(--accent-soft);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sub-dot.s-running,
+  .sub-row.flash {
+    animation: none;
+  }
+}
+.sub-more {
+  align-self: flex-start;
+  padding: 2px 6px 2px var(--sp-3);
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.sub-more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+/* In a session's view: a section at the end of the conversation, above "En arrière-plan". */
+.sub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 640px;
+  margin-top: var(--sp-1);
+}
+.sub-section-label {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  user-select: none;
+}
+.working-task-sub {
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.working-task-sub:hover .working-task-text {
+  text-decoration: underline;
+}
+.working-task-arrow {
+  flex: none;
+  color: var(--text-3);
+}
+/* The activity of one subagent, read-only. */
+.sub-card {
+  width: min(720px, 100%);
+  max-height: min(680px, 100%);
+}
+.sub-title {
+  margin: 0 0 6px;
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+.sub-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.sub-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+.sub-state.s-failed {
+  color: var(--danger);
+}
+.sub-label {
+  margin: var(--sp-4) 0 var(--sp-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.sub-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+.sub-step {
+  display: grid;
+  grid-template-columns: auto 52px minmax(0, 1fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+}
+.sub-step:nth-child(odd) {
+  background: var(--hover);
+}
+.sub-step-time {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.sub-step-kind {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.sub-step.tool .sub-step-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.sub-step-text {
+  overflow-wrap: anywhere;
+}
+.sub-step.error .sub-step-kind,
+.sub-step.error .sub-step-text {
+  color: var(--danger);
+}
+.sub-result {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sub-result.s-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.sub-empty {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.sub-readonly {
+  flex: 1;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.sub-card .notes-foot {
+  align-items: center;
+  gap: var(--sp-3);
+}

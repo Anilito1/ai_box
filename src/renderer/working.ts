@@ -1,9 +1,11 @@
 import { taskView } from '../shared/backgroundTask';
+import { splitBackground } from '../shared/subagentList';
 import { pulseState, shortTokens } from '../shared/pulse';
 import type { ChatItem, SessionView } from '../shared/types';
 import { workView } from '../shared/workView';
 import { h, oneLine } from './dom';
 import { LANG, t } from './i18n';
+import { SubagentSection } from './subagents';
 
 // Claude Code's spinner: the starburst breathes in and out while a verb rotates.
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
@@ -76,6 +78,7 @@ export class WorkingLine {
   readonly root = h('div', 'working-stack');
   private readonly line = h('div', 'working');
   private readonly tasks = h('div', 'working-tasks');
+  private readonly subs = new SubagentSection();
   private tasksKey = '';
   private readonly glyph = h('span', 'working-glyph');
   private readonly verb = h('span', 'working-verb');
@@ -101,7 +104,7 @@ export class WorkingLine {
     const info = h('span', 'working-info');
     info.append(this.meta, this.facts);
     this.line.append(this.glyph, this.verb, info, this.pulse, hint);
-    this.root.append(this.line, this.tasks);
+    this.root.append(this.line, this.subs.root, this.tasks);
     this.root.hidden = true;
     this.line.hidden = true;
     this.tasks.hidden = true;
@@ -111,8 +114,9 @@ export class WorkingLine {
   update(session: SessionView | null | undefined, activity: string): void {
     this.session = session ?? undefined;
     const { turn, tasks } = workView(session);
-    this.showTasks(tasks, session?.backgroundPorts ?? {});
-    this.root.hidden = !turn && tasks.length === 0;
+    this.subs.update(session ?? undefined);
+    this.showTasks(tasks, session?.backgroundPorts ?? {}, session ?? undefined);
+    this.root.hidden = !turn && tasks.length === 0 && this.subs.empty;
     this.line.hidden = !turn;
     if (!turn) {
       active.delete(this);
@@ -133,13 +137,23 @@ export class WorkingLine {
   }
 
   /** "En arrière-plan" and one line per task; rebuilt only when the list changes (it renders 25 times a second while a reply streams). */
-  private showTasks(tasks: string[], ports: Record<string, number>): void {
-    this.tasks.hidden = tasks.length === 0;
-    const key = tasks.map((task) => `${task}\t${ports[task] ?? ''}`).join('\n');
+  private showTasks(all: string[], ports: Record<string, number>, session: SessionView | undefined): void {
+    // A subagent listed above is not listed again: its line here points to its row.
+    const { tasks, linked } = splitBackground(all, session?.subagents);
+    this.tasks.hidden = all.length === 0;
+    const key = [...tasks.map((task) => `${task}\t${ports[task] ?? ''}`), ...linked.map((l) => `${l.label}\t${l.id}`)].join('\n');
     if (key === this.tasksKey) return;
     this.tasksKey = key;
     this.tasks.replaceChildren(
       h('span', 'working-tasks-label', t('work.background')),
+      ...linked.map(({ label, id }) => {
+        const row = h('button', 'working-task working-task-sub');
+        row.type = 'button';
+        row.title = t('sub.seeRow');
+        row.append(h('span', 'working-task-text', t('sub.backgroundLink', { text: taskView(label).summary })), h('span', 'working-task-arrow', '↑'));
+        row.addEventListener('click', () => this.subs.reveal(id));
+        return row;
+      }),
       ...tasks.map((task) => {
         const view = taskView(task, ports[task]);
         const row = h('div', 'working-task');

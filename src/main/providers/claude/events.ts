@@ -19,6 +19,16 @@ export const toCommands = (list: { name: string; description: string; argumentHi
 const ACTIVITY: AgentEvent[] = [{ type: 'activity' }];
 const SUBAGENT: AgentEvent[] = [{ type: 'subagent' }];
 
+/** The fields a message gave, without those it left out: an event says only what the program said. */
+const said = <T extends Record<string, string | boolean | undefined>>(fields: T): Partial<T> =>
+  Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== '')) as Partial<T>;
+
+/** A subagent's own frame (its model's reply, the results of its tools): kept for its activity. */
+const steps = (parent: string, message: unknown): AgentEvent[] => {
+  const blocks = blocksOf(message);
+  return blocks.length > 0 ? [{ type: 'agentSteps', parent, blocks }] : [];
+};
+
 export function translate(msg: SDKMessage): AgentEvent[] {
   switch (msg.type) {
     case 'system':
@@ -37,15 +47,33 @@ export function translate(msg: SDKMessage): AgentEvent[] {
           // Level signal with replace semantics; ambient tasks (watchers) are not activity.
           return [{ type: 'background', tasks: msg.tasks.filter((t) => !t.ambient).map((t) => t.description) }];
         case 'task_started':
-          return msg.task_type === 'local_agent' && !msg.ambient ? [{ type: 'agentTask', id: msg.task_id, state: 'start' }] : ACTIVITY;
-        case 'task_updated': {
-          const { status } = msg.patch;
-          return status === 'completed' || status === 'failed' || status === 'killed'
-            ? [{ type: 'agentTask', id: msg.task_id, state: status === 'failed' ? 'failed' : 'done' }]
+          return msg.task_type === 'local_agent' && !msg.ambient
+            ? [
+                {
+                  type: 'agentTask',
+                  id: msg.task_id,
+                  state: 'start',
+                  ...said({ toolUseId: msg.tool_use_id, description: msg.description, agentType: msg.subagent_type, background: msg.is_backgrounded }),
+                },
+              ]
             : ACTIVITY;
+        case 'task_updated': {
+          const { status, is_backgrounded: background } = msg.patch;
+          if (status === 'completed' || status === 'failed' || status === 'killed')
+            return [{ type: 'agentTask', id: msg.task_id, state: status === 'failed' ? 'failed' : status === 'killed' ? 'stopped' : 'done', ...said({ summary: msg.patch.error }) }];
+          return background === true ? [{ type: 'agentProgress', id: msg.task_id, background }] : ACTIVITY;
         }
+        case 'task_progress':
+          return [{ type: 'agentProgress', id: msg.task_id, ...said({ toolUseId: msg.tool_use_id, lastTool: msg.last_tool_name, summary: msg.summary }) }];
         case 'task_notification':
-          return [{ type: 'agentTask', id: msg.task_id, state: msg.status === 'failed' ? 'failed' : 'done' }];
+          return [
+            {
+              type: 'agentTask',
+              id: msg.task_id,
+              state: msg.status === 'failed' ? 'failed' : msg.status === 'stopped' ? 'stopped' : 'done',
+              ...said({ toolUseId: msg.tool_use_id, summary: msg.summary }),
+            },
+          ];
         case 'thinking_tokens':
           // Hidden thinking (empty deltas, on Opus): this count of the CLI is all there is of it.
           return [{ type: 'output', tokens: msg.estimated_tokens_delta, unattributed: true }];
@@ -73,7 +101,7 @@ export function translate(msg: SDKMessage): AgentEvent[] {
     }
     case 'assistant': {
       // An error frame is how a limit goes on being said, not a reply.
-      if (msg.parent_tool_use_id) return msg.error ? ACTIVITY : SUBAGENT;
+      if (msg.parent_tool_use_id) return msg.error ? ACTIVITY : [...SUBAGENT, ...steps(msg.parent_tool_use_id, msg.message)];
       const u = msg.message.usage;
       return [
         {
@@ -86,7 +114,10 @@ export function translate(msg: SDKMessage): AgentEvent[] {
       ];
     }
     case 'user': {
-      if (msg.parent_tool_use_id) return ACTIVITY;
+      if (msg.parent_tool_use_id) {
+        const own = steps(msg.parent_tool_use_id, msg.message);
+        return own.length > 0 ? own : ACTIVITY;
+      }
       const blocks = blocksOf(msg.message);
       if ('isReplay' in msg && msg.isReplay && msg.origin?.kind !== 'peer') return [{ type: 'promptTaken', text: textOf(blocks) }];
       if (msg.origin?.kind === 'peer') {
