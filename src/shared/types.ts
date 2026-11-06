@@ -218,7 +218,7 @@ export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped';
 /** One step of a subagent, as its activity shows it: a tool it called, something it said, an error it got. */
 export interface SubagentStep {
   at: number;
-  kind: 'tool' | 'text' | 'error';
+  kind: 'tool' | 'text' | 'thinking' | 'error';
   text: string;
 }
 

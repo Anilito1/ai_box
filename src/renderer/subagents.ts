@@ -155,9 +155,17 @@ let dialog: Dialog | null = null;
 
 const clockOf = (at: number) => new Date(at).toLocaleTimeString(LANG, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+/** Within this many px of the bottom, the activity counts as followed. */
+const FOLLOW_PX = 40;
+
 function fillDialog(d: Dialog, s: SessionView | undefined, a: SubagentView | undefined): void {
   const key = JSON.stringify(a ?? null);
   if (key === d.key) return;
+  // Following it: stays at the bottom as steps come, unless the reader went up (then where they are is kept).
+  const first = d.key === '';
+  const { body } = d;
+  const atBottom = first || body.scrollHeight - body.scrollTop - body.clientHeight < FOLLOW_PX;
+  const was = body.scrollTop;
   d.key = key;
   if (!s || !a) {
     d.body.replaceChildren(h('p', 'sub-empty', t('sub.gone')));
@@ -186,8 +194,7 @@ function fillDialog(d: Dialog, s: SessionView | undefined, a: SubagentView | und
   if (a.result) parts.push(h('h3', 'sub-label', t('sub.result')), h('pre', `sub-result s-${a.status}`, a.result));
   else if (a.status !== 'running') parts.push(h('p', 'sub-empty', t('sub.noResult')));
   d.body.replaceChildren(...parts);
-  // Following a running one: its latest step stays in sight.
-  if (a.status === 'running') log.lastElementChild?.scrollIntoView({ block: 'nearest' });
+  body.scrollTop = atBottom && a.status === 'running' ? body.scrollHeight : was;
 }
 
 /** Opens the activity of a subagent, read-only; it follows the subagent while open. */

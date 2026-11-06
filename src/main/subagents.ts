@@ -22,17 +22,55 @@ const LAUNCHED = /^\s*(async agent launched|agent (is )?running in the backgroun
 type Task = Extract<AgentEvent, { type: 'agentTask' }>;
 type Progress = Extract<AgentEvent, { type: 'agentProgress' }>;
 
+/** Step keys remembered per subagent, to know a step both sources report. */
+const SEEN_MAX = 600;
+
 const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const clip = (text: string, max: number) => {
   const line = text.replace(/\s+/g, ' ').trim();
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
+/** A step as a source reports it. `key` says which step it is, so that two sources saying it add it once. */
+export interface StepItem {
+  key: string;
+  kind: SubagentStep['kind'];
+  text: string;
+  /** When it happened, if the source says (a transcript does); else it is now. */
+  at?: number;
+  /** A tool call: counted. */
+  tool?: boolean;
+}
+
+/** What a subagent's model wrote and called, the errors its tools gave back: from its stream frames or its transcript. */
+export function stepItems(blocks: Block[], at?: number): StepItem[] {
+  const items: StepItem[] = [];
+  for (const b of blocks) {
+    if (b.type === 'text' && str(b.text).trim()) {
+      const text = clip(str(b.text), STEP_MAX);
+      items.push({ key: `t:${text.slice(0, 120)}`, kind: 'text', text, at });
+    } else if (b.type === 'thinking' && str(b.thinking).trim()) {
+      const text = clip(str(b.thinking), STEP_MAX);
+      items.push({ key: `k:${text.slice(0, 120)}`, kind: 'thinking', text, at });
+    } else if (b.type === 'tool_use') {
+      const name = str(b.name);
+      const summary = toolSummary(name, (b.input ?? {}) as Record<string, unknown>);
+      items.push({ key: `u:${str(b.id) || `${name}${summary}`}`, kind: 'tool', text: clip(`${toolLabel(name)} ${summary}`, STEP_MAX), at, tool: true });
+    } else if (b.type === 'tool_result' && b.is_error === true) {
+      const text = clip(resultText(b.content), STEP_MAX);
+      items.push({ key: `e:${str(b.tool_use_id) || text.slice(0, 120)}`, kind: 'error', text, at });
+    }
+  }
+  return items;
+}
+
 export class Subagents {
   /** By the id of the call that launched it, else (a task whose call was not seen) by its task id. */
   private readonly list = new Map<string, SubagentView>();
   /** Task id → key in `list`. */
   private readonly tasks = new Map<string, string>();
+  /** Keys of the steps already logged, by subagent: its stream and its transcript may both tell the same one. */
+  private readonly seen = new Map<string, Set<string>>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -107,25 +145,45 @@ export class Subagents {
 
   /** A frame of a subagent's own: what its model wrote and called, the errors its tools gave back. */
   steps(parent: string, blocks: Block[]): boolean {
-    let changed = this.calls(blocks);
+    const changed = this.calls(blocks);
     const a = this.list.get(parent);
-    if (!a) return changed;
-    for (const b of blocks) {
-      if (b.type === 'text' && str(b.text).trim()) {
-        this.step(a, 'text', clip(str(b.text), STEP_MAX));
-        changed = true;
-      } else if (b.type === 'tool_use') {
-        const name = str(b.name);
-        const summary = toolSummary(name, (b.input ?? {}) as Record<string, unknown>);
-        a.tools++;
-        this.step(a, 'tool', clip(`${toolLabel(name)} ${summary}`, STEP_MAX));
-        changed = true;
-      } else if (b.type === 'tool_result' && b.is_error === true) {
-        this.step(a, 'error', clip(resultText(b.content), STEP_MAX));
-        changed = true;
-      }
-    }
-    return changed;
+    return a ? this.apply(a, stepItems(blocks)) || changed : changed;
+  }
+
+  /** Steps read from a subagent's transcript file: those its stream already gave are not added again. */
+  transcript(id: string, items: StepItem[]): boolean {
+    const a = this.list.get(id);
+    return a ? this.apply(a, items) : false;
+  }
+
+  /** A subagent found in a transcript folder (launched before this process): running, as far as its file says. */
+  adopt(id: string, info: Pick<SubagentView, 'description' | 'agentType' | 'model'>, startedAt: number): boolean {
+    if (this.list.has(id)) return false;
+    this.add(id, { ...info, background: true });
+    (this.list.get(id) as SubagentView).startedAt = startedAt;
+    return true;
+  }
+
+  /** What its transcript says of its end (a subagent whose process is gone sends no notification). */
+  endFromFile(id: string, status: Exclude<SubagentStatus, 'running'>, result = ''): boolean {
+    const a = this.list.get(id);
+    if (!a || a.status !== 'running') return false;
+    if (result && !a.result) a.result = result.length > RESULT_MAX ? `${result.slice(0, RESULT_MAX - 1)}…` : result;
+    return this.end(a, status);
+  }
+
+  isRunning(id: string): boolean {
+    return this.list.get(id)?.status === 'running';
+  }
+
+  /** The ids of the running subagents launched in the background. */
+  background(): string[] {
+    return [...this.list.values()].filter((a) => a.status === 'running' && a.background).map((a) => a.id);
+  }
+
+  /** Its task id, when the stream gave one (the id of its transcript file, as far as the CLI says). */
+  taskOf(id: string): string {
+    return [...this.tasks].find(([, key]) => key === id)?.[0] ?? '';
   }
 
   /** Results of the session's calls: a foreground subagent ends with its own. */
@@ -165,8 +223,23 @@ export class Subagents {
     this.list.set(id, { id, ...a, status: 'running', startedAt: this.now(), endedAt: null, activity: '', activityAt: null, tools: 0, log: [], result: '' });
   }
 
-  private step(a: SubagentView, kind: SubagentStep['kind'], text: string): void {
-    const at = this.now();
+  private apply(a: SubagentView, items: StepItem[]): boolean {
+    let known = this.seen.get(a.id);
+    if (!known) this.seen.set(a.id, (known = new Set()));
+    let changed = false;
+    for (const it of items) {
+      if (known.has(it.key)) continue;
+      known.add(it.key);
+      if (known.size > SEEN_MAX) known.delete(known.values().next().value as string);
+      if (it.tool) a.tools++;
+      this.step(a, it.kind, it.text, it.at);
+      changed = true;
+    }
+    return changed;
+  }
+
+  private step(a: SubagentView, kind: SubagentStep['kind'], text: string, when?: number): void {
+    const at = when ?? this.now();
     a.log.push({ at, kind, text });
     if (a.log.length > LOG_MAX) a.log.splice(0, a.log.length - LOG_MAX);
     a.activity = text;
@@ -186,6 +259,7 @@ export class Subagents {
     const ended = [...this.list.values()].filter((a) => a.status !== 'running').sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
     for (const a of ended.slice(KEEP_ENDED)) {
       this.list.delete(a.id);
+      this.seen.delete(a.id);
       for (const [task, key] of this.tasks) if (key === a.id) this.tasks.delete(task);
     }
   }

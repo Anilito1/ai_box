@@ -1,0 +1,416 @@
+{
+ "sessions": [
+  {
+   "id": "master",
+   "role": "master",
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "name": "hub-maitre",
+   "mission": "",
+   "cwd": "/tmp/demo",
+   "model": "",
+   "modelLabel": "",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "",
+   "metrics": null,
+   "createdAt": 1793876621103,
+   "idleSince": null,
+   "agents": 1,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "tool": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "status": "busy",
+   "busySince": 1793879905000,
+   "background": [],
+   "pulse": {
+    "signalAt": null,
+    "tokens": 0,
+    "estimated": false
+   },
+   "backgroundPorts": {
+    "Serve calculette layout variant V2 (maquette)": 8822
+   },
+   "subagents": [
+    {
+     "id": "toolu_live",
+     "description": "Récap simulations : 3 mises en page",
+     "agentType": "general-purpose",
+     "model": "opus",
+     "background": true,
+     "status": "running",
+     "startedAt": 1793879905000,
+     "endedAt": null,
+     "activity": "Command failed: npm run lint (exit 1)",
+     "activityAt": 1793880256000,
+     "tools": 24,
+     "log": [
+      {
+       "at": 1793879905000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 0"
+      },
+      {
+       "at": 1793879914000,
+       "kind": "text",
+       "text": "Mise en page 1 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793879923000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 2"
+      },
+      {
+       "at": 1793879932000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 3"
+      },
+      {
+       "at": 1793879941000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793879950000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 5"
+      },
+      {
+       "at": 1793879959000,
+       "kind": "text",
+       "text": "Mise en page 6 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793879968000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 7"
+      },
+      {
+       "at": 1793879977000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 8"
+      },
+      {
+       "at": 1793879986000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793879995000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 10"
+      },
+      {
+       "at": 1793880004000,
+       "kind": "text",
+       "text": "Mise en page 11 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880013000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 12"
+      },
+      {
+       "at": 1793880022000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 13"
+      },
+      {
+       "at": 1793880031000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793880040000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 15"
+      },
+      {
+       "at": 1793880049000,
+       "kind": "text",
+       "text": "Mise en page 16 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880058000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 17"
+      },
+      {
+       "at": 1793880067000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 18"
+      },
+      {
+       "at": 1793880076000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793880085000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 20"
+      },
+      {
+       "at": 1793880094000,
+       "kind": "text",
+       "text": "Mise en page 21 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880103000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 22"
+      },
+      {
+       "at": 1793880112000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 23"
+      },
+      {
+       "at": 1793880121000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793880130000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 25"
+      },
+      {
+       "at": 1793880139000,
+       "kind": "text",
+       "text": "Mise en page 26 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880148000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 27"
+      },
+      {
+       "at": 1793880157000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 28"
+      },
+      {
+       "at": 1793880166000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793880175000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 30"
+      },
+      {
+       "at": 1793880184000,
+       "kind": "text",
+       "text": "Mise en page 31 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880193000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 32"
+      },
+      {
+       "at": 1793880202000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 33"
+      },
+      {
+       "at": 1793880211000,
+       "kind": "thinking",
+       "text": "Comparer les trois mises en page avant de trancher."
+      },
+      {
+       "at": 1793880220000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 35"
+      },
+      {
+       "at": 1793880229000,
+       "kind": "text",
+       "text": "Mise en page 36 : les totaux concordent, je passe à la suivante."
+      },
+      {
+       "at": 1793880238000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 37"
+      },
+      {
+       "at": 1793880247000,
+       "kind": "tool",
+       "text": "Command npm run simulate -- --layout 38"
+      },
+      {
+       "at": 1793880256000,
+       "kind": "error",
+       "text": "Command failed: npm run lint (exit 1)"
+      }
+     ],
+     "result": ""
+    }
+   ]
+  },
+  {
+   "id": "w1",
+   "role": "worker",
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "name": "hub-sous-chef-calculette",
+   "mission": "Calculette : trois variantes de mise en page",
+   "cwd": "/tmp/calculette",
+   "model": "",
+   "modelLabel": "Opus 5.5",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "Deux sous-agents lancés en arrière-plan.",
+   "metrics": null,
+   "createdAt": 1793876621103,
+   "idleSince": 1793879970000,
+   "agents": 2,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "tool": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "status": "idle",
+   "busySince": null,
+   "background": [
+    "Maquette calculette V2 (grille)",
+    "Serve calculette layout variant V1 on port 8821"
+   ],
+   "pulse": {
+    "signalAt": null,
+    "tokens": 0,
+    "estimated": false
+   },
+   "backgroundPorts": {},
+   "subagents": [
+    {
+     "id": "toolu_a",
+     "description": "Maquette calculette V2 (grille)",
+     "agentType": "general-purpose",
+     "model": "sonnet",
+     "background": true,
+     "status": "running",
+     "startedAt": 1793879688000,
+     "endedAt": null,
+     "activity": "Write src/layouts/grid.css",
+     "activityAt": 1793879999000,
+     "tools": 14,
+     "log": [
+      {
+       "at": 1793879700000,
+       "kind": "tool",
+       "text": "Read src/App.tsx"
+      },
+      {
+       "at": 1793879720000,
+       "kind": "text",
+       "text": "Je pars de la grille 4×5 existante."
+      },
+      {
+       "at": 1793879800000,
+       "kind": "tool",
+       "text": "Edit src/layouts/grid.tsx"
+      },
+      {
+       "at": 1793879880000,
+       "kind": "error",
+       "text": "Cannot find module ./keypad"
+      },
+      {
+       "at": 1793879940000,
+       "kind": "tool",
+       "text": "Write src/layouts/grid.css"
+      }
+     ],
+     "result": ""
+    },
+    {
+     "id": "toolu_b",
+     "description": "Tests de précision décimale",
+     "agentType": "general-purpose",
+     "model": "",
+     "background": false,
+     "status": "running",
+     "startedAt": 1793879860000,
+     "endedAt": null,
+     "activity": "Commande npm test -- decimal",
+     "activityAt": 1793879999000,
+     "tools": 6,
+     "log": [],
+     "result": ""
+    },
+    {
+     "id": "toolu_c",
+     "description": "Audit accessibilité clavier",
+     "agentType": "Explore",
+     "model": "haiku",
+     "background": false,
+     "status": "done",
+     "startedAt": 1793879100000,
+     "endedAt": 1793879400000,
+     "activity": "Trois raccourcis manquants, rapport rendu.",
+     "activityAt": 1793879999000,
+     "tools": 9,
+     "log": [],
+     "result": "Rapport : Tab parcourt les touches dans l’ordre ; Entrée et Échap fonctionnent ; manquent Suppr, % et ±."
+    },
+    {
+     "id": "toolu_d",
+     "description": "Comparer les librairies de calcul",
+     "agentType": "",
+     "model": "",
+     "background": false,
+     "status": "failed",
+     "startedAt": 1793878500000,
+     "endedAt": 1793878600000,
+     "activity": "",
+     "activityAt": null,
+     "tools": 2,
+     "log": [],
+     "result": "API error: overloaded"
+    },
+    {
+     "id": "toolu_e",
+     "description": "Lister les variantes existantes",
+     "agentType": "",
+     "model": "",
+     "background": false,
+     "status": "done",
+     "startedAt": 1793878000000,
+     "endedAt": 1793878100000,
+     "activity": "",
+     "activityAt": null,
+     "tools": 4,
+     "log": [],
+     "result": "3 variantes."
+    }
+   ]
+  }
+ ]
+}
