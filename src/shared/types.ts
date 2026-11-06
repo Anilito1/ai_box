@@ -213,6 +213,39 @@ export interface SessionPulse {
   estimated: boolean;
 }
 
+export type SubagentStatus = 'running' | 'done' | 'failed' | 'stopped';
+
+/** One step of a subagent, as its activity shows it: a tool it called, something it said, an error it got. */
+export interface SubagentStep {
+  at: number;
+  kind: 'tool' | 'text' | 'error';
+  text: string;
+}
+
+/** A subagent a session launched with the Agent (or Task) tool, followed from its messages and its task events. */
+export interface SubagentView {
+  /** The id of the tool call that launched it (else its task's). */
+  id: string;
+  description: string;
+  /** Its agent type ("general-purpose", "Explore"…), empty when the call did not say. */
+  agentType: string;
+  /** The model the call asked for, empty when it inherits its session's. */
+  model: string;
+  background: boolean;
+  status: SubagentStatus;
+  startedAt: number;
+  endedAt: number | null;
+  /** Its latest step, in one line; empty until it does something. */
+  activity: string;
+  activityAt: number | null;
+  /** Tools it called. */
+  tools: number;
+  /** Its latest steps, oldest first (bounded). */
+  log: SubagentStep[];
+  /** What it answered (the tool's result, or its notification's summary); empty while it runs. */
+  result: string;
+}
+
 export interface SessionView {
   id: string;
   role: Role;
@@ -245,6 +278,8 @@ export interface SessionView {
   idleSince: number | null;
   /** Subagents running, in the foreground or in the background. */
   agents: number;
+  /** The subagents its CLI process launched (Agent/Task tool): running ones, then the latest ended. */
+  subagents?: SubagentView[];
   /** The CLI is compacting the conversation. */
   compacting: boolean;
   /** An API call failed (overloaded, rate limit) and is being retried. */

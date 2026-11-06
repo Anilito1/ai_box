@@ -122,3 +122,18 @@ test('which reply errors of Claude Code are limits of the account', () => {
   assert.equal(claudeLimit('authentication_failed')?.kind, 'auth');
   for (const e of ['overloaded', 'server_error', 'invalid_request', 'max_output_tokens', 'unknown', '']) assert.equal(claudeLimit(e), null, e);
 });
+
+test('subagent tasks carry what the CLI says of them; their own frames become their steps', () => {
+  const started = translate(msg({ type: 'system', subtype: 'task_started', task_type: 'local_agent', task_id: 't1', tool_use_id: 'toolu_1', description: 'Audit', subagent_type: 'Explore', is_backgrounded: true }));
+  assert.deepEqual(started, [{ type: 'agentTask', id: 't1', state: 'start', toolUseId: 'toolu_1', description: 'Audit', agentType: 'Explore', background: true }]);
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'task_updated', task_id: 't1', patch: { status: 'killed' } })), [{ type: 'agentTask', id: 't1', state: 'stopped' }]);
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'task_updated', task_id: 't1', patch: { is_backgrounded: true } })), [{ type: 'agentProgress', id: 't1', background: true }]);
+  const progress = translate(msg({ type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'toolu_1', description: 'Audit', usage: {}, last_tool_name: 'Grep' }));
+  assert.deepEqual(progress, [{ type: 'agentProgress', id: 't1', toolUseId: 'toolu_1', lastTool: 'Grep' }]);
+  const notified = translate(msg({ type: 'system', subtype: 'task_notification', task_id: 't1', status: 'stopped', summary: 'Arrêté' }));
+  assert.deepEqual(notified, [{ type: 'agentTask', id: 't1', state: 'stopped', summary: 'Arrêté' }]);
+  const text = [{ type: 'text', text: 'Fini' }];
+  assert.deepEqual(translate(msg({ type: 'assistant', uuid: 'u', parent_tool_use_id: 'toolu_1', message: { content: text } })), [{ type: 'subagent' }, { type: 'agentSteps', parent: 'toolu_1', blocks: text }]);
+  const res = [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }];
+  assert.deepEqual(translate(msg({ type: 'user', parent_tool_use_id: 'toolu_1', message: { content: res } })), [{ type: 'agentSteps', parent: 'toolu_1', blocks: res }]);
+});

@@ -10,7 +10,7 @@ import { dayOf } from '../shared/costs';
 import { arrangeTeam, type Arranged } from '../shared/teamFolders';
 import { windowFigure } from '../shared/usage';
 import { syncList, TeamFolders, type Block } from './folders';
-import { effortLabel, LANG, PLATFORM, t, translateDom } from './i18n';
+import { effortLabel, LANG, PLATFORM, t, tn, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
 import { RepoPanel } from './repo';
@@ -23,6 +23,8 @@ import { initCliUpdates } from './cliUpdate';
 import { showReleaseNotes } from './releaseNotes';
 import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
+import { openSubagent, refreshSubagent, renderSubagentRows, setSubagentSource } from './subagents';
+import { splitBackground } from '../shared/subagentList';
 
 declare global {
   interface Window {
@@ -85,6 +87,8 @@ interface Card {
   pct: HTMLSpanElement;
   fill: HTMLDivElement;
   sub: HTMLDivElement;
+  /** Its subagents, one indented row each. */
+  subs: HTMLDivElement;
   actions: HTMLDivElement;
   actionsKey: string;
 }
@@ -95,6 +99,8 @@ const store = new Map<string, Map<string, ChatItem>>();
 let snapshot: HubSnapshot = { sessions: [], costToday: { day: 0, cost: 0 }, models: [], catalogs: {}, usage: null, topics: [], accounts: [], providers: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
+
+setSubagentSource((id) => snapshot.sessions.find((s) => s.id === id));
 
 const viewFor = (id: string) => (masterView.sessionId === id ? masterView : workerView.sessionId === id ? workerView : null);
 const isClosed = (s: SessionView) => s.status === 'exited';
@@ -207,14 +213,16 @@ function ensureCard(s: SessionView): Card {
   const fill = h('div', 'meter-fill');
   meter.append(fill);
   const sub = h('div', 'card-sub');
+  const subs = h('div', 'card-subs');
+  subs.hidden = true;
   const actions = h('div', 'card-actions');
-  root.append(avatar.root, row, meta, meter, sub, actions);
+  root.append(avatar.root, row, meta, meter, sub, subs, actions);
   root.addEventListener('click', () => {
     if (s.role === 'master') masterView.focus();
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, tree, name, model, pct, fill, sub, actions, actionsKey: '' };
+  const card = { root, avatar, tree, name, model, pct, fill, sub, subs, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -226,9 +234,22 @@ function setText(el: HTMLElement, text: string): void {
 
 /** What the card says under the meter: live activity while working, else the latest news. */
 /** The first background task for the compact card: its summary and, for a server, its address. */
-function cardTask(s: SessionView): string {
-  const task = taskView(s.background[0], s.backgroundPorts?.[s.background[0]]);
+function cardTask(s: SessionView, label: string): string {
+  const task = taskView(label, s.backgroundPorts?.[label]);
   return oneLine(task.port === null ? task.summary : `${task.summary} · localhost:${task.port}`);
+}
+
+/** "En arrière-plan : …" without the subagents its rows already show; their count when they are all there is. */
+function cardBackground(s: SessionView): string {
+  const { tasks, linked } = splitBackground(s.background, s.subagents);
+  if (tasks.length === 0) return tn('card.subagents', linked.length);
+  return t('card.background', { text: [cardTask(s, tasks[0]), tasks.length > 1 ? `+${tasks.length - 1}` : ''].filter(Boolean).join(' · ') });
+}
+
+/** A subagent's row opens its worker's view (the master's is always open) and its activity over it. */
+function openSub(s: SessionView, id: string): void {
+  if (s.role === 'worker' && opened !== s.id) openWorker(s.id);
+  openSubagent(s.id, id);
 }
 
 function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cls: string } {
@@ -240,7 +261,7 @@ function cardSub(s: SessionView, last: ChatItem | undefined): { text: string; cl
     const activity = activityOf(last);
     return { text: activity ? `▸ ${activity}` : t('card.working'), cls: 'live' };
   }
-  if (s.background.length > 0 && !isClosed(s)) return { text: t('card.background', { text: [cardTask(s), s.background.length > 1 ? `+${s.background.length - 1}` : ''].filter(Boolean).join(' · ') }), cls: 'live' };
+  if (s.background.length > 0 && !isClosed(s)) return { text: cardBackground(s), cls: 'live' };
   if (failed(s)) return { text: t('card.failed', { error: s.error }), cls: 'error' };
   if (s.post && asleep(s)) return { text: oneLine(s.post.description), cls: '' };
   if (s.lastMessage) return { text: oneLine(s.lastMessage), cls: '' };
@@ -271,6 +292,9 @@ function renderCard(s: SessionView): void {
   const sub = cardSub(s, last);
   setText(c.sub, sub.text);
   c.sub.className = `card-sub ${sub.cls}`;
+  // A closed card stays compact: what its subagents did is in its view.
+  if (isClosed(s)) c.subs.hidden = true;
+  else renderSubagentRows(c.subs, s, 'card', openSub);
   // A worktree is named by its branch, never by its path.
   const where = s.instance && s.tree ? t('card.instanceTip', { post: s.instance.post, branch: s.tree.branch }) : s.tree ? t('card.treeTip', { branch: s.tree.branch }) : s.cwd;
   const groups = [s.leads?.length > 0 ? t('card.leadOf', { list: s.leads.join(', ') }) : '', s.group ? t('card.memberOf', { name: s.group.name }) : ''].filter(Boolean);
@@ -404,6 +428,7 @@ function render(): void {
   workerView.show(worker, worker && store.get(worker.id), models, snapshot.accounts, snapshot.catalogs, snapshot.providers);
   renderStatusbar(snapshot.usage);
   renderRepos();
+  refreshSubagent();
 }
 
 // ---------- splitter (master | open worker) ----------

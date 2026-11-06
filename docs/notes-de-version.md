@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-06
+
+### Ajouté
+
+- Les sous-agents lancés par un worker ou par le maître apparaissent sous sa carte et dans sa conversation, avec leur état et leur dernière action ; un clic montre tout ce qu’ils ont fait.
+
 ## 2026-11-05
 
 ### Modifié

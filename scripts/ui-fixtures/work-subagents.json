@@ -1,0 +1,226 @@
+{
+ "sessions": [
+  {
+   "id": "master",
+   "role": "master",
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "name": "hub-maitre",
+   "mission": "",
+   "cwd": "/tmp/demo",
+   "model": "",
+   "modelLabel": "",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "",
+   "metrics": null,
+   "createdAt": 1793876621103,
+   "idleSince": null,
+   "agents": 1,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "tool": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "status": "busy",
+   "busySince": 1793879905000,
+   "background": [],
+   "pulse": {
+    "signalAt": null,
+    "tokens": 0,
+    "estimated": false
+   },
+   "backgroundPorts": {
+    "Serve calculette layout variant V2 (maquette)": 8822
+   },
+   "subagents": [
+    {
+     "id": "toolu_m1",
+     "description": "Recenser les repos suivis",
+     "agentType": "Explore",
+     "model": "haiku",
+     "background": false,
+     "status": "running",
+     "startedAt": 1793879905000,
+     "endedAt": null,
+     "activity": "Recherche dans les fichiers package.json",
+     "activityAt": 1793879999000,
+     "tools": 3,
+     "log": [
+      {
+       "at": 1793879910000,
+       "kind": "tool",
+       "text": "Recherche dans les fichiers package.json"
+      },
+      {
+       "at": 1793879940000,
+       "kind": "text",
+       "text": "Trois repos trouvés, je lis leurs README."
+      }
+     ],
+     "result": ""
+    }
+   ]
+  },
+  {
+   "id": "w1",
+   "role": "worker",
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "name": "hub-sous-chef-calculette",
+   "mission": "Calculette : trois variantes de mise en page",
+   "cwd": "/tmp/calculette",
+   "model": "",
+   "modelLabel": "Opus 5.5",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "Deux sous-agents lancés en arrière-plan.",
+   "metrics": null,
+   "createdAt": 1793876621103,
+   "idleSince": 1793879970000,
+   "agents": 2,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "tool": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "status": "idle",
+   "busySince": null,
+   "background": [
+    "Maquette calculette V2 (grille)",
+    "Serve calculette layout variant V1 on port 8821"
+   ],
+   "pulse": {
+    "signalAt": null,
+    "tokens": 0,
+    "estimated": false
+   },
+   "backgroundPorts": {},
+   "subagents": [
+    {
+     "id": "toolu_a",
+     "description": "Maquette calculette V2 (grille)",
+     "agentType": "general-purpose",
+     "model": "sonnet",
+     "background": true,
+     "status": "running",
+     "startedAt": 1793879688000,
+     "endedAt": null,
+     "activity": "Write src/layouts/grid.css",
+     "activityAt": 1793879999000,
+     "tools": 14,
+     "log": [
+      {
+       "at": 1793879700000,
+       "kind": "tool",
+       "text": "Read src/App.tsx"
+      },
+      {
+       "at": 1793879720000,
+       "kind": "text",
+       "text": "Je pars de la grille 4×5 existante."
+      },
+      {
+       "at": 1793879800000,
+       "kind": "tool",
+       "text": "Edit src/layouts/grid.tsx"
+      },
+      {
+       "at": 1793879880000,
+       "kind": "error",
+       "text": "Cannot find module ./keypad"
+      },
+      {
+       "at": 1793879940000,
+       "kind": "tool",
+       "text": "Write src/layouts/grid.css"
+      }
+     ],
+     "result": ""
+    },
+    {
+     "id": "toolu_b",
+     "description": "Tests de précision décimale",
+     "agentType": "general-purpose",
+     "model": "",
+     "background": false,
+     "status": "running",
+     "startedAt": 1793879860000,
+     "endedAt": null,
+     "activity": "Commande npm test -- decimal",
+     "activityAt": 1793879999000,
+     "tools": 6,
+     "log": [],
+     "result": ""
+    },
+    {
+     "id": "toolu_c",
+     "description": "Audit accessibilité clavier",
+     "agentType": "Explore",
+     "model": "haiku",
+     "background": false,
+     "status": "done",
+     "startedAt": 1793879100000,
+     "endedAt": 1793879400000,
+     "activity": "Trois raccourcis manquants, rapport rendu.",
+     "activityAt": 1793879999000,
+     "tools": 9,
+     "log": [],
+     "result": "Rapport : Tab parcourt les touches dans l’ordre ; Entrée et Échap fonctionnent ; manquent Suppr, % et ±."
+    },
+    {
+     "id": "toolu_d",
+     "description": "Comparer les librairies de calcul",
+     "agentType": "",
+     "model": "",
+     "background": false,
+     "status": "failed",
+     "startedAt": 1793878500000,
+     "endedAt": 1793878600000,
+     "activity": "",
+     "activityAt": null,
+     "tools": 2,
+     "log": [],
+     "result": "API error: overloaded"
+    },
+    {
+     "id": "toolu_e",
+     "description": "Lister les variantes existantes",
+     "agentType": "",
+     "model": "",
+     "background": false,
+     "status": "done",
+     "startedAt": 1793878000000,
+     "endedAt": 1793878100000,
+     "activity": "",
+     "activityAt": null,
+     "tools": 4,
+     "log": [],
+     "result": "3 variantes."
+    }
+   ]
+  }
+ ]
+}
