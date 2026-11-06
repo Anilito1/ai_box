@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-06
+
+### Modifié
+
+- Une session dont le dossier a été supprimé ou déplacé le dit clairement, au lieu d'accuser le programme ou le compte.
+
 ## 2026-11-03
 
 ### Modifié
