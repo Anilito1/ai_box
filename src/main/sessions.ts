@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
@@ -1457,6 +1458,18 @@ export class SessionManager extends EventEmitter {
 
     const account = this.accountOf(s);
     const harness = harnessOf(this.kindOf(account));
+    // Its folder was deleted or moved: the program would fail to start there and blame itself (Claude Code: "native
+    // binary ... failed to launch"). Checked before the resume lookup; the message stays shown. Asynchronous: an
+    // offline drive must not freeze the app.
+    const folder = await stat(s.cwd).then((st) => st.isDirectory(), () => false);
+    if (this.quitting || s.inbox !== inbox) return;
+    if (!folder) {
+      if (firstPrompt) this.pushUser(s, firstPrompt);
+      this.teardown(s);
+      this.folderGone(s);
+      this.changed();
+      return;
+    }
     const adapter = adapterFor(harness);
     const executable = this.executableOf(harness);
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
@@ -1563,10 +1576,25 @@ export class SessionManager extends EventEmitter {
     const noOther = noProgram && harness !== 'claude';
     s.error = noClaude ? t('error.noClaude') : noOther ? t(harness === 'gemini' ? 'error.noGemini' : 'error.noCodex') : humanError(failure);
     this.event(s, 'crashed');
-    if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.noClaude'), tone: 'error', action: 'accounts-settings' });
-    else if (noOther) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(harness === 'gemini' ? 'notice.noGemini' : 'notice.noCodex'), tone: 'error', action: 'accounts-settings' });
+    if (noClaude) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: this.noClaudeText(s), tone: 'error', action: 'accounts-settings', detail: failure });
+    else if (noOther) this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(harness === 'gemini' ? 'notice.noGemini' : 'notice.noCodex'), tone: 'error', action: 'accounts-settings', detail: failure });
     else this.notice(s, t('notice.stopped', { error: s.error }), 'error', failure);
     if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: oneLine(failure, 400) }), s);
+  }
+
+  /** Claude Code on another provider's account (OpenAI bridge, compatible server): signing in to Anthropic is not the fix. */
+  private noClaudeText(s: Session): string {
+    const account = this.accountOf(s);
+    const kind = this.kindOf(account);
+    return kind === 'openai' || kind === 'anthropic-compatible' ? t('notice.noClaudeFor', { account: this.accountName(account) }) : t('notice.noClaude');
+  }
+
+  /** A session whose folder was deleted or moved: putting it back is the fix, not the program or the account. */
+  private folderGone(s: Session): void {
+    s.error = t('error.noFolder');
+    this.event(s, 'crashed');
+    this.notice(s, t('notice.noFolder'), 'error', s.cwd);
+    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: t('spawn.badDir', { cwd: s.cwd }) }), s);
   }
 
   private teardown(s: Session): void {
