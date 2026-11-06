@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Un sous-agent lancé en arrière-plan montre maintenant son activité en direct, et la fenêtre « Activité » se met à jour toute seule en défilant vers le bas ; après un redémarrage, ceux qui travaillent encore réapparaissent.
 - Les sous-agents lancés par un worker ou par le maître apparaissent sous sa carte et dans sa conversation, avec leur état et leur dernière action ; un clic montre tout ce qu’ils ont fait.
 
 ## 2026-11-05

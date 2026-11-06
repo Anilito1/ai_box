@@ -23,6 +23,7 @@ import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { Subagents } from './subagents';
+import { SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -184,6 +185,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   agentTasks: Set<string>;
   /** The subagents it launched, with their activity: what the sidebar and its view list under it. */
   subagents: Subagents;
+  /** Follows the transcripts of its background subagents: their frames come to no stream. */
+  subagentTails: SubagentTails;
   /** When it last turned idle; unlike activeAt, frames arriving meanwhile (tasks, limits) leave it alone. */
   idleAt: number;
   /** Last event that really came from the process: unlike activeAt, nothing the hub does moves it. */
@@ -659,6 +662,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
+    s.subagentTails.stop();
     if (!s.instanceOf) this.dropFromGroups(s.name);
     this.changed();
     // Its work may have been pushed since it closed: removed now if nothing would be lost. Kept, the master's
@@ -1502,6 +1506,8 @@ export class SessionManager extends EventEmitter {
     // Everything of a conversation started now is already in `items`: reading its transcript later would duplicate it.
     else s.historyLoad ??= Promise.resolve();
     if (this.quitting || s.inbox !== inbox) return; // Hub closing, or the session was closed while launching.
+    // Its background subagents of before (the app restarted) come back from their transcripts, if they still work.
+    if (resume) s.subagentTails.adopt();
 
     const isMaster = s.role === 'master';
     const post = this.postOf(s);
@@ -1632,6 +1638,7 @@ export class SessionManager extends EventEmitter {
     this.stopPortScan(s);
     s.agentTasks.clear();
     s.subagents.stopAll();
+    s.subagentTails.stop();
     s.agents = 0;
     s.compacting = false;
     s.retrying = false;
@@ -1722,9 +1729,11 @@ export class SessionManager extends EventEmitter {
         if (ev.state === 'start') this.trackAgent(s, ev.id, true);
         else this.endAgent(s, ev.id, ev.state === 'failed');
         s.subagents.task(ev);
+        s.subagentTails.sync();
         break;
       case 'agentProgress':
         s.subagents.progress(ev);
+        s.subagentTails.sync();
         break;
       case 'agentSteps':
         s.subagents.steps(ev.parent, ev.blocks);
@@ -1787,6 +1796,7 @@ export class SessionManager extends EventEmitter {
           if (item.kind === 'tool' && !s.tools.has(item.id)) s.tools.set(item.id, { name: item.name, summary: item.summary, since: Date.now() });
         }
         s.subagents.calls(all);
+        s.subagentTails.sync();
         for (const b of blocks) {
           const run = b.type === 'tool_use' ? runOf(b.name, b.input) : null;
           if (run) s.bgRuns.set(String(b.id), run);
@@ -1820,6 +1830,7 @@ export class SessionManager extends EventEmitter {
       }
       case 'toolResults':
         s.subagents.results(ev.blocks);
+        s.subagentTails.sync();
         for (const b of ev.blocks) {
           s.tools.delete(String(b.tool_use_id));
           const run = s.bgRuns.get(String(b.tool_use_id));
@@ -3968,6 +3979,7 @@ export class SessionManager extends EventEmitter {
   // ---------- state ----------
 
   private create(id: string, role: Role, name: string, mission: string, cwd: string, model: string, effort: Effort | null): Session {
+    const subagents = new Subagents();
     const s: Session = {
       id,
       role,
@@ -4014,7 +4026,8 @@ export class SessionManager extends EventEmitter {
       closeWhenDone: false,
       activeAt: Date.now(),
       agentTasks: new Set(),
-      subagents: new Subagents(),
+      subagents,
+      subagentTails: new SubagentTails({ subagents, where: () => ({ sessionId: s.sessionId, cwd: s.cwd }), changed: () => this.changed() }),
       idleAt: Date.now(),
       roleId: null,
       note: '',
