@@ -21,14 +21,18 @@ dans les réglages et le trousseau du PC.
    bibliothèque design-md, tes plugins, ton CLAUDE.md global et la mémoire de tes repos autorisés. Seuls les fichiers
    modifiés repartent ; rien ne revient du serveur. « Je m'absente » le fait aussi (une minute au plus, sinon on part
    sans). « Détails » liste ce qui est resté sur le PC.
-6. **Je m'absente** (ou écran verrouillé / 10 min d'inactivité si tu l'actives) : le serveur démarre, chaque worker
+6. **Je m'absente** (ou écran verrouillé / 10 min d'inactivité si tu l'actives) : le serveur démarre (environ 10 min
+   s'il était en veille), chaque worker
    pousse sa branche et continue là-bas. PC en veille, le tour en cours va au bout et le téléphone (ntfy) sonne.
    **Je suis de retour** : chaque worker pousse, revient ici avec ses commits, ton dossier est tiré, le serveur se met
    en veille (*shelve* : seul le disque est facturé).
 7. **Coût** : 0,04 € HT l'heure allumée + ~0,55 €/mois de disque en veille. 60 h par mois ≈ 3 € ; toujours allumé ≈ 29 €.
+   Allumé en continu, la d2-8 au mois coûte moins : 20,60 € HT (prix catalogue).
    Le quota de l'abonnement Claude est le même qu'ici : la nuit consomme celui du lendemain.
 8. **Si ça casse** : clé refusée → ajoute la clé admin par la console OVH ; « identité changée » → réinstallé ?
    « Oublier l'ancienne identité », sinon arrête-toi ; serveur injoignable → les workers restent en pause ici ;
+   « OVHcloud n'a pas rallumé le serveur » → OVH ne garantit pas de place au réveil d'une instance en veille ; l'app
+   a redemandé chaque minute pendant 20 min ; si ça se répète, passe en « Toujours allumé » ;
    synchronisation « n'a pas abouti » → relance une fois le serveur allumé ; jeton expiré → colle-en un neuf,
    « Revérifier les repos ». Tout arrêter : supprime le jeton, `claude auth logout` sur le serveur (ou l'instance),
    « Oublier l'accès OVH », décoche « Workers distants activés ».
