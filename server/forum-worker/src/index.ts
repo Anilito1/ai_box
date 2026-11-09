@@ -43,6 +43,8 @@ interface Ctx {
 
 const MAX_BODY = 8 * 1024;
 const LIST_LIMIT = 500;
+/** A token the app made itself (32 random bytes, base64url). */
+const TOKEN = /^[A-Za-z0-9_-]{40,100}$/;
 
 class Fail extends Error {
   constructor(
@@ -201,8 +203,13 @@ async function register(c: Ctx, body: Record<string, unknown>): Promise<Response
   if (!c.ipHash) throw new Fail('unavailable', 503);
   const pseudo = checkPseudo(body.pseudo);
   if (!pseudo.ok) throw invalid(pseudo.fields);
-  const token = randomToken();
+  // The app sends the token it already holds: the same request sent again after a lost answer finds its own account
+  // instead of a taken pseudo.
+  const token = typeof body.token === 'string' && TOKEN.test(body.token) ? body.token : randomToken();
+  const tokenHash = await sha256(token);
   const key = pseudoKey(pseudo.value);
+  const again = await c.env.DB.prepare('SELECT id, pseudo, banned FROM users WHERE pseudo_key = ? AND token_hash = ?').bind(key, tokenHash).first<User>();
+  if (again) return json({ token, listing: await listing({ ...c, user: again }) });
   const row = await c.env.DB.prepare(
     `INSERT INTO users (id, pseudo, pseudo_key, token_hash, ip_hash, created_at)
      SELECT ?1, ?2, ?3, ?4, ?5, ?6
@@ -210,7 +217,7 @@ async function register(c: Ctx, body: Record<string, unknown>): Promise<Response
         AND NOT EXISTS (SELECT 1 FROM users WHERE pseudo_key = ?3)
      RETURNING id, pseudo, banned`,
   )
-    .bind(crypto.randomUUID(), pseudo.value, key, await sha256(token), c.ipHash, c.now, LIMITS.registrationsPerIp)
+    .bind(crypto.randomUUID(), pseudo.value, key, tokenHash, c.ipHash, c.now, LIMITS.registrationsPerIp)
     .first<User>();
   if (!row) {
     const taken = await c.env.DB.prepare('SELECT 1 FROM users WHERE pseudo_key = ?').bind(key).first();
@@ -307,21 +314,24 @@ async function vote(c: Ctx, id: string, on: boolean): Promise<Response> {
 }
 
 async function report(c: Ctx, id: string): Promise<Response> {
-  const { user } = writer(c);
+  const { user, ipHash } = writer(c);
   const row = await c.env.DB.prepare(
-    `INSERT OR IGNORE INTO reports (post_id, user_id, day, created_at)
-     SELECT ?1, ?2, ?3, ?4
+    `INSERT OR IGNORE INTO reports (post_id, user_id, day, created_at, ip_hash)
+     SELECT ?1, ?2, ?3, ?4, ?6
       WHERE (SELECT COUNT(*) FROM reports WHERE user_id = ?2 AND day = ?3) < ?5
         AND EXISTS (SELECT 1 FROM posts WHERE id = ?1 AND deleted = 0 AND hidden = 0 AND user_id <> ?2)
      RETURNING post_id`,
   )
-    .bind(id, user.id, c.day, c.now, LIMITS.reportsPerDay)
+    .bind(id, user.id, c.day, c.now, LIMITS.reportsPerDay, ipHash)
     .first();
   if (!row) {
     const why = await refusal(c, id, user.id, 'reports');
     if (why) throw why;
   } else
-    await c.env.DB.prepare('UPDATE posts SET hidden = 1 WHERE id = ?1 AND hidden = 0 AND reviewed = 0 AND (SELECT COUNT(*) FROM reports WHERE post_id = ?1) >= ?2')
+    // Counted per address: pseudos made from one connection cannot hide a message on their own.
+    await c.env.DB.prepare(
+      'UPDATE posts SET hidden = 1 WHERE id = ?1 AND hidden = 0 AND reviewed = 0 AND (SELECT COUNT(DISTINCT ip_hash) FROM reports WHERE post_id = ?1) >= ?2',
+    )
       .bind(id, LIMITS.reportsToHide)
       .run();
   return json({ listing: await listing(c) });

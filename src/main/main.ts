@@ -1082,8 +1082,8 @@ class Hub {
       return { ...this.view(), ok, error: '' };
     });
     handle('team:agents', () => agentFiles(this.cfg));
-    // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
     handle('forum', (action) => this.forum.run(action));
+    // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
     handle('caps:get', () => this.caps.inventory());
     handle('caps:check', async () => {
       await this.caps.check();

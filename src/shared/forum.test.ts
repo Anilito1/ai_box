@@ -40,10 +40,12 @@ test('lengths count characters as a person does', () => {
 
 test('links, HTML and insults are refused, ordinary text is not', () => {
   for (const s of ['voir https://x.y', 'www.site', 'exemple.com', 'mail moi a@b.fr']) assert.equal(hasLink(s), true, s);
-  for (const s of ['app.ts plante', 'claude.ai marche', 'node.js 22', 'v0.2.0']) assert.equal(hasLink(s), false, s);
+  for (const s of ['app.ts plante', 'claude.ai marche', 'node.js 22', 'v0.2.0', 'install.sh fails', 'It crashes.It happens daily', 'ça.me gêne']) assert.equal(hasLink(s), false, s);
+  for (const s of ['Press <Enter> twice', 'claude --model <name> ignores it', 'a < b > c']) assert.equal(checkPost({ kind: 'problem', area: 'ui', title: 'Un titre', body: s + ' depuis hier.' }).ok, true, s);
+  for (const s of ['<img src=x onerror=1>', 'du &#60;script', '<!-- caché -->', '</div>']) assert.equal(checkPost({ kind: 'problem', area: 'ui', title: 'Un titre', body: s + ' depuis hier.' }).ok, false, s);
   assert.deepEqual(checkPost({ kind: 'idea', area: 'ui', title: 'Titre <b>gras</b>', body: 'Un texte assez long.' }), { ok: false, fields: { title: 'html' } });
   for (const s of ['quel c0nnard', 'ENCULÉ', 'fuuuck this']) assert.equal(hasInsult(s), true, s);
-  for (const s of ['un contact', 'la console', 'ce bâtiment', 'concernant']) assert.equal(hasInsult(s), false, s);
+  for (const s of ['un contact', 'la console', 'ce bâtiment', 'concernant', 'il y a du retard quand je tape']) assert.equal(hasInsult(s), false, s);
 });
 
 test('pseudos: readable, unique whatever the case and accents', () => {

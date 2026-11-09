@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AREAS,
@@ -155,6 +157,9 @@ export class Forum {
   private listedAt: number | null = null;
   private online = false;
   private loaded = false;
+  private writing: Promise<void> = Promise.resolve();
+  /** The pseudo being registered and the token made for it, kept until the forum confirms. */
+  private pending: { pseudo: string; token: string } | null = null;
 
   constructor(
     dataDir: string,
@@ -209,10 +214,16 @@ export class Forum {
     return { ok: false, state: this.state(), error, ...extra };
   }
 
+  /**
+   * The token is made here and sent with the pseudo: asked again after a lost answer, the forum recognises the
+   * account it already created instead of calling the pseudo taken. No moderators' key on this call.
+   */
   private async register(pseudo: string): Promise<ForumResult> {
     if (!this.secrets.available()) return this.fail('no_keychain');
-    const r = await this.request('POST', '/v1/register', { pseudo }, false);
+    if (this.pending?.pseudo !== pseudo) this.pending = { pseudo, token: randomBytes(32).toString('base64url') };
+    const r = await this.request('POST', '/v1/register', this.pending, false, '');
     if (r?.status === 200 && isStr(r.body.token)) {
+      this.pending = null;
       await this.secrets.set('forumToken', r.body.token);
       this.keep(r.body.listing);
       return { ok: true, state: this.state() };
@@ -227,11 +238,11 @@ export class Forum {
       return this.call('GET', '/v1/posts');
     }
     if (!this.secrets.available()) return this.fail('no_keychain');
-    const r = await this.request('GET', '/v1/posts', undefined, true, key);
+    // Checked alone, without this install's token: a stale token must not pass for a refused key.
+    const r = await this.request('GET', '/v1/posts', undefined, false, key);
     if (r?.status !== 200) return this.refused(r);
     await this.secrets.set('forumAdminKey', key);
-    this.keep(r.body.listing);
-    return { ok: true, state: this.state() };
+    return this.call('GET', '/v1/posts');
   }
 
   private async call(method: string, path: string, body?: unknown): Promise<ForumResult> {
@@ -293,13 +304,10 @@ export class Forum {
     if (!listing) return;
     this.listing = listing;
     this.listedAt = Date.now();
-    try {
-      const tmp = `${this.cacheFile}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ listing, listedAt: this.listedAt }));
-      renameSync(tmp, this.cacheFile);
-    } catch {
-      // The cache only serves reading offline: the forum works without it.
-    }
+    const text = JSON.stringify({ listing, listedAt: this.listedAt });
+    const tmp = `${this.cacheFile}.tmp`;
+    // Off the main thread's way, one write after the other. The cache only serves reading offline.
+    this.writing = this.writing.then(() => writeFile(tmp, text).then(() => rename(tmp, this.cacheFile))).catch(() => undefined);
   }
 
   private loadCache(): void {

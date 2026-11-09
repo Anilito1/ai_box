@@ -567,8 +567,7 @@ export class ForumView {
     const r = await this.act({ type: 'register', pseudo: c.value });
     if (r.ok) return true;
     if (r.error === 'pseudo_taken' || r.error === 'invalid') {
-      this.pseudoError = r.error === 'pseudo_taken' ? 'invalid' : (r.fields?.pseudo ?? 'invalid');
-      if (r.error === 'pseudo_taken') this.setNote({ text: t('forum.err.pseudoTaken'), tone: 'error' });
+      this.pseudoError = r.error === 'pseudo_taken' ? 'taken' : (r.fields?.pseudo ?? 'invalid');
       this.render();
     }
     return false;

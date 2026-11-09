@@ -71,7 +71,7 @@ export interface ForumListing {
 }
 
 export type ForumField = 'kind' | 'area' | 'title' | 'body' | 'pseudo' | 'reply' | 'status';
-export type FieldError = 'required' | 'short' | 'long' | 'link' | 'html' | 'insult' | 'invalid';
+export type FieldError = 'required' | 'short' | 'long' | 'link' | 'html' | 'insult' | 'invalid' | 'taken';
 export type ForumError =
   | 'offline'
   | 'unavailable'
@@ -111,10 +111,15 @@ export function cleanText(s: string): string {
 
 export const cleanLine = (s: string): string => cleanText(s).replace(/\s+/g, ' ');
 
-const LINK = /https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|fr|net|org|io|dev|app|ly|gg|co|me|xyz|ru|info|biz|link|site|online|be|ch|ca|uk|de|es|it|eu|tk|to|sh)\b/i;
-export const hasLink = (s: string): boolean => LINK.test(s);
+// A bare domain only in lower case and with a domain-only ending: "install.sh", "crashes.It" or "ça.me" stay text.
+const LINK = /https?:\/\/|www\.|[\w.+-]+@[\w-]+\.[a-z]{2,}/i;
+const DOMAIN = /\b[a-z0-9-]{2,}\.(?:com|fr|net|org|io|dev|app|ly|gg|xyz|ru|info|biz|link|site|online|eu|uk|ch|ca)\b/;
+export const hasLink = (s: string): boolean => LINK.test(s) || DOMAIN.test(s);
 
-const HTML = /<\/?[a-z!][^>]*>|&#?[a-z0-9]+;|javascript:/i;
+// Real tags, numeric entities and script URLs; placeholders such as <Enter> or --model <name> stay text (the app
+// shows messages as text only).
+const HTML =
+  /<\/?(?:a|b|i|u|p|br|hr|div|span|img|svg|script|style|iframe|object|embed|link|meta|form|input|button|video|audio|table|body|html|h[1-6])\b[^>]*>|<!--|&#x?[0-9a-f]+;|javascript:/i;
 export const hasHtml = (s: string): boolean => HTML.test(s);
 
 // A short list on purpose: reports catch the rest. Matched as whole words once accents and digit swaps are undone.
@@ -122,7 +127,7 @@ const INSULTS = new Set(
   (
     'con conne connard connards connasse connasses encule encules enculer salope salopes salaud salauds pute putes ' +
     'batard batards abruti abrutis debile debiles cretin cretins nique niquer ntm fdp pd pede pedes tapette negre negres ' +
-    'fuck fucking fucker fuckers motherfucker bitch bitches cunt cunts asshole assholes retard retarded dickhead bastard ' +
+    'fuck fucking fucker fuckers motherfucker bitch bitches cunt cunts asshole assholes retarded dickhead bastard ' +
     'bastards whore whores slut sluts nigger niggers nigga faggot faggots fag'
   ).split(' '),
 );

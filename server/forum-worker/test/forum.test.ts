@@ -106,6 +106,17 @@ describe('identity', () => {
     expect((await call('POST', '/v1/register', { body: { pseudo: 'Quatre' }, ip: '192.0.2.9', now: T0 + DAY })).status).toBe(200);
   });
 
+  it('answers a repeated sign-up with the same account, so a lost answer does not lose the pseudo', async () => {
+    const token = 'k'.repeat(43);
+    const first = await call('POST', '/v1/register', { body: { pseudo: 'Retry', token }, ip: '192.0.2.20' });
+    const again = await call('POST', '/v1/register', { body: { pseudo: 'Retry', token }, ip: '192.0.2.20' });
+    expect([first.status, again.status, again.data.token]).toEqual([200, 200, token]);
+    const other = await call('POST', '/v1/register', { body: { pseudo: 'Retry', token: 'z'.repeat(43) }, ip: '192.0.2.21' });
+    expect([other.status, other.data.error]).toEqual([409, 'pseudo_taken']);
+    const n = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE pseudo = 'Retry'").first<{ n: number }>();
+    expect(n?.n).toBe(1);
+  });
+
   it('refuses an unknown token', async () => {
     const r = await call('POST', '/v1/posts', { token: 'x'.repeat(43), body: idea() });
     expect([r.status, r.data.error]).toEqual([401, 'unauthorized']);
@@ -235,6 +246,18 @@ describe('+1 and reports', () => {
     expect((await call('PATCH', `/v1/admin/posts/${id}`, { admin: TEST_ADMIN_KEY, body: { hidden: false } })).status).toBe(200);
     const late = await user('LateReporter');
     await call('POST', `/v1/posts/${id}/report`, { token: late.token, ip: late.ip });
+    expect((await call('GET', '/v1/posts', { token: reader.token, ip: reader.ip })).data.listing!.posts).toHaveLength(1);
+  });
+
+  it('does not hide a message reported by pseudos from a single connection', async () => {
+    const author = await user('Target');
+    const id = (await post(author)).data.id as string;
+    const ip = '192.0.2.60';
+    for (const p of ['Sock1', 'Sock2', 'Sock3']) {
+      const r = await user(p, ip);
+      expect((await call('POST', `/v1/posts/${id}/report`, { token: r.token, ip })).status).toBe(200);
+    }
+    const reader = await user('Bystander');
     expect((await call('GET', '/v1/posts', { token: reader.token, ip: reader.ip })).data.listing!.posts).toHaveLength(1);
   });
 

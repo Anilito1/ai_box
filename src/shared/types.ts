@@ -889,9 +889,9 @@ export interface HubApi {
   deleteGroup(id: string): Promise<SettingsView & Result>;
   /** Subagent files of ~/.claude/agents and of the followed repos. */
   agentFiles(): Promise<AgentFile[]>;
-  /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
   /** The ideas forum: every call answers with the forum's state, fresh or from the cache. */
   forum(action: ForumAction): Promise<ForumResult>;
+  /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
   capabilities(): Promise<Capabilities>;
   /** Asks Claude Code for each server's state (some seconds). */
   checkCapabilities(): Promise<Capabilities>;
