@@ -3,15 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2026-08-15"
 workers_dev = true
 preview_urls = false
-# The forum's Cloudflare account. Placeholder until it is chosen: `npm run cf:setup -- --account <id>` writes it once,
-# and every remote command checks the login against it (scripts/cloudflare.mjs --guard).
-account_id = "REPLACE_WITH_ACCOUNT_ID"
+# braunanil@gmail.com's Account (personal). Deploy only through the npm scripts (isolated login, see README.md):
+# every remote command first checks that the ai-box profile sees this account (scripts/cloudflare.mjs --guard).
+account_id = "5c23f99edf8734dce0a1176009f283cf"
 
 [[d1_databases]]
 binding = "DB"
 database_name = "ai-box-forum"
 # Written by `npm run cf:setup` once the database exists.
-database_id = "REPLACE_WITH_DATABASE_ID"
+database_id = "c5737ee6-f3db-4f53-8de2-06840222ecaa"
 migrations_dir = "migrations"
 
 # A burst limit per address, on top of the daily quotas kept in D1.

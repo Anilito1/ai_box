@@ -71,17 +71,26 @@ async function subdomain(account) {
   return name;
 }
 
-function database(name) {
+/** The first run creates the database; later runs only accept the one pinned in wrangler.toml. */
+function database(name, first) {
   const find = () => JSON.parse(run(['d1', 'list', '--json'])).find((d) => d.name === name);
   let db = find();
-  if (!db) {
+  if (first) {
+    if (db) fail(`a D1 database named ${name} already exists on this account and was not made by this setup: choose another database_name in wrangler.toml.`);
     run(['d1', 'create', name]);
     db = find();
     if (!db) fail(`database ${name} was created but is not listed yet: run the setup again.`);
+    setTomlValue('database_id', db.uuid);
     console.log(`D1 database created: ${name}`);
-  }
-  if (tomlValue('database_id') !== db.uuid) setTomlValue('database_id', db.uuid);
+  } else if (db?.uuid !== tomlValue('database_id')) fail(`wrangler.toml pins database ${tomlValue('database_id')}, which is not the account's ${name}: check before going on.`);
   return db.uuid;
+}
+
+/** On the first run, a Worker of the same name would be someone else's: nothing is overwritten. */
+async function freshWorker(account, name) {
+  const scripts = await cf('GET', `/accounts/${account}/workers/scripts`);
+  if (scripts.status !== 200) fail(`could not list the account's Workers: ${JSON.stringify(scripts.data.errors ?? scripts.data)}`);
+  if ((scripts.data.result ?? []).some((s) => s.id === name)) fail(`a Worker named ${name} already exists on this account: choose another name in wrangler.toml.`);
 }
 
 /** IP_SALT once for all; the moderators' key when there is none yet, or when asked. Returns the key to show. */
@@ -131,10 +140,16 @@ const { id: account, email } = checkAccount();
 console.log(`${email} on account ${account}`);
 const worker = tomlValue('name');
 const dbName = tomlValue('database_name');
+const first = PLACEHOLDER.test(tomlValue('database_id'));
+if (first) {
+  step('Names free on the account');
+  await freshWorker(account, worker);
+  console.log(`no Worker named ${worker} yet`);
+}
 step('workers.dev subdomain');
 const sub = await subdomain(account);
 step(`D1 database ${dbName}`);
-console.log(`id ${database(dbName)}`);
+console.log(`id ${database(dbName, first)}`);
 step('Migrations');
 console.log(run(['d1', 'migrations', 'apply', dbName, '--remote']).trim().split('\n').slice(-3).join('\n'));
 step(`Deploy ${worker}`);
