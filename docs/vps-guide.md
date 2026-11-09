@@ -9,7 +9,8 @@ dans les réglages et le trousseau du PC.
 2. **Assistant** : IP, utilisateur `ubuntu`, « Connecter et installer ». Compare l'empreinte avec la console OVH (KVM :
    `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), « Faire confiance ». L'installation tourne seule (10 à 15 min) :
    pare-feu, utilisateur `aibox` sans sudo, Claude Code, puis les outils des skills (gh, ripgrep, jq, ffmpeg, Python et
-   uv, Chromium sans écran, playwright-cli). Un outil qui échoue est signalé sans bloquer ; relancer réessaie.
+   uv, Chromium sans écran, playwright-cli, outils des documents PDF et Office). Un outil qui échoue est signalé sans
+   bloquer ; relancer réessaie.
 3. **Login Claude** : « Ouvrir la page de connexion », connecte-toi, colle le code, « Envoyer le code ».
 4. **Jetons** (« Repos et accès ») : repos autorisés (`propriétaire/nom`), propriétaires interdits, organisations. Un
    jeton GitHub *fine-grained* sur tes repos (Contents, Pull requests, Workflows en écriture, Metadata en lecture) dans
@@ -43,6 +44,30 @@ dans les réglages et le trousseau du PC.
 - Réglages : modèle, effort, langue, style, et parmi tes plugins seulement ceux d'une liste blanche (sans hooks ni
   serveur MCP : frontend-design, code-review, feature-dev, pr-review-toolkit, claude-md-management, claude-api,
   document-skills, hyperframes). Ni hooks, ni variables, ni programmes d'aide : le serveur les refuse aussi.
+
+## Parité : un worker distant face à un worker du PC
+
+Le test `scripts/vps/parity-e2e.ts` le vérifie de bout en bout : synchro, puis un worker distant lit le CLAUDE.md,
+utilise le skill taste, fait une capture avec playwright-cli, pousse un fichier de preuve et fait son rapport.
+
+| Domaine | Sur le serveur | Pourquoi |
+|---|---|---|
+| Modèle, effort, langue, style | identique | copiés de tes réglages |
+| Skills perso (taste, playwright-cli, hyperframes…, design-md, security-audit, supabase) et agents | identique | copiés tels quels, un skill entier ou rien |
+| Skills de ton compte Claude (pdf, docx…) | identique | le serveur les reçoit par sa propre connexion Claude |
+| Mémoire des repos | identique pour tes repos autorisés ; exclue pour une organisation | seule la mémoire d'un repo lié à un clone du serveur part |
+| Outils du hub (rapport au maître, sujets, questions) | identique | ils passent par la connexion SSH, comme ici |
+| CLAUDE.md global | différent | sans les parties PC et entreprise (Windows, Cloudflare, Supabase, comptes), avec une note « version serveur » |
+| Plugins | différent | seulement la liste blanche ci-dessus ; hookify, LSP TypeScript, Cloudflare, Supabase et brain restent ici (hooks, programme ou serveur MCP) |
+| Navigateur | différent | Chromium sans écran : captures et tests oui, fenêtre visible non |
+| Système | différent | Linux, utilisateur sans sudo : un worker n'installe rien avec apt (pip et uv dans son dossier) |
+| Outils en ligne de commande | identique | git, gh, ripgrep, jq, Python, Node, ffmpeg, playwright-cli, poppler, qpdf, pandoc, ImageMagick, Tesseract, LibreOffice sans interface |
+| Serveurs MCP du PC (Playwright MCP, Blender, MasterTools…) | exclu | `~/.claude.json` ne part jamais ; playwright-cli remplace le Playwright MCP |
+| Blender, Unity, computer use, navigateur visible | exclu | ils pilotent ce PC |
+| Déploiements (wrangler, CLI Supabase) et leurs comptes | exclu | les déploiements restent sur le PC |
+| Hooks, variables, programmes d'aide de tes réglages | exclu | ils lanceraient des programmes là-bas sans tes demandes de permission |
+| Jetons | différent | seul GH_TOKEN, en mémoire, à chaque lancement ; `.env`, clés et profils Cloudflare jamais |
+| Whisper et ses modèles | exclu | lourds ; les skills disent ce qui manque |
 
 ## Organisation : application GitHub (prête, pas activée)
 
