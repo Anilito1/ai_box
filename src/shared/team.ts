@@ -48,7 +48,7 @@ export function normalizeRole(raw: unknown): TeamRole {
     mode: ROLE_MODES.includes(o.mode as Mode) ? (o.mode as Mode) : '',
     account: str(o.account).trim(),
     enabled: o.enabled !== false,
-    placement: o.placement === 'remote' ? 'remote' : 'local',
+    placement: o.placement === 'remote' || o.placement === 'local' ? o.placement : 'auto',
   };
 }
 
@@ -181,7 +181,7 @@ const TEMPLATES: Record<Lang, Record<TemplateId, Template>> = {
 /** A new post from a template, model and effort left to the master. */
 export function fromTemplate(id: TemplateId, lang: Lang, folder: string): TeamRole {
   const t = TEMPLATES[lang][id];
-  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true, placement: 'local' };
+  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true, placement: 'auto' };
 }
 
 // ---------- model and effort of a mission ----------
@@ -356,7 +356,7 @@ export function agentToRole(file: { fields: Record<string, string>; body: string
       mode: keptMode,
       account: '',
       enabled: true,
-      placement: 'local',
+      placement: 'auto',
     },
     ignored,
   };

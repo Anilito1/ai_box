@@ -23,7 +23,8 @@
     "dist:dir": "node build.mjs && electron-builder --dir",
     "notices": "node scripts/notices.mjs",
     "ui": "node scripts/ui.mjs",
-    "notes": "node scripts/notesDraft.mjs"
+    "notes": "node scripts/notesDraft.mjs",
+    "vps:connect": "esbuild scripts/vps/connect.ts --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.vps-connect.mjs --log-level=warning && node node_modules/.vps-connect.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.308",

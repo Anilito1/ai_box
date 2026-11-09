@@ -51,6 +51,18 @@ export function remoteOf(dir: string): string {
   }
 }
 
+/** The branch a checkout is on, or '' (detached, unreadable). */
+export function branchOf(dir: string): string {
+  try {
+    const gitPath = join(dir, '.git');
+    const gitDir = statSync(gitPath).isFile() ? resolve(dir, readFileSync(gitPath, 'utf8').replace(/^gitdir:\s*/, '').trim()) : gitPath;
+    const head = readFileSync(join(gitDir, 'HEAD'), 'utf8').trim();
+    return head.startsWith('ref: refs/heads/') ? head.slice('ref: refs/heads/'.length) : '';
+  } catch {
+    return '';
+  }
+}
+
 /** A folder's real path (links and junctions followed: git prints real paths, /private/var for /var on a Mac), else the path as given. */
 export function realPath(dir: string): string {
   try {

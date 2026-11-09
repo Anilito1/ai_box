@@ -65,7 +65,7 @@ et répond pour le hub absent. C'est tout l'enjeu des architectures ci-dessous.
 | Serveurs de dev, aperçus | `localhost:3000` est sur le VPS | Tunnel `ssh -L` / port Tailscale ouvert à la demande par le hub, URL locale identique |
 | Playwright, captures | Un navigateur sans écran marche sur le VPS (headless) ; le MCP Playwright du PC, non | Tests headless côté VPS ; tout pilotage du navigateur du PC = poste « local » |
 | `npm run ui` de l'AI Box | Electron sans écran sur Linux : `xvfb-run` nécessaire | Le poste ai-box reste « local » au départ |
-| Secrets et comptes | Claude, GitHub, Cloudflare, Supabase, OpenAI à recréer sur le serveur | Minimum : Claude + GitHub ; les déploiements et la prod Coiffissimo restent au PC (4.4) |
+| Secrets et comptes | Claude, GitHub, Cloudflare, Supabase, OpenAI à recréer sur le serveur | Minimum : Claude + GitHub ; les déploiements et la prod pro restent au PC (4.4) |
 | Conditions d'utilisation | Abonnement personnel, binaire officiel, sa propre connexion : explicitement admis même sur une machine hébergée ; usage « ordinaire et individuel » attendu | Un seul utilisateur, aucun partage ; flotte nocturne non bornée = zone grise : plafonner le nombre de workers distants |
 | Latence | Tokens streamés VPS → PC : +20 à 40 ms Francfort/Paris, imperceptible ; l'IA elle-même est bien plus lente | Rien |
 | Fiabilité | Nouveau maillon (réseau, VPS) | Ré-attache et journal (3.5) ; les postes locaux n'en dépendent pas |
@@ -135,7 +135,7 @@ PC                                         VPS
   jointes, les liens de fichiers, les aperçus. C'est une refonte, et la mise à jour automatique devient double.
 - **Sécurité** : plus forte exposition : le hub distant détient tout (comptes, mémoire des sujets, conversations du
   maître) et accepte des commandes réseau ; il faut une authentification de l'app (clé par appareil) en plus de
-  Tailscale. Le maître distant lit toutes les conversations, y compris Coiffissimo.
+  Tailscale. Le maître distant lit toutes les conversations, y compris les pro.
 - **Coût** : VPS un cran au-dessus (le maître et la mémoire en plus), même ordre de prix.
 - **Effort** : 4 à 8 semaines, avec une période où deux architectures coexistent. Risque de régression élevé sur un
   produit poussé sans CI chez tous les utilisateurs.
@@ -241,7 +241,7 @@ placement: 'local' | 'remote-ok' | 'remote';
 
 ## 4. Sécurité
 
-1. **Réseau** : Tailscale (gratuit en usage perso ; Coiffissimo = usage professionnel → plan Standard 8 $/utilisateur,
+1. **Réseau** : Tailscale (gratuit en usage perso ; usage professionnel → plan Standard 8 $/utilisateur,
    ou WireGuard à la main). Pare-feu `ufw default deny incoming`, n'autoriser que `tailscale0` (et UDP 41641). Aucun
    port public, pas même 22 : la console du fournisseur sert de secours. ACL Tailscale : seul le PC d'Anil joint le
    VPS, le VPS ne joint pas le PC (sauf tunnel inverse explicite pour les aperçus).
@@ -249,8 +249,8 @@ placement: 'local' | 'remote-ok' | 'remote';
    `aibox` sans sudo pour les workers ; un compte admin distinct pour la maintenance. `unattended-upgrades` actif.
 3. **Runner** : écoute sur l'IP tailnet, jeton par session (comme `mcpHub.ts`), comparaison à temps constant ; refuse
    tout binaire autre que le `claude` installé ; arguments en liste, jamais de shell.
-4. **Isolation sensible / perso** : un utilisateur Unix par classe (`aibox-perso`, `aibox-coiffissimo`) avec HOME,
-   comptes Claude, jeton GitHub et repos séparés ; idéalement deux VPS. Données clients Coiffissimo : hébergeur UE
+4. **Isolation sensible / perso** : un utilisateur Unix par classe (`aibox-perso`, `aibox-pro`) avec HOME,
+   comptes Claude, jeton GitHub et repos séparés ; idéalement deux VPS. Données clients pro : hébergeur UE
    soumis au RGPD (OVH, Hetzner) ; **pas Tencent** (groupe soumis au droit chinois) pour ces repos.
 5. **Où vivent les jetons** : fichiers 600 dans le HOME de l'utilisateur concerné, jamais dans les logs du runner (il
    masque les variables `*_TOKEN`, `*_KEY`), jamais dans le journal d'événements (il ne stocke que le flux stream-json,
@@ -272,9 +272,9 @@ du maître PC fermé est mesuré comme le vrai frein. C sert de complément ponc
 **VPS** :
 - Démarrage : le Tencent Lighthouse 2 vCPU / 2 Go de Francfort **suffit pour la phase 1** (1 worker, repo perso, pas
   de gros build) ; pas au-delà : Anthropic recommande 4 Go minimum, et 2 Go tiennent ~3 CLI sans build ni install.
-  Pas de repo Coiffissimo dessus.
+  Pas de repo pro dessus.
 - Cible : 4 vCPU / 8 Go en UE (≈ 4 à 6 workers avec builds) : **OVH VPS-2** (~8,50 $/mois, France, opérateur
-  français : le plus simple pour les données Coiffissimo) ou Hetzner CX33 (8,99 €/mois, actuellement souvent
+  français : le plus simple pour les données pro) ou Hetzner CX33 (8,99 €/mois, actuellement souvent
   indisponible). 8 vCPU / 16 Go (Hetzner CX43 16,49 €, OVH VPS-4 ~23 $) si plus de 6 workers ou des builds Next.js
   en parallèle. Les prix sont à confirmer dans la console le jour de la commande (`needs_validation`).
 
@@ -286,7 +286,7 @@ du maître PC fermé est mesuré comme le vrai frein. C sert de complément ponc
 2. **Phase 2 — 2 semaines** : runner systemd avec journal numéroté, détache/ré-attache, file hors ligne, `placement`
    par poste avec refus au lancement, baux de branches, worktrees VPS, indicateurs réels, ntfy. VPS UE 4/8.
 3. **Phase 3 — 1 à 2 semaines** : tunnels pour les serveurs de dev, panneau git distant, utilisateur séparé pour
-   Coiffissimo, Codex/Gemini distants si utiles, procédure de rotation et de destruction, notes de version.
+   pro, Codex/Gemini distants si utiles, procédure de rotation et de destruction, notes de version.
 
 **Critères de succès** : (1) une mission lancée, PC fermé 2 h, retrouvée finie avec son rapport au maître à la
 réouverture, sans perte ni doublon ; (2) aucun poste `local` lançable sur le VPS, vérifié par test ; (3) coupure réseau
@@ -297,7 +297,7 @@ missions terminées hors présence, mesurée sur 2 semaines ; (6) aucun jeton da
 hub absent : à chaque mise à jour de Claude Code, un test de bout en bout ; (2) le quota de l'abonnement, pas le VPS,
 borne le gain, et un usage massif sans surveillance frôle la limite « usage ordinaire individuel » des conditions ;
 (3) un VPS qui détient des jetons GitHub et Claude devient une cible : Tailscale seul, aucun secret de prod, et une
-séparation stricte Coiffissimo / perso.
+séparation stricte pro / perso.
 
 ## Sources (consultées le 2026-11-09)
 

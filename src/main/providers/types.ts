@@ -1,6 +1,7 @@
 import type { ZodRawShape } from 'zod';
 import type { Totals } from '../../shared/costs';
 import type { Effort, HarnessId, Mode, RateLimits, RemoteWorkers } from '../../shared/types';
+import type { RemoteExit, RemoteNotify } from '../remote';
 import type { Block } from './blocks';
 
 // What the session manager knows of an AI agent, whichever program runs it. An adapter (providers/<harness>) starts the
@@ -215,6 +216,12 @@ export interface HistoryMessage {
 export interface RemoteLaunch {
   workers: RemoteWorkers;
   cwd: string;
+  /** How its connection ended: told before the SDK reports the failure. */
+  onExit?: (exit: RemoteExit) => void;
+  /** What the server posts to the phone on its own when a detached turn ends. */
+  notify?: RemoteNotify;
+  /** Tokens of its scope (GH_TOKEN…), given to its process in memory. */
+  secrets?: Record<string, string>;
 }
 
 export interface AdapterContext {

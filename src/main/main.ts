@@ -13,6 +13,8 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  powerMonitor,
+  powerSaveBlocker,
   session,
   shell,
   type IpcMainEvent,
@@ -69,6 +71,7 @@ import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig,
 import { CostLog } from './costLog';
 import { errorCode } from './errors';
 import { Forum } from './forum';
+import { RemoteServer, scriptsDir } from './remoteServer';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
 import { setGitSignIn } from './git';
@@ -279,6 +282,8 @@ class Hub {
   readonly costLog = new CostLog(this.dataDir);
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
+  /** The remote server (experimental): inert while remote workers are off. */
+  readonly remote: RemoteServer;
   readonly caps: CapabilityStore;
   readonly updater: Updater;
   /** Where the sessions of OpenAI accounts send Claude Code's requests. */
@@ -334,6 +339,33 @@ class Hub {
       confirmSwitch: (provider, update) => this.confirmCliSwitch(provider, update),
       send: (run) => send('hub:cli-update', run),
     });
+    this.remote = new RemoteServer({
+      cfg: this.cfg,
+      secrets: this.secrets,
+      scripts: scriptsDir(here),
+      save: () => this.save(),
+      send: (view) => send('vps:state', view),
+      openExternal: (url) => void shell.openExternal(url),
+      keepAwake: () => {
+        const id = powerSaveBlocker.start('prevent-app-suspension');
+        return () => powerSaveBlocker.stop(id);
+      },
+      idleSeconds: () => powerMonitor.getSystemIdleTime(),
+      confirmHost: async (host, fingerprint) => {
+        const fr = this.cfg.language === 'fr';
+        const options = {
+          type: 'question' as const,
+          buttons: fr ? ['Faire confiance', 'Annuler'] : ['Trust it', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          message: fr ? `Faire confiance au serveur ${host} ?` : `Trust the server ${host}?`,
+          detail: `${fingerprint}
+
+${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : 'It must be the same as in the provider’s console.'}`,
+        };
+        return (await (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options))).response === 0;
+      },
+    });
     this.mgr = new SessionManager({
       cfg: this.cfg,
       dataDir: this.dataDir,
@@ -345,7 +377,9 @@ class Hub {
       persist: () => this.save(),
       costLog: this.costLog,
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
+      remoteServer: this.remote,
     });
+    this.remote.mgr = this.mgr;
     this.caps = new CapabilityStore({
       cfg: this.cfg,
       executable: () => this.executable,
@@ -1083,6 +1117,17 @@ class Hub {
     });
     handle('team:agents', () => agentFiles(this.cfg));
     handle('forum', (action) => this.forum.run(action));
+    handle('vps:state', () => this.remote.view());
+    handle('vps:wizard', (action, arg) => this.remote.wizardAction(action, arg));
+    handle('vps:set', (setting) => this.remote.set(setting));
+    handle('vps:ovh', (o) => this.remote.setOvh(o));
+    handle('vps:ovh-confirm', () => this.remote.confirmOvh());
+    handle('vps:secret', (o) => this.remote.setSecret(o));
+    handle('vps:app', (o) => this.remote.setApp(o));
+    handle('vps:ovh-forget', () => this.remote.forgetOvh());
+    handle('vps:test-ntfy', () => this.remote.testNotification());
+    on('away:leave', () => void this.remote.stepAway(false));
+    on('away:back', () => void this.remote.comeBack());
     // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
     handle('caps:get', () => this.caps.inventory());
     handle('caps:check', async () => {
@@ -1358,6 +1403,10 @@ async function start(): Promise<void> {
   // A first run waits for the setup: the master needs Claude access before it starts.
   hub.startMaster();
   hub.setWatchers();
+  // Remote workers on only: the server's guard, the automatic step-away, the turns left alone there.
+  hub.remote.start();
+  powerMonitor.on('lock-screen', () => hub.remote.autoAway());
+  powerMonitor.on('resume', () => hub.remote.resumed());
   updater = hub.updater;
   updater.start();
 }
