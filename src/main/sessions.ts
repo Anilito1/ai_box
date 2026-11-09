@@ -435,6 +435,8 @@ const SHOWN_INPUT = /^(Bash|PowerShell|Edit|MultiEdit|Write|NotebookEdit)$/;
 
 /** A worker's name as the user reads it: without its "hub-" prefix. */
 const displayName = (s: { name: string }) => s.name.replace(/^hub-/, '');
+/** Why the server takes no worker: OVHcloud did not switch it on, or it does not answer. */
+const downWhy = (down: string) => t(down === 'off' ? 'away.why.off' : 'away.why.unreachable');
 const pulseOf = (s: Session): SessionPulse => ({ signalAt: s.signalAt, tokens: s.tokens.count, estimated: s.tokens.estimated });
 
 /** A model as the interface names it: Claude Code's name, its "default" choice said in the user's language. */
@@ -1627,7 +1629,7 @@ export class SessionManager extends EventEmitter {
     if (remote && typeof remote === 'object') {
       // A server switched off by the hour is switched on first (at once when it already runs).
       const down = await this.opts.remoteServer?.wake();
-      const secrets = down ? t('away.why.unreachable') : await this.remoteSecrets(s);
+      const secrets = down ? downWhy(down) : await this.remoteSecrets(s);
       remote = typeof secrets === 'string' ? secrets : { ...remote, secrets };
     }
     if (this.quitting || s.inbox !== inbox) return;
@@ -1944,7 +1946,8 @@ export class SessionManager extends EventEmitter {
     this.changed();
     const workers = [...this.sessions.values()].filter((s) => s.role === 'worker' && s.inbox && !s.away && !s.remoteRun && (this.isWorking(s) || s.owesReport || s.queued > 0));
     const movable = workers.filter((s) => !this.awayClass(s));
-    const down = movable.length > 0 ? await (this.opts.remoteServer?.wake() ?? Promise.resolve(null)) : null;
+    const woke = movable.length > 0 ? await (this.opts.remoteServer?.wake() ?? Promise.resolve(null)) : null;
+    const down = woke ? downWhy(woke) : null;
     // Workers on the server find this PC's skills, plugins and CLAUDE.md there: at most a minute, then they move without.
     if (movable.length > 0 && !down) await this.opts.remoteServer?.syncEnv?.(60_000);
     let slots = cfg.max - [...this.sessions.values()].filter((s) => s.remoteRun && (s.inbox || s.remoteRun.state === 'detached')).length;
