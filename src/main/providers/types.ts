@@ -1,6 +1,6 @@
 import type { ZodRawShape } from 'zod';
 import type { Totals } from '../../shared/costs';
-import type { Effort, HarnessId, Mode, RateLimits } from '../../shared/types';
+import type { Effort, HarnessId, Mode, RateLimits, RemoteWorkers } from '../../shared/types';
 import type { Block } from './blocks';
 
 // What the session manager knows of an AI agent, whichever program runs it. An adapter (providers/<harness>) starts the
@@ -167,6 +167,8 @@ export interface LaunchSpec {
   /** Prior process totals, for providers whose protocol only reports per-prompt usage. */
   initialUsage?: Totals;
   conversation: { id: string; resume: boolean };
+  /** Runs on the remote server instead of this PC. */
+  remote?: RemoteLaunch;
   input: AsyncIterable<AgentInput>;
   /** Something really came from the process: called at reception, before any translation. No timer of its own. */
   onSignal(): void;
@@ -209,9 +211,16 @@ export interface HistoryMessage {
 }
 
 /** How to reach the program outside a session: its path and the environment of the account. */
+/** A session run on the remote server (Claude Code only): the server, and its clone of the session's checkout. */
+export interface RemoteLaunch {
+  workers: RemoteWorkers;
+  cwd: string;
+}
+
 export interface AdapterContext {
   executable: string;
   env: Record<string, string>;
+  remote?: RemoteLaunch;
 }
 
 export interface ProviderAdapter {

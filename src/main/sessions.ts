@@ -65,7 +65,7 @@ import {
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
-import { mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, type HubConfig } from './config';
+import { localBlock, mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, type HubConfig } from './config';
 import type { CostLog } from './costLog';
 import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
@@ -127,7 +127,9 @@ import type {
   LimitSignal,
   PermissionAnswer,
   PermissionRequest,
+  RemoteLaunch,
 } from './providers/types';
+import { remoteCwdOf } from './remote';
 
 interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents'> {
   sessionId: string;
@@ -1555,8 +1557,17 @@ export class SessionManager extends EventEmitter {
     }
     const adapter = adapterFor(harness);
     const executable = this.executableOf(harness);
+    // A remote post that cannot run on the server is refused: never run here instead, without the user knowing.
+    const remote = this.remoteOf(s, harness, account);
+    if (typeof remote === 'string') {
+      if (firstPrompt) this.pushUser(s, firstPrompt);
+      this.teardown(s);
+      this.remoteRefused(s, remote);
+      this.changed();
+      return;
+    }
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
-    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account) }))) {
+    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account), ...(remote ? { remote } : {}) }))) {
       resume = false;
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
@@ -1620,6 +1631,7 @@ export class SessionManager extends EventEmitter {
       mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
       env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
+      ...(remote ? { remote } : {}),
       ...(harness === 'gemini' && resume && s.geminiUsage ? { initialUsage: s.geminiUsage } : {}),
       conversation: { id: s.sessionId, resume },
       input: inbox,
@@ -1683,6 +1695,30 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A session whose folder was deleted or moved: putting it back is the fix, not the program or the account. */
+  /**
+   * Where a post's worker runs: null = this PC; the server's clone otherwise; a text when its post is remote but it
+   * cannot run there (feature off, a program of this PC, a checkout the server has no clone of, an instance's worktree).
+   */
+  private remoteOf(s: Session, harness: HarnessId, account: string): RemoteLaunch | null | string {
+    const post = this.postOf(s);
+    if (s.role === 'master' || !post || post.placement !== 'remote') return null;
+    const workers = this.opts.cfg.remoteWorkers;
+    if (!workers.enabled) return t('remote.why.off');
+    // The server runs Claude Code on its own sign-in: a bridged account (another provider) would mean nothing there.
+    if (harness !== 'claude' || this.kindOf(account) === 'openai') return t('remote.why.provider');
+    if (localBlock(post)) return t('remote.why.local');
+    const cwd = remoteCwdOf(workers, s.cwd);
+    if (!cwd) return t('remote.why.repo');
+    return { workers, cwd };
+  }
+
+  private remoteRefused(s: Session, why: string): void {
+    s.error = t('remote.refused', { why });
+    this.event(s, 'crashed');
+    this.notice(s, s.error, 'error');
+    if (s.role === 'worker') this.notifyMaster(t('hub.crashed', { name: displayName(s), error: s.error }), t('hub.crashed.note', { error: s.error }), s);
+  }
+
   private folderGone(s: Session): void {
     s.error = t('error.noFolder');
     this.event(s, 'crashed');
@@ -2437,7 +2473,8 @@ export class SessionManager extends EventEmitter {
     try {
       const account = s.runAccount || this.accountOf(s);
       const harness = harnessOf(this.kindOf(account));
-      const ctx = { executable: this.executableOf(harness), env: this.environment(account) };
+      const remote = this.remoteOf(s, harness, account);
+      const ctx = { executable: this.executableOf(harness), env: this.environment(account), ...(remote && typeof remote === 'object' ? { remote } : {}) };
       const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd, ctx)).slice(-HISTORY_MAX);
       for (const m of messages) {
         const { blocks } = m;
