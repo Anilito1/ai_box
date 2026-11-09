@@ -180,6 +180,8 @@ export const claudeAdapter: ProviderAdapter = {
       env: spec.env,
       ...(spec.conversation.resume ? { resume: spec.conversation.id } : { sessionId: spec.conversation.id }),
     };
+    // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.
+    if (spec.onSpawn) Object.assign(options, { onProcessSpawned: spec.onSpawn });
     proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id, spec.onSignal);
     return proc;
   },

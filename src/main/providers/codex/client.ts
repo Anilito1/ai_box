@@ -24,6 +24,7 @@ export interface ClientOptions {
   env: Record<string, string>;
   cwd?: string;
   version: string;
+  onSpawn?(pid: number): void;
 }
 
 const STDERR_KEEP = 4000;
@@ -56,6 +57,7 @@ export class CodexClient {
       windowsHide: true,
     });
     this.child = child;
+    if (child.pid) this.opts.onSpawn?.(child.pid);
     child.stderr?.on('data', (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-STDERR_KEEP)));
     const exited = new Promise<void>((resolve) => {
       child.once('error', (err) => {

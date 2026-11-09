@@ -101,6 +101,7 @@ class GeminiProcess implements AgentProcess {
       cwd: spec.cwd,
       version: HUB_VERSION,
       args: workspaceArgs([...spec.extraDirs, ...spec.readDirs]),
+      onSpawn: spec.onSpawn,
     });
     this.readyP = this.run();
     this.readyP.catch(() => undefined);

@@ -170,6 +170,8 @@ export interface LaunchSpec {
   input: AsyncIterable<AgentInput>;
   /** Something really came from the process: called at reception, before any translation. No timer of its own. */
   onSignal(): void;
+  /** The program's process exists: its PID, so the hub can end what it leaves running once closed. */
+  onSpawn?(pid: number): void;
   onPermission(req: PermissionRequest): Promise<PermissionAnswer>;
   onElicitation(req: ElicitationRequest, signal: AbortSignal): Promise<ElicitationAnswer>;
 }

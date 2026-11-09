@@ -27,6 +27,7 @@ export interface AcpOptions {
   version: string;
   /** Arguments after --acp. */
   args?: string[];
+  onSpawn?(pid: number): void;
 }
 
 const STDERR_KEEP = 4000;
@@ -53,6 +54,7 @@ export class AcpClient {
     const [file, args] = toolCommand(this.opts.executable, ['--acp', ...(this.opts.args ?? [])]);
     const child = spawn(file, args, { cwd: this.opts.cwd, env: this.opts.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
+    if (child.pid) this.opts.onSpawn?.(child.pid);
     child.stderr?.on('data', (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-STDERR_KEEP)));
     const exited = new Promise<void>((resolve) => {
       child.once('error', (err) => {

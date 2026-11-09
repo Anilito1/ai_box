@@ -112,6 +112,7 @@ import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPl
 import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
 import { Inbox } from './providers/inbox';
+import { EXIT_WAIT_MS, reapTrees, type CliProc } from './procTree';
 import type { McpHub, McpLease } from './mcpHub';
 import type {
   ProviderAdapter,
@@ -253,6 +254,11 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   geminiUsage?: Totals;
   /** Commands and skills its Claude Code process offers. */
   commands: AgentCommand[];
+  /**
+   * Its programs since it was last closed (a relaunch keeps the dev servers of a conversation that goes on), in the
+   * saved state too: what they leave running ends when the session closes, the hub quits, or at the next start.
+   */
+  procs: CliProc[];
 }
 
 type Persisted = {
@@ -297,6 +303,7 @@ type Persisted = {
   | 'fallbackMark'
   | 'fallbackModel'
   | 'convs'
+  | 'procs'
 >;
 
 export interface ManagerOptions {
@@ -501,6 +508,11 @@ export class SessionManager extends EventEmitter {
   /** Workers to relaunch at start, from the state saved when the hub last closed. */
   private readonly resumeOnStart = new Map<string, 'mission' | 'work'>();
   private spawnQueue: Promise<unknown> = Promise.resolve();
+  /** Programs closed and waiting to be cleared, by session: gathered for a moment, so closing several takes one listing. */
+  private toReap = new Map<string, CliProc[]>();
+  private reapTimer: NodeJS.Timeout | null = null;
+  /** One clearing at a time. */
+  private reapRun: Promise<void> = Promise.resolve();
   /** Topics of the master's conversation; items a later call settles are filed again with theirs. */
   private readonly topics = new TopicTracker((ids, topic, also) => this.refile(ids, topic, also));
 
@@ -633,6 +645,7 @@ export class SessionManager extends EventEmitter {
     s.inbox.close();
     this.teardown(s);
     q?.close();
+    this.reap(s, s.procs.splice(0));
     s.installing?.kill();
     this.changed();
     if (s.tree && !this.quitting) void this.retire(s);
@@ -697,6 +710,33 @@ export class SessionManager extends EventEmitter {
       s.query?.close();
       s.installing?.kill();
     }
+  }
+
+  /** The session is closed: what its programs left running (background shells, dev servers, MCP servers...) ends. */
+  private reap(s: Session, procs: CliProc[]): void {
+    if (procs.length === 0) return;
+    this.toReap.set(s.id, [...(this.toReap.get(s.id) ?? []), ...procs]);
+    this.reapTimer ??= setTimeout(() => {
+      this.reapTimer = null;
+      const batch = this.toReap;
+      this.toReap = new Map();
+      this.clearProcs(batch, EXIT_WAIT_MS);
+    }, 1000);
+  }
+
+  /** A program still running, or that could not be looked at, goes back to its session: the next close or start retries. */
+  private clearProcs(batch: Map<string, CliProc[]>, waitMs: number): void {
+    this.reapRun = this.reapRun.then(async () => {
+      const { ended, left, kept } = await reapTrees([...batch.values()].flat(), waitMs);
+      if (ended + left > 0) console.warn(`sessions: ${ended} leftover processes ended${left > 0 ? `, ${left} could not be` : ''}`);
+      for (const [id, procs] of batch) {
+        const s = this.sessions.get(id);
+        const back = procs.filter((p) => kept.includes(p));
+        if (!s || back.length === 0) continue;
+        s.procs.unshift(...back);
+        this.changed();
+      }
+    });
   }
 
   /** The models an account offers, once known (a Codex account's own list; Claude's for the others). */
@@ -1469,6 +1509,7 @@ export class SessionManager extends EventEmitter {
       // Claude Code could not be started (missing executable, broken install): nothing else would report it.
       if (s.query) return; // Started: consume() reports what happens next.
       this.teardown(s);
+      this.reap(s, s.procs.splice(0));
       this.failed(s, errorText(err), this.missingProgram(s, errorText(err)), this.adapterOf(s).harness);
       this.changed();
     }
@@ -1586,6 +1627,12 @@ export class SessionManager extends EventEmitter {
       onSignal: () => {
         if (s.inbox === inbox) this.signal(s);
       },
+      onSpawn: (pid) => {
+        const proc = { pid, startedAt: Date.now() };
+        if (s.inbox !== inbox) return this.reap(s, [{ ...proc, endedAt: proc.startedAt }]); // Replaced while it started: closed already.
+        s.procs.push(proc);
+        this.changed();
+      },
       onPermission: (req) => this.askPermission(s, req, inbox),
       onElicitation: (req, signal) => this.answerElicitation(s, req, signal, inbox),
     });
@@ -1609,6 +1656,7 @@ export class SessionManager extends EventEmitter {
     }
     if (s.query !== q) return; // stop() already tore the session down.
     this.teardown(s);
+    if (!this.quitting) this.reap(s, s.procs.splice(0));
     if (failure && !this.quitting) this.failed(s, failure, isMissing(failure), adapter.harness);
     this.changed();
   }
@@ -1647,6 +1695,8 @@ export class SessionManager extends EventEmitter {
     if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
+    const now = Date.now();
+    for (const p of s.procs) p.endedAt ??= now;
     s.mcpLease?.dispose();
     s.mcpLease = null;
     s.liveId = null;
@@ -4145,6 +4195,7 @@ export class SessionManager extends EventEmitter {
       usageBase: Promise.resolve(null),
       usageSeen: null,
       commands: [],
+      procs: [],
       accountId: '',
       runAccount: '',
       usageAccount: '',
@@ -4183,12 +4234,17 @@ export class SessionManager extends EventEmitter {
   private restore(): void {
     if (!existsSync(this.stateFile)) return;
     try {
+      const savedAt = statSync(this.stateFile).mtimeMs;
+      const previous = new Map<string, CliProc[]>();
       const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown; cooldowns?: unknown };
       this.cooldowns.restore(saved.cooldowns, Date.now());
       for (const { resume, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
+        // Programs of the hub's last run: last known to run when the state was saved (at its close, or before a crash).
+        if (s.procs?.length) previous.set(s.id, s.procs.map((p) => ({ ...p, endedAt: p.endedAt ?? savedAt })));
+        s.procs = [];
         // The hub removes this worktree and deletes its branch later: only one that it could have made itself.
         if (s.tree && !validTree(s.tree)) s.tree = null;
         // Its note written, the hub closed before the worker did: the next conversation starts afresh all the same.
@@ -4197,6 +4253,8 @@ export class SessionManager extends EventEmitter {
         if (s.started && !s.contextBase) s.contextBase = { id: s.sessionId, tokens: 0 };
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
       }
+      // Nothing talks to them any more: what they left running ends now, with no wait for them.
+      if (previous.size > 0) this.clearProcs(previous, 0);
       // The topics of the master's conversation, if they are this conversation's.
       this.topics.restore(saved.topics, this.sessions.get(MASTER_ID)?.sessionId ?? '');
     } catch {
@@ -4256,6 +4314,7 @@ export class SessionManager extends EventEmitter {
       fallbackMark: s.fallbackMark,
       fallbackModel: s.fallbackModel,
       convs: s.convs,
+      procs: s.procs,
       reportTo: s.reportTo,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.

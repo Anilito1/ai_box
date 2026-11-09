@@ -129,7 +129,7 @@ class CodexProcess implements AgentProcess {
     this.model = spec.model;
     this.roots = [spec.cwd, ...spec.extraDirs];
     this.stream = new CodexStream(() => this.model);
-    this.client = new CodexClient({ executable: spec.executable || 'codex', env: { ...spec.env, ...(spec.mcp ? { HUB_MCP_TOKEN: spec.mcp.token } : {}) }, cwd: spec.cwd, version: HUB_VERSION });
+    this.client = new CodexClient({ executable: spec.executable || 'codex', env: { ...spec.env, ...(spec.mcp ? { HUB_MCP_TOKEN: spec.mcp.token } : {}) }, cwd: spec.cwd, version: HUB_VERSION, onSpawn: spec.onSpawn });
     this.readyP = this.run();
     // The failure reaches the manager through the event stream; nobody awaiting ready() must see it unhandled.
     this.readyP.catch(() => undefined);

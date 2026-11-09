@@ -21,6 +21,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Modifié
 
 - Les mascottes animées demandent nettement moins au processeur, surtout quand l’AI Box est en arrière-plan.
+- Sous Windows, quand un worker s’arrête, les serveurs, navigateurs de test et outils qu’il avait lancés en arrière-plan s’arrêtent avec lui au lieu de continuer à tourner.
 
 ## 2026-11-06
 
