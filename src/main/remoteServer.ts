@@ -19,7 +19,8 @@ import type { AwayView } from '../shared/types';
 // off once nobody works there), and stepping away by hand or when the screen locks. Nothing here starts while remote
 // workers are off: no timer, no connection, no process.
 
-const WAKE_MS = 12 * 60_000;
+// An unshelve of a set-up d2-8 took 9 to 10 minutes up to SSH (SBG5); a shelve still under way ends first.
+const WAKE_MS = 20 * 60_000;
 const GUARD_MS = 10 * 60_000;
 const IDLE_AWAY_S = 10 * 60;
 
