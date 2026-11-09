@@ -61,6 +61,27 @@ export const REST = new Set<Clip>(['idle_breathe', 'idle_drowsy', 'sleep_loop', 
 export const CALM = new Set<Clip>(['wait_coffee', 'master_conduct']);
 /** Everyday fidgets of a resting Clawd, drawn at the slow pace too. */
 export const FIDGETS = new Set<Clip>(['idle_look_around', 'idle_hop', 'idle_stretch']);
+/** The rig's own rate, for the large mascot at work. */
+const FULL_FPS = 24;
+/** Calm loops, fidgets and blinks; also the cards at work. */
+const SLOW_FPS = 12;
+/** Every mascot with the hub in the background: the slowest pace, so the longest frame. */
+export const QUIET_FPS = 8;
+/** A longer mixer step is a pause (a view off screen, a late timer), not a frame: the move resumes without a jump. */
+export const MAX_STEP_S = 2 / QUIET_FPS;
+
+/**
+ * Frames per second of a moving mascot. Each frame drawn makes the whole window composite again, which costs more
+ * than the drawing: every rate divides 24, so views at different paces share the same frames of the window.
+ * `large`: the mascot atop the open conversation (the rig's own rate); `quiet`: the hub window is in the background.
+ * Blinks and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the view's full rate.
+ */
+export function frameRate(clip: Clip, large: boolean, quiet: boolean): number {
+  if (quiet) return QUIET_FPS;
+  if (CALM.has(clip) || REST.has(clip) || FIDGETS.has(clip)) return SLOW_FPS;
+  return large ? FULL_FPS : SLOW_FPS;
+}
+
 /** Lying down: entered through fall_asleep / crash_ko, left through wake_up. */
 const DOWN = new Set<Clip>(['sleep_loop', 'ko_loop']);
 /** Poses that leave the left arm free for the blueprint of a session in plan mode. */

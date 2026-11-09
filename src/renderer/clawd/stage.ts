@@ -27,7 +27,7 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import glb from '../../../assets/clawd.glb';
 import type { MascotId } from '../mascot';
-import { CALM, CLIPS, FIDGETS, REST, type Clip, type Hat, type Mind, type Pose } from './state';
+import { CLIPS, frameRate, MAX_STEP_S, QUIET_FPS, REST, type Clip, type Hat, type Mind, type Pose } from './state';
 
 declare global {
   interface Window {
@@ -41,8 +41,8 @@ declare global {
 // would read the pixels back to the CPU). Scrolling, clipping and hiding stay with the DOM.
 //
 // Every frame put on a canvas costs the same whatever draws it, so frames are only drawn while something moves:
-// - at work, 24 fps for the large mascot of the open conversation (the rig's own rate), 16 for the sidebar cards,
-//   12 for calm loops (waiting on a background task, the master conducting) or with the hub in the background;
+// - at work, the pace of frameRate (state.ts): fastest for the large mascot of the open conversation, slower for the
+//   sidebar cards and calm loops, slowest with the hub in the background;
 // - at rest, a still pose, livened now and then by a blink or a fidget at 12 fps (never with the hub in the
 //   background);
 // - a closed session is drawn once; a hidden or minimized hub draws nothing.
@@ -50,9 +50,6 @@ declare global {
 const BASE_FADE_S = 0.25;
 const SHOT_FADE_S = 0.1;
 const OVERLAY_FADE_S = 0.3;
-const LARGE_FPS = 24;
-const CARD_FPS = 16;
-const SLOW_FPS = 12;
 /** Timers fire a little late: a frame this close to due is drawn now. */
 const TIMER_SLACK_MS = 4;
 /** A resting view still checks its mind this often (drowsiness, a fidget due), without drawing. */
@@ -124,7 +121,7 @@ class Stage {
 
   /** `large`: the mascot atop an open conversation, animated at the full rate. */
   attach(canvas: HTMLCanvasElement, mind: Mind, model: Model, color: string, large: boolean, onLost: () => void): StageView {
-    const view = new StageView(this, canvas, mind, model, color, large ? LARGE_FPS : CARD_FPS, onLost);
+    const view = new StageView(this, canvas, mind, model, color, large, onLost);
     this.views.add(view);
     this.wake();
     return view;
@@ -228,7 +225,7 @@ export class StageView {
     private readonly mind: Mind,
     private readonly model: Model,
     color: string,
-    private readonly fps: number,
+    private readonly large: boolean,
     readonly onLost: () => void,
   ) {
     const ctx = canvas.getContext('bitmaprenderer');
@@ -338,11 +335,10 @@ export class StageView {
     }
     if (t < this.nextAt - TIMER_SLACK_MS) return this.nextAt;
     // Frames fall on a grid per rate, so views at the same pace share the timer's wake-ups (12 fps is every other
-    // 24 fps frame). Blinks and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the full rate.
-    const slow = quiet || CALM.has(pose.clip) || REST.has(pose.clip) || FIDGETS.has(pose.clip);
-    const step = 1000 / (slow ? SLOW_FPS : this.fps);
+    // 24 fps frame).
+    const step = 1000 / frameRate(pose.clip, this.large, quiet);
     this.nextAt = (Math.floor(t / step) + 1) * step;
-    const dt = this.last ? Math.min(0.1, (t - this.last) / 1000) : 0;
+    const dt = this.last ? Math.min(MAX_STEP_S, (t - this.last) / 1000) : 0;
     this.last = t;
     this.mixer.update(dt);
     this.release();
@@ -363,7 +359,7 @@ export class StageView {
 
   /** Keeps drawing for `seconds` (plus a frame), so a move at rest ends on screen. */
   private settle(t: number, seconds: number): void {
-    this.settleUntil = Math.max(this.settleUntil, t + seconds * 1000 + 1000 / SLOW_FPS);
+    this.settleUntil = Math.max(this.settleUntil, t + seconds * 1000 + 1000 / QUIET_FPS);
   }
 
   /** From the base loop to a one-shot (or back), crossfaded; loops start at the worker's own phase, rest poses hold. */

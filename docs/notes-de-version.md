@@ -17,6 +17,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - Les fichiers et dossiers liés dans les réponses finales s’ouvrent localement, avec un contrôle du périmètre et un message s’ils sont indisponibles.
 - Chaque sujet peut garder une mémoire courte pour reprendre le travail sans emporter toute la conversation.
 
+### Modifié
+
+- Les mascottes animées demandent nettement moins au processeur, surtout quand l’AI Box est en arrière-plan.
+
 ## 2026-11-06
 
 ### Ajouté
