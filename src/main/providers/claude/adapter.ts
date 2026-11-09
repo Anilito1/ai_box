@@ -15,6 +15,7 @@ import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
 import { limitsOfUsage } from '../../../shared/usage';
+import { remoteSpawner, remoteStore, remoteTranscript } from '../../remote';
 import { blocksOf } from '../blocks';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
@@ -132,8 +133,10 @@ export const claudeAdapter: ProviderAdapter = {
     })();
     const master = spec.role === 'master';
     const options: Options = {
-      cwd: spec.cwd,
-      ...(spec.extraDirs.length > 0 ? { additionalDirectories: spec.extraDirs } : {}),
+      // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
+      cwd: spec.remote?.cwd ?? spec.cwd,
+      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd) } : {}),
+      ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
@@ -187,11 +190,13 @@ export const claudeAdapter: ProviderAdapter = {
   },
 
   // An unreadable check keeps the id rather than dropping the link to the conversation.
-  hasConversation: (id, cwd) => getSessionInfo(id, { dir: cwd }).then(Boolean, () => true),
+  hasConversation: (id, cwd, ctx) =>
+    (ctx.remote ? remoteTranscript(ctx.remote.workers, id).then((e) => e !== null) : getSessionInfo(id, { dir: cwd }).then(Boolean)).catch(() => true),
 
-  async history(id, cwd): Promise<HistoryMessage[]> {
+  async history(id, cwd, ctx): Promise<HistoryMessage[]> {
     const out: HistoryMessage[] = [];
-    for (const m of await getSessionMessages(id, { dir: cwd })) {
+    const where = ctx.remote ? { dir: ctx.remote.cwd, sessionStore: remoteStore(ctx.remote.workers) } : { dir: cwd };
+    for (const m of await getSessionMessages(id, where)) {
       if (m.parent_tool_use_id || (m.type !== 'user' && m.type !== 'assistant')) continue;
       // Claude Code stores an API error as a "<synthetic>" reply with its own wording: not shown again on reload.
       const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';

@@ -102,6 +102,25 @@ export interface TeamRole {
   /** Account its worker runs on (an account id, or "default"); empty = the workers' account. */
   account: string;
   enabled: boolean;
+  /** Where its worker runs: this PC, or the remote server (experimental, `remoteWorkers`). Local tools force 'local'. */
+  placement: Placement;
+}
+
+export type Placement = 'local' | 'remote';
+
+/**
+ * The remote server workers may run on (experimental). Set in config.json by hand, never by the renderer: an SSH key
+ * whose server side only runs the hub's launcher (scripts/vps/launch.mjs), and the server's clone of each repo.
+ */
+export interface RemoteWorkers {
+  enabled: boolean;
+  host: string;
+  user: string;
+  port: number;
+  /** Private key file on this PC. */
+  key: string;
+  /** Local checkout (a post's first folder) → the same repo's clone on the server. */
+  repos: Record<string, string>;
 }
 
 /**
@@ -700,6 +719,7 @@ export interface HubSettings {
   /** Background colour of the window ("#rrggbb"), the surfaces derived from it; empty = the system's appearance. */
   background: string;
   dictation: DictationSettings;
+  remoteWorkers: RemoteWorkers;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */

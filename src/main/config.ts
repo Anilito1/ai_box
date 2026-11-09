@@ -10,9 +10,11 @@ import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkGroup, GROUP_ID, GROUPS_MAX, normalizeGroup, withoutPosts, type GroupError } from '../shared/groups';
 import { isGroupPrefs } from '../shared/topicGroups';
 import { isFolderPrefs, pruneFolders } from '../shared/teamFolders';
+import { localReason, mcpServersOf, type LocalReason } from '../shared/placement';
 import { checkRole, normalizeRole, TEAM_MAX, type RoleError } from '../shared/team';
 import { EFFORTS, PROVIDERS, type Account, type Effort, type HubSettings, type Mode, type SettingsPatch, type TeamGroup, type TeamRole } from '../shared/types';
 import { UPDATE_MODES, type UpdateMode } from '../shared/update';
+import { parseRemote, REMOTE_DEFAULTS } from './remote';
 
 export type HubConfig = HubSettings;
 
@@ -64,6 +66,7 @@ function defaults(lang: Lang): HubConfig {
     teamFolders: { folders: [], root: [] },
     background: '',
     dictation: { ...DICTATION_DEFAULTS },
+    remoteWorkers: structuredClone(REMOTE_DEFAULTS),
   };
 }
 
@@ -166,6 +169,8 @@ function mergeOwn(cfg: HubConfig, raw: Raw): void {
   const g = obj(raw.github);
   if (['none', 'oauth', 'token', 'gh'].includes(g.source as string)) cfg.github.source = g.source as HubConfig['github']['source'];
   if (isStr(g.login, 39, /^[\w-]*$/)) cfg.github.login = g.login;
+  // Written by hand only (experimental): the renderer's patches never reach it.
+  if (raw.remoteWorkers !== undefined) cfg.remoteWorkers = parseRemote(raw.remoteWorkers);
 }
 
 /**
@@ -271,8 +276,21 @@ export function prepareRole(cfg: HubConfig, raw: unknown): RoleCheck {
   if (error) return { error };
   if (!role.folders.every(isDir)) return { error: { field: 'folders', problem: 'format' } };
   if (role.account && !isBuiltinAccount(role.account) && !cfg.accounts.some((a) => a.id === role.account)) return { error: { field: 'account', problem: 'format' } };
+  if (role.placement === 'remote' && localBlock(role)) return { error: { field: 'placement', problem: 'localTool' } };
   if (!role.id) role.id = `r-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
   return { role };
+}
+
+/** Why a post must run on this PC (its tools, its folders' MCP servers), or null. Checked at save and at each launch. */
+export function localBlock(role: TeamRole): LocalReason | null {
+  const mcp = role.folders.flatMap((f) => {
+    try {
+      return mcpServersOf(JSON.parse(readFileSync(join(f, '.mcp.json'), 'utf8')));
+    } catch {
+      return [];
+    }
+  });
+  return localReason(role, mcp);
 }
 
 export type GroupCheck = { group: TeamGroup } | { error: GroupError };

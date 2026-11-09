@@ -48,12 +48,13 @@ export function normalizeRole(raw: unknown): TeamRole {
     mode: ROLE_MODES.includes(o.mode as Mode) ? (o.mode as Mode) : '',
     account: str(o.account).trim(),
     enabled: o.enabled !== false,
+    placement: o.placement === 'remote' ? 'remote' : 'local',
   };
 }
 
-export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'account' | 'enabled' | 'team';
-/** `locked`: the master may not move a post that has a permission mode of its own. */
-export type RoleProblem = 'required' | 'tooLong' | 'format' | 'reserved' | 'taken' | 'tooMany' | 'duplicate' | 'locked';
+export type RoleField = 'name' | 'description' | 'instructions' | 'folders' | 'model' | 'account' | 'enabled' | 'team' | 'placement';
+/** `locked`: the master may not move a post that has a permission mode of its own. `localTool`: it drives a program of this PC. */
+export type RoleProblem = 'required' | 'tooLong' | 'format' | 'reserved' | 'taken' | 'tooMany' | 'duplicate' | 'locked' | 'localTool';
 export interface RoleError {
   field: RoleField;
   problem: RoleProblem;
@@ -180,7 +181,7 @@ const TEMPLATES: Record<Lang, Record<TemplateId, Template>> = {
 /** A new post from a template, model and effort left to the master. */
 export function fromTemplate(id: TemplateId, lang: Lang, folder: string): TeamRole {
   const t = TEMPLATES[lang][id];
-  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true };
+  return { id: '', name: id, description: t.description, instructions: t.instructions, folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true, placement: 'local' };
 }
 
 // ---------- model and effort of a mission ----------
@@ -355,6 +356,7 @@ export function agentToRole(file: { fields: Record<string, string>; body: string
       mode: keptMode,
       account: '',
       enabled: true,
+      placement: 'local',
     },
     ignored,
   };

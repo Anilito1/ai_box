@@ -1334,7 +1334,7 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     const full = team.length >= TEAM_MAX;
     const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
-    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true }), full));
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true, placement: 'local' }), full));
     for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
     row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
     add.append(row);
@@ -1800,6 +1800,20 @@ export class SetupView {
     mark('mode', modeField, mode);
     if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
     grid.append(modeField);
+    // Experimental, set in config.json: shown once remote workers are on, or for a post already sent there.
+    if (s.remoteWorkers.enabled || d.placement === 'remote') {
+      const placeField = this.field(t('team.field.placement'), t('team.placement.hint'));
+      const place = h('select', 'setup-select');
+      place.append(new Option(t('team.placement.local'), 'local'), new Option(t('team.placement.remote'), 'remote'));
+      place.value = d.placement;
+      place.addEventListener('change', () => {
+        d.placement = place.value === 'remote' ? 'remote' : 'local';
+        changed();
+      });
+      placeField.append(place);
+      mark('placement', placeField, place);
+      grid.append(placeField);
+    }
     el.append(grid);
 
     // Ultracode: only for a post that runs on Anthropic; hidden on a Pro plan, shown but off when the plan is not known.
