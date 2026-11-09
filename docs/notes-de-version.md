@@ -14,7 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
-- Expérimental : un serveur distant où tes workers continuent pendant ton absence, avec « Je m’absente » et « Je suis de retour » ; il se configure depuis la palette de commandes (Serveur distant).
+- Serveur distant, expérimental et désactivé par défaut : tes workers y continuent pendant ton absence, avec « Je m’absente » et « Je suis de retour » ; il se configure depuis la palette de commandes (Serveur distant).
 - Serveur distant : tes skills, plugins, consignes et mémoires y sont copiés pour que ses workers travaillent comme ici, sans ce qui relève de l’entreprise ou de ce PC (bouton « Synchroniser l’environnement », et à chaque absence).
 - Serveur distant : ses workers n’utilisent que ton jeton GitHub fine-grained enregistré pour lui ; sans ce jeton, ils ne partent pas et l’app te dit pourquoi.
 - Les fichiers et dossiers liés dans les réponses finales s’ouvrent localement, avec un contrôle du périmètre et un message s’ils sont indisponibles.

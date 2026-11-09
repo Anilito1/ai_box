@@ -138,6 +138,8 @@ export class RemoteServer implements RemoteServerControl {
 
   async wizardAction(action: unknown, arg?: unknown): Promise<RemoteView> {
     const w = this.wizard();
+    // The keys handed over (GitHub, OVH) before remote workers are on: the setup's repos step needs the token.
+    if (action === 'run' || action === 'retry') await this.importHanded();
     if (action === 'run') void w.run(arg);
     else if (action === 'retry') void w.run();
     // Trusting a server is asked again by this process, out of the page's reach, with the fingerprint shown.
