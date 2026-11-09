@@ -90,6 +90,7 @@ const api: HubApi = {
   saveGroup: (group) => ipcRenderer.invoke('group:save', group),
   deleteGroup: (id) => ipcRenderer.invoke('group:delete', id),
   agentFiles: () => ipcRenderer.invoke('team:agents'),
+  forum: (action) => ipcRenderer.invoke('forum', action),
   capabilities: () => ipcRenderer.invoke('caps:get'),
   checkCapabilities: () => ipcRenderer.invoke('caps:check'),
   addMcp: (draft) => ipcRenderer.invoke('caps:mcp-add', draft),

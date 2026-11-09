@@ -3,6 +3,7 @@ import './background';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
+import { ForumView } from './forum';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { taskView } from '../shared/backgroundTask';
@@ -61,11 +62,12 @@ const capButton = (label: string, path: string): HTMLButtonElement => {
   b.append(icon(path), h('span', '', label));
   return b;
 };
+const forumButton = capButton(t('side.forum'), ICONS.bulb);
 const mcpButton = capButton(t('side.mcp'), ICONS.plug);
 const skillsButton = capButton(t('side.skills'), ICONS.sparkle);
 const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
-headActions.append(updateSlot, mcpButton, skillsButton, settingsButton);
+headActions.append(updateSlot, forumButton, mcpButton, skillsButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 // The master's header is the window's top bar: it spans the open worker too, which opens under it.
@@ -73,6 +75,8 @@ workspace.prepend($('pane-master').querySelector('.pane-head') as HTMLElement);
 const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.catalogs[account] ?? null, (account) => snapshot.accounts.find((a) => a.id === account)?.limitedUntil ?? null, () => snapshot.providers);
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
 const capsView = new CapsView(hub);
+const forumView = new ForumView(hub);
+forumButton.addEventListener('click', () => void forumView.open());
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 mcpButton.addEventListener('click', () => void capsView.open('mcp'));
 skillsButton.addEventListener('click', () => void capsView.open('skills'));
@@ -487,6 +491,7 @@ function commands(): Command[] {
   if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
   list.push(
     { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
+    { title: t('forum.title'), run: () => void forumView.open() },
     { title: t('caps.mcp'), run: () => void capsView.open('mcp') },
     { title: t('caps.skills'), run: () => void capsView.open('skills') },
     { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
@@ -499,7 +504,7 @@ function commands(): Command[] {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented || e.isComposing || setup.isOpen || capsView.isOpen) return;
+  if (e.defaultPrevented || e.isComposing || setup.isOpen || capsView.isOpen || forumView.isOpen) return;
   if (isMod(e) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     showPalette(commands());
@@ -579,7 +584,7 @@ initNews(hub);
 initCliUpdates(hub);
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
-initUpdates(hub, () => setup.isOpen || capsView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
+initUpdates(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {
@@ -588,4 +593,4 @@ if (!setup.resume()) {
   });
 }
 // What changed since the last start (none on a new install): over the window once.
-void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || paletteOpen());
+void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || paletteOpen());

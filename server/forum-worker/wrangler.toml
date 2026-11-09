@@ -1,0 +1,24 @@
+name = "ai-box-forum"
+main = "src/index.ts"
+compatibility_date = "2026-08-15"
+workers_dev = true
+preview_urls = false
+# The forum's Cloudflare account. Placeholder until it is chosen: `npm run cf:setup -- --account <id>` writes it once,
+# and every remote command checks the login against it (scripts/cloudflare.mjs --guard).
+account_id = "REPLACE_WITH_ACCOUNT_ID"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-box-forum"
+# Written by `npm run cf:setup` once the database exists.
+database_id = "REPLACE_WITH_DATABASE_ID"
+migrations_dir = "migrations"
+
+# A burst limit per address, on top of the daily quotas kept in D1.
+[[ratelimits]]
+name = "RL"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+# Secrets, never committed, set by `npm run cf:setup`: ADMIN_TOKEN_HASH (SHA-256 of the moderators' key), IP_SALT.
+# For `npm run dev`, put them in .dev.vars (git-ignored).

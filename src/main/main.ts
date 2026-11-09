@@ -68,6 +68,7 @@ import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus, claudeVersion }
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
 import { errorCode } from './errors';
+import { Forum } from './forum';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
 import { setGitSignIn } from './git';
@@ -276,6 +277,7 @@ class Hub {
   readonly cfg: HubConfig;
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
+  readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
   readonly caps: CapabilityStore;
   readonly updater: Updater;
@@ -1081,6 +1083,7 @@ class Hub {
     });
     handle('team:agents', () => agentFiles(this.cfg));
     // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
+    handle('forum', (action) => this.forum.run(action));
     handle('caps:get', () => this.caps.inventory());
     handle('caps:check', async () => {
       await this.caps.check();

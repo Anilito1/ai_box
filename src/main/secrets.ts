@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { safeStorage } from 'electron';
 
 /** `account:<id>`: the key of an extra account (an Anthropic API key, an OpenAI key). */
-export type SecretName = 'anthropicApiKey' | 'githubToken' | `account:${string}`;
-const NAMES = ['anthropicApiKey', 'githubToken'];
+/** `forumToken`: this install's identity on the ideas forum; `forumAdminKey`: the moderators' key, when pasted. */
+export type SecretName = 'anthropicApiKey' | 'githubToken' | 'forumToken' | 'forumAdminKey' | `account:${string}`;
+const NAMES = ['anthropicApiKey', 'githubToken', 'forumToken', 'forumAdminKey'];
 const isName = (name: string): name is SecretName => NAMES.includes(name) || /^account:a-[a-z0-9]{8}$/.test(name);
 
 /**

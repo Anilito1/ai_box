@@ -1,0 +1,24 @@
+{
+  "name": "ai-box-forum-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8789",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "cf:login": "node scripts/cloudflare.mjs login",
+    "cf:whoami": "node scripts/cloudflare.mjs whoami",
+    "cf:check": "node scripts/cloudflare.mjs --check",
+    "cf:setup": "node scripts/setup.mjs",
+    "cf": "node scripts/cloudflare.mjs --guard",
+    "deploy": "node scripts/setup.mjs",
+    "tail": "node scripts/cloudflare.mjs --guard tail"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/workers-types": "^5.20261107.1",
+    "typescript": "^5.9.3",
+    "vitest": "~4.1",
+    "wrangler": "^4.158.0"
+  }
+}

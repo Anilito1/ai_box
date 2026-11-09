@@ -2,6 +2,7 @@ import type { AttachedFile, FileInput } from './attachments';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { DayCost, TurnRecord } from './costs';
 import type { DictationEvent, DictationSettings, DictationSupport } from './dictation';
+import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
 import type { CliRun, UpdateAction } from './cliUpdate';
@@ -889,6 +890,8 @@ export interface HubApi {
   /** Subagent files of ~/.claude/agents and of the followed repos. */
   agentFiles(): Promise<AgentFile[]>;
   /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
+  /** The ideas forum: every call answers with the forum's state, fresh or from the cache. */
+  forum(action: ForumAction): Promise<ForumResult>;
   capabilities(): Promise<Capabilities>;
   /** Asks Claude Code for each server's state (some seconds). */
   checkCapabilities(): Promise<Capabilities>;

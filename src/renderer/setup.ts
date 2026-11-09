@@ -34,6 +34,7 @@ import { keyLabel } from './dictation';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { mascotMark } from './mascot';
+import { forumModeration } from './forum';
 import { updateSection } from './update';
 
 type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
@@ -1934,6 +1935,6 @@ export class SetupView {
     this.head(el, APP_NAME, t('setup.about.lead'));
     const list = h('ul', 'setup-list');
     list.append(h('li', '', t('setup.about.version', { version: v.version })), h('li', '', t('setup.about.license')), h('li', '', t('setup.about.data')));
-    el.append(list, updateSection(), h('p', 'setup-fine', t('setup.about.trademark')));
+    el.append(list, updateSection(), forumModeration(this.hub), h('p', 'setup-fine', t('setup.about.trademark')));
   }
 }
