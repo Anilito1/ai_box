@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-09
+
+### Ajouté
+
+- Chaque sujet peut garder une mémoire courte pour reprendre le travail sans emporter toute la conversation.
+
 ## 2026-11-06
 
 ### Ajouté
