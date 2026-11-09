@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { awayBrief, backNote, saveRequest } from '../shared/away';
-import { allowedRepo, pendingReports } from '../shared/vps';
+import { allowedRepo } from '../shared/vps';
 import { commitsSince, pullBack, pushedState, RUNS_HERE } from './awayGit';
 import { remoteOf } from './repos';
 
@@ -55,8 +55,7 @@ test('a worker moved to the server and back keeps its commits and its report', a
   const brief = awayBrief({ lang: 'fr', worker: 'site', mission: 'Ajouter le paiement', report: 'Fait : formulaire. Reste : webhook.', items: [], slug: 'octo/site', branch: left.branch, head: left.head });
   for (const part of ['Ajouter le paiement', 'Reste : webhook', 'ai-box/site', left.head.slice(0, 12), 'pousse']) assert.ok(brief.includes(part), part);
 
-  // On the server (its worktree fetched, as launch.mjs prepare does): two commits pushed, then the report the hub
-  // never got (the PC was asleep).
+  // On the server (its worktree fetched, as launch.mjs prepare does): two commits pushed, then its report.
   git(server, 'fetch', '-q');
   git(server, 'checkout', '-q', 'ai-box/site');
   for (const n of ['webhook', 'tests']) {
@@ -65,19 +64,14 @@ test('a worker moved to the server and back keeps its commits and its report', a
     git(server, 'commit', '-qm', `feat: ${n}`);
   }
   git(server, 'push', '-q');
-  const transcript = [
-    { type: 'user', message: { content: brief } },
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'mcp__hub__message_master', input: { message: 'Paiement fini, branche ai-box/site poussée.' } }] } },
-  ];
-  const reports = pendingReports(transcript);
-  assert.deepEqual(reports.map((r) => r.text), ['Paiement fini, branche ai-box/site poussée.']);
+  const report = 'Paiement fini, branche ai-box/site poussée.';
 
   // Back: the PC's folder is fast-forwarded and the worker is told every commit and the report.
   const commits = await commitsSince(pc, left.head, 'ai-box/site');
   assert.deepEqual(commits.map((c) => c.replace(/^\w+ /, '')), ['feat: tests', 'feat: webhook']);
   assert.equal(await pullBack(pc, 'ai-box/site'), 'pulled');
   assert.equal(git(pc, 'log', '-1', '--format=%s'), 'feat: tests');
-  const note = backNote({ lang: 'fr', slug: 'octo/site', branch: 'ai-box/site', commits, report: reports[0].text, pull: 'pulled', tag: 'server-output-1a2b' });
+  const note = backNote({ lang: 'fr', slug: 'octo/site', branch: 'ai-box/site', commits, report, pull: 'pulled', tag: 'server-output-1a2b' });
   for (const part of ['feat: webhook', 'feat: tests', 'Paiement fini', 'mis à jour']) assert.ok(note.includes(part), part);
   assert.equal(await pullBack(pc, 'ai-box/site'), 'up-to-date');
 });

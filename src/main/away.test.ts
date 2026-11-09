@@ -76,7 +76,7 @@ test('remote workers off: no button, no badge, and stepping away does nothing', 
 
 test('a post of this PC pauses while the user is away, says why, and goes on when they are back', async () => {
   const h = await hub(true);
-  assert.deepEqual(h.m.snapshot().away, { phase: null, since: 0, auto: false, server: '' });
+  assert.deepEqual(h.m.snapshot().away, { phase: null, since: 0, auto: false, server: '', safe: false, onServer: 0 });
   await h.m.stepAway(false);
   assert.equal(h.m.awayPhase(), 'away');
   // Nothing could move: the server was not even switched on.

@@ -69,14 +69,15 @@
   "autoAway": false,
   "max": 4,
   "power": {
-    "kind": "always",
-    "project": "",
-    "instance": "",
+    "kind": "ovh",
+    "project": "0123456789abcdef0123456789abcdef",
+    "instance": "11111111-2222-3333-4444-555555555555",
     "idleHours": 2,
-    "keys": false,
-    "pending": false
+    "keys": true,
+    "pending": false,
+    "selfOff": false
   },
-  "server": "",
+  "server": "off",
   "lists": {
     "allowed": [
       "octo/site",
@@ -105,9 +106,18 @@
     "at": 1762700000000,
     "sent": 12,
     "removed": 3,
-    "held": ["skills/company-skill (local only)", "skills/unity-mcp (local only)", "skills/synced (local only)"],
+    "held": [
+      "skills/company-skill (local only)",
+      "skills/unity-mcp (local only)",
+      "skills/synced (local only)"
+    ],
     "pluginsFailed": [],
     "reason": "",
     "detail": ""
-  }
+  },
+  "missions": 1,
+  "candidates": [
+    "octo/site",
+    "octo/blog"
+  ]
 }

@@ -8,7 +8,7 @@ export const REMOTE_REPOS = `${REMOTE_HOME}/repos`;
 /** Workers the server runs at once, by default: ~300 MB per idle Claude Code, plus the builds, on 8 GB. */
 export const REMOTE_MAX_DEFAULT = 4;
 /** Version of scripts/vps/launch.mjs this app speaks to; the setup installs it again when the server's differs. */
-export const LAUNCHER_VERSION = 4;
+export const LAUNCHER_VERSION = 5;
 
 /** "owner/name" of a GitHub repo, nothing else (it is written into the server's list and into commands). */
 export const isSlug = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]{1,39}\/[\w.-]{1,100}$/.test(v) && !v.includes('..');
@@ -20,11 +20,16 @@ export const isOwner = (v: unknown): v is string => typeof v === 'string' && /^[
  * null: another host, an owner the user refused, anything not listed. The lists live in the user's settings only.
  */
 export function allowedRepo(remote: string, allowed: readonly string[], denied: readonly string[] = []): string | null {
+  const slug = githubSlug(remote)?.toLowerCase();
+  if (!slug) return null;
+  if (denied.some((d) => d.toLowerCase() === slug.split('/')[0])) return null;
+  return allowed.find((r) => r.toLowerCase() === slug) ?? null;
+}
+
+/** "Owner/name" of a GitHub remote, as written there, or null for another host. */
+export function githubSlug(remote: string): string | null {
   const m = /^(?:[a-z+]+:\/\/)?(?:[^@/]+@)?github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i.exec(remote.trim());
-  if (!m) return null;
-  const [owner, name] = [m[1].toLowerCase(), m[2].toLowerCase()];
-  if (denied.some((d) => d.toLowerCase() === owner)) return null;
-  return allowed.find((r) => r.toLowerCase() === `${owner}/${name}`) ?? null;
+  return m ? `${m[1]}/${m[2]}` : null;
 }
 
 /** The listed repos as the server's list holds them: valid, of no refused owner, one each. */
@@ -169,6 +174,47 @@ export interface ServerStatus {
   signedIn: boolean;
   memory: { total: number; available: number };
   running: number;
+  /** The runner (scripts/vps/runner.mjs), null when it does not answer. */
+  runner: RunnerStatus | null;
+}
+
+/** Where a conversation stands on the runner: counts only. */
+export interface RunnerSession {
+  id: string;
+  /** Its Claude Code runs (else it ended, idle or cut, and starts again when the hub attaches). */
+  live: boolean;
+  state: 'idle' | 'running' | 'requires_action';
+  tasks: number;
+  /** Requests waiting for the hub: a permission, a question. */
+  waiting: number;
+  /** Messages to the master (or a lead, a peer) kept while the hub was away. */
+  outbox: number;
+  attached: boolean;
+}
+
+export interface RunnerStatus {
+  version: number;
+  max: number;
+  live: number;
+  rssMb: number;
+  sessions: RunnerSession[];
+}
+
+export const SESSION_ID = /^[0-9a-f-]{36}$/i;
+
+export function parseRunner(raw: unknown): RunnerStatus | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+  if (typeof o.version !== 'number') return null;
+  const sessions: RunnerSession[] = [];
+  for (const x of Array.isArray(o.sessions) ? o.sessions.slice(0, 100) : []) {
+    const e = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+    if (typeof e.id !== 'string' || !SESSION_ID.test(e.id)) continue;
+    const state = e.state === 'running' || e.state === 'requires_action' ? e.state : 'idle';
+    sessions.push({ id: e.id, live: e.live === true, state, tasks: num(e.tasks), waiting: num(e.waiting), outbox: num(e.outbox), attached: e.attached === true });
+  }
+  return { version: num(o.version), max: num(o.max), live: num(o.live), rssMb: num(o.rssMb), sessions };
 }
 
 export function parseStatus(out: string): ServerStatus | null {
@@ -183,6 +229,7 @@ export function parseStatus(out: string): ServerStatus | null {
       signedIn: o.signedIn === true,
       memory: { total: num(mem.total), available: num(mem.available) },
       running: num(o.running),
+      runner: parseRunner(o.runner),
     };
   } catch {
     return null;
@@ -198,7 +245,11 @@ export interface RemoteView {
   ntfyUrl: string;
   autoAway: boolean;
   max: number;
-  power: { kind: 'always' | 'ovh'; project: string; instance: string; idleHours: number; keys: boolean; pending: boolean };
+  power: { kind: 'always' | 'ovh'; project: string; instance: string; idleHours: number; keys: boolean; pending: boolean; selfOff: boolean };
+  /** Workers on the server now (moved there, or of a post that runs there). */
+  missions: number;
+  /** The GitHub repos of the main repos of the settings: what the setup offers to check. */
+  candidates: string[];
   server: AwayView['server'];
   /** The user's lists (settings only): repos the server may hold, owners it never may, organisations. */
   lists: { allowed: string[]; denied: string[]; orgs: string[] };
@@ -271,42 +322,6 @@ export interface Lease {
 export function leaseConflict(leases: Lease[], want: Omit<Lease, 'since' | 'worker'>): Lease | null {
   const same = (l: Lease) => l.session !== want.session && l.slug.toLowerCase() === want.slug.toLowerCase() && l.branch === want.branch;
   return leases.find((l) => same(l) && (l.side !== want.side || want.side === 'server')) ?? null;
-}
-
-// ---------- reports written on the server ----------
-
-export interface TranscriptLine {
-  type?: unknown;
-  message?: { content?: unknown };
-}
-
-export interface PendingReport {
-  id: string;
-  text: string;
-}
-
-const REPORT_TOOLS = ['mcp__hub__message_master'];
-
-/**
- * The reports a worker wrote to the master on the server that never reached it (its tool call has no result: the hub
- * was gone). Read from the transcript, in order.
- */
-export function pendingReports(lines: TranscriptLine[]): PendingReport[] {
-  const asked = new Map<string, string>();
-  const answered = new Set<string>();
-  for (const line of lines) {
-    const content = line.message?.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content as Record<string, unknown>[]) {
-      if (line.type === 'assistant' && block.type === 'tool_use' && REPORT_TOOLS.includes(String(block.name)) && typeof block.id === 'string') {
-        const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Record<string, unknown>;
-        const text = typeof input.text === 'string' ? input.text : typeof input.message === 'string' ? input.message : '';
-        if (text.trim()) asked.set(block.id, text);
-      }
-      if (line.type === 'user' && block.type === 'tool_result' && typeof block.tool_use_id === 'string') answered.add(block.tool_use_id);
-    }
-  }
-  return [...asked].filter(([id]) => !answered.has(id)).map(([id, text]) => ({ id, text }));
 }
 
 /** Branch names git and the launcher accept: no option, no path climbing, no space. */

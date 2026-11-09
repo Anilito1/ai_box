@@ -97,7 +97,7 @@ export function realTty(cmd: string, args: string[]): Tty {
 }
 
 const WORKER_PUB = /^ssh-ed25519 [A-Za-z0-9+/=]+( [\w@.-]+)?$/;
-const SCRIPTS = ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh'] as const;
+const SCRIPTS = ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh', 'runner.mjs', 'relay.mjs', 'power.mjs', 'power-key.sh'] as const;
 const LOG_MAX = 300;
 
 export class VpsWizard {
@@ -285,6 +285,23 @@ export class VpsWizard {
     return fingerprintOf((await this.d.exec(sshProgram('ssh-keygen'), ['-lf', file])).out);
   }
 
+  /**
+   * Lets the server shelve itself while the PC is away (scripts/vps/power-key.sh): the key, limited to reading and
+   * shelving this instance, goes on stdin, from memory, and is stored there encrypted for aibox-power only. `null`
+   * forgets it; 'delay' changes only the delay. Whether the server took it.
+   */
+  async serverPower(keys: { appKey: string; appSecret: string; consumerKey: string; project: string; instance: string } | null | 'delay', idleHours: number): Promise<boolean> {
+    const t = this.s.target;
+    if (!t || !(idleHours >= 0.5 && idleHours <= 48)) return false;
+    const hours = String(Math.round(idleHours * 100) / 100);
+    const command = keys === null ? 'sudo REMOVE=1 bash /opt/aibox/power-key.sh' : `sudo ${keys === 'delay' ? 'IDLE_ONLY=1 ' : ''}IDLE_HOURS=${hours} bash /opt/aibox/power-key.sh`;
+    // Its own field order: the server's check reads exactly this shape.
+    const input = keys && keys !== 'delay' ? JSON.stringify({ appKey: keys.appKey, appSecret: keys.appSecret, consumerKey: keys.consumerKey, project: keys.project, instance: keys.instance }) : '';
+    const [cmd, args] = this.sshAs(this.adminKey, t.admin, t, command);
+    const r = await this.d.exec(cmd, args, { input, timeoutMs: 60_000 });
+    return r.code === 0 && /^(stored|removed)$/m.test(r.out);
+  }
+
   private sshAs(key: string, user: string, t: VpsTarget, command: string, tty = false): [string, string[]] {
     return [sshProgram('ssh'), [...(tty ? ['-tt'] : ['-T']), '-i', key, ...sshOptions(this.knownHosts, t.port), `${user}@${t.host}`, command]];
   }
@@ -302,10 +319,10 @@ export class VpsWizard {
     return ['fail', 'unreachable'];
   };
 
-  /** setup.sh once (and again only when this app brings a newer launcher); the admin must still get in after it. */
+  /** setup.sh once (and again when this app brings a newer launcher, or the runner does not answer); the admin must still get in after it. */
   private async setup(t: VpsTarget): Promise<[VpsState['steps']['setup']['state'], string]> {
     const st = await this.d.status(this.workerConfig(t));
-    if (st && st.version === LAUNCHER_VERSION) return ['ok', 'installed'];
+    if (st && st.version === LAUNCHER_VERSION && st.runner) return ['ok', 'installed'];
     const pub = readFileSync(`${this.workerKey}.pub`, 'utf8').trim();
     if (!WORKER_PUB.test(pub)) return ['fail', 'workerKey'];
     for (const f of SCRIPTS) {
@@ -333,6 +350,7 @@ export class VpsWizard {
     const st = await this.d.status(r);
     if (!st) return ['fail', 'worker'];
     if (st.version !== LAUNCHER_VERSION) return ['fail', 'launcherVersion'];
+    if (!st.runner) return ['fail', 'runner'];
     if (!st.claude) return ['fail', 'noClaude'];
     this.s.claude = st.claude;
     this.s.memoryMb = st.memory;

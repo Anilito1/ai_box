@@ -24,11 +24,15 @@ import { toCommands, translate } from './events';
 const FULL_WINDOW = 1_000_000;
 
 
-/** The tools a session may not use: the master edits nothing; a worker has no Workflow, except in Ultracode. */
-export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode'>): string[] {
+/**
+ * The tools a session may not use: the master edits nothing; a worker has no Workflow, except in Ultracode. A worker on
+ * the remote server has no SendMessage (the peers are on this PC): the hub's send_message carries it, kept while away.
+ */
+export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode'> & { remote?: unknown }): string[] {
   if (spec.role === 'master') return ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'];
   const workflow = spec.ultracode ? [] : ['Workflow'];
-  return spec.readOnly ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', ...workflow, 'ScheduleWakeup'] : ['AskUserQuestion', ...workflow, 'ScheduleWakeup'];
+  const peers = spec.remote ? ['SendMessage'] : [];
+  return spec.readOnly ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers] : ['AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers];
 }
 
 /** The flag-level settings of a launch, over the user's own: a worker's window and connectors, the session's Ultracode. */
@@ -135,7 +139,7 @@ export const claudeAdapter: ProviderAdapter = {
     const options: Options = {
       // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
       cwd: spec.remote?.cwd ?? spec.cwd,
-      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, { onExit: spec.remote.onExit, notify: spec.remote.notify, secrets: spec.remote.secrets }) } : {}),
+      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, spec.remote) } : {}),
       ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
       ...(spec.model ? { model: spec.model } : {}),

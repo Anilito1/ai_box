@@ -10,6 +10,18 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-10
+
+### Ajouté
+
+- Serveur distant (expérimental, désactivé par défaut) : un serveur à toi, loué chez un hébergeur, où tes workers continuent leur mission pendant que ton PC est éteint. Il est fait pour tes repos personnels.
+- Serveur distant : il s’installe depuis Réglages › Serveur distant › Installer, étape par étape (louer le serveur, coller la clé, se connecter, connecter Claude, donner accès à GitHub), chaque étape cochée ou avec son erreur en clair ; « Copier le prompt d’installation » permet de le faire avec ton IA.
+- Serveur distant : « Je m’absente » réveille le serveur si besoin, y copie ta configuration, fait enregistrer leur travail aux workers et les y envoie, puis te dit quand tu peux éteindre le PC.
+- Serveur distant : PC éteint, les workers continuent : ils codent, testent, envoient leur travail sur GitHub et écrivent au maître ; ces messages l’attendent sur le serveur et ton téléphone peut te prévenir.
+- Serveur distant : « Je suis de retour » rallume le serveur s’il dort, transmet au maître ce qui a été écrit pendant ton absence, met tes dossiers à jour, puis ramène les workers ici ou les laisse finir là-bas, au choix.
+- Serveur distant : ce qui pilote ton PC (Blender, Unity, le navigateur que tu vois) n’y part pas : ces workers attendent ton retour. Le maître reste sur ton PC, donc rien de nouveau ne démarre pendant ton absence.
+- Serveur distant : environ 3 € par mois s’il se met en veille quand il ne sert pas (il peut s’éteindre tout seul, PC éteint), jusqu’à 20 € s’il reste allumé ; le réveiller prend environ 10 minutes.
+
 ## 2026-11-09
 
 ### Ajouté

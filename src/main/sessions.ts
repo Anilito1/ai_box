@@ -130,10 +130,10 @@ import type {
   PermissionRequest,
   RemoteLaunch,
 } from './providers/types';
-import { notifyOf, remoteCwdOf, remoteHead, remotePrepare, remoteSession, remoteStop, remoteTranscript, remoteTree, sendNtfy, SSH_FAILED, STILL_RUNNING, type RemoteExit } from './remote';
+import { notifyOf, remoteCwdOf, remoteHead, remotePrepare, remoteRunner, remoteStop, remoteTree, RUNNER_DOWN, sendNtfy, SERVER_STOPPING, SSH_FAILED, type RemoteExit } from './remote';
 import { commitsSince, pullBack, pushedState } from './awayGit';
 import { awayBrief, backNote, resumeNote, saveRequest, type RepoReturn } from '../shared/away';
-import { allowedRepo, leaseConflict, pendingReports, scopeOf, type Lease, type TranscriptLine } from '../shared/vps';
+import { allowedRepo, leaseConflict, scopeOf, type Lease } from '../shared/vps';
 
 interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote'> {
   sessionId: string;
@@ -202,8 +202,12 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   signalAt: number | null;
   /** No turn is under way: an approval that ends now leaves the session idle. */
   turnOver: boolean;
-  /** Its conversation runs on the remote server; `detached`: the connection is gone, its turn may go on there alone. */
-  remoteRun: { state: 'live' | 'detached' | 'done'; delivered: string[] } | null;
+  /**
+   * Its conversation runs on the remote server's runner. `detached`: the hub is not connected, the session may go on
+   * there; `done`: it ended there (idle, stopped), and starts again at the next message. `seq`: the number of the last
+   * line the hub got from conversation `conv`, where the next connection starts from.
+   */
+  remoteRun: { state: 'live' | 'detached' | 'done'; conv: string; seq: number } | null;
   /** Moved to the server while the user is away: what it left on this PC, and where it works there. */
   away: AwayState | null;
   /** Its turn was stopped while the user is away (a post of this PC): it goes on when they are back. */
@@ -410,8 +414,9 @@ interface AwayState {
 
 /** Waits for the save turn of a worker before it moves; a worker that never answers stays where it is. */
 const SAVE_MS = 15 * 60_000;
-/** A detached turn on the server is looked at this often while one exists. */
+/** A session the hub is not connected to on the server is looked at this often while one exists; sooner after a cut. */
 const DETACHED_CHECK_MS = 2 * 60_000;
+const DETACHED_RETRY_MS = 20_000;
 
 interface Prompt {
   text: string;
@@ -554,7 +559,8 @@ export class SessionManager extends EventEmitter {
   private readonly pendingItems = new Map<string, Map<string, ChatItem>>();
   private emitTimer: NodeJS.Timeout | null = null;
   /** The user stepped away (remote workers on): kept across restarts. */
-  private awayMode: { since: number; auto: boolean; phase: 'leaving' | 'away' | 'returning' } | null = null;
+  /** `safe`: the runner holds every worker that moved, the PC may go off. */
+  private awayMode: { since: number; auto: boolean; phase: 'leaving' | 'away' | 'returning'; safe?: boolean } | null = null;
   private detachedTimer: NodeJS.Timeout | null = null;
   private saveTimer: NodeJS.Timeout | null = null;
   private itemsTimer: NodeJS.Timeout | null = null;
@@ -825,7 +831,7 @@ export class SessionManager extends EventEmitter {
 
   /** Sessions whose work a close would cut: a turn in progress, or background tasks left running after one. */
   busySessions(): number {
-    return [...this.sessions.values()].filter((s) => s.query && this.isWorking(s)).length;
+    return [...this.sessions.values()].filter((s) => s.query && !s.remoteRun && this.isWorking(s)).length;
   }
 
   /** Sessions whose process runs this program: they keep the version they started with until they start again. */
@@ -1674,12 +1680,13 @@ export class SessionManager extends EventEmitter {
     const base = isMaster
       ? masterPrompt(cfg)
       : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
-    // A program without Claude Code's SendMessage writes to the others through the hub's tool of the same job.
+    // A program without Claude Code's SendMessage (or a worker on the server, whose peers are here) writes to the others
+    // through the hub's tool of the same job.
     const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
-    const append = (harness === 'claude' ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules;
+    const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules;
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
-    const tools = this.hubTools(s, harness);
+    const tools = this.hubTools(s, harness, !!remote);
     // Ultracode where the program and the plan have it; a choice the plan no longer allows stays asked, but off.
     const ultracode = s.ultracode && harness === 'claude' && this.ultracodeAccessOf(account) === 'allowed';
     s.runUltracode = ultracode;
@@ -1727,7 +1734,7 @@ export class SessionManager extends EventEmitter {
     s.query = q;
     s.usageSeen = null;
     s.remoteExit = null;
-    s.remoteRun = remote ? { state: 'live', delivered: s.remoteRun?.delivered ?? [] } : null;
+    s.remoteRun = remote ? { state: 'live', conv: s.sessionId, seq: this.remoteSeq(s) } : null;
     // A resumed conversation's results carry the totals it saved: its turns count from there. A new one starts at zero.
     s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
@@ -1796,8 +1803,24 @@ export class SessionManager extends EventEmitter {
       onExit: (exit) => {
         s.remoteExit = exit;
       },
-      notify: notifyOf(workers, { done: t('phone.done'), blocked: t('phone.blocked'), cut: t('phone.cut'), timeout: t('phone.timeout') }),
+      notify: notifyOf(workers, { done: t('phone.done'), report: t('phone.report'), blocked: t('phone.blocked'), cut: t('phone.cut'), timeout: t('phone.timeout') }),
+      texts: { queued: t('remote.queued'), offline: t('remote.offline'), late: t('remote.late'), full: t('remote.full') },
+      since: () => this.remoteSeq(s),
+      // Counted, not shown: nothing is emitted per line; the number is saved with the session.
+      onSeq: (seq) => {
+        if (s.remoteRun) s.remoteRun.seq = seq;
+      },
+      // What the server no longer keeps is read again from the transcript, under the same ids (no double).
+      onGap: () => {
+        s.historyLoad = null;
+        void this.loadHistory(s).then(() => this.changed());
+      },
     };
+  }
+
+  /** Where a connection to the runner starts from: after the last line got from this conversation, else its start. */
+  private remoteSeq(s: Session): number {
+    return s.remoteRun && s.remoteRun.conv === s.sessionId ? s.remoteRun.seq : 0;
   }
 
   /**
@@ -1875,7 +1898,8 @@ export class SessionManager extends EventEmitter {
   private awayView(): { away?: AwayView } {
     if (!this.opts.cfg.remoteWorkers.enabled) return {};
     const m = this.awayMode;
-    return { away: { phase: m?.phase ?? null, since: m?.since ?? 0, auto: m?.auto ?? false, server: this.opts.remoteServer?.state() ?? '' } };
+    const onServer = [...this.sessions.values()].filter((s) => s.away).length;
+    return { away: { phase: m?.phase ?? null, since: m?.since ?? 0, auto: m?.auto ?? false, server: this.opts.remoteServer?.state() ?? '', safe: m?.safe === true, onServer } };
   }
 
   /** A notification to the phone while the user is away: fixed sentences, never a name nor a word of the work. */
@@ -1959,9 +1983,27 @@ export class SessionManager extends EventEmitter {
       }),
     );
     if (!this.awayMode) return;
-    this.awayMode.phase = 'away';
+    // The PC may go off only once the runner holds every worker that moved: its own answer, not the hub's launch.
+    const moved = workers.filter((s) => s.away);
+    const safe = await this.onRunner(moved);
+    if (!this.awayMode) return;
+    Object.assign(this.awayMode, { phase: 'away', safe });
     this.changed();
-    this.notifyMaster(t('hub.away', { auto: auto ? t('hub.away.auto') : '' }), lines.join('\n') || t('hub.away.none'));
+    this.notifyMaster(t('hub.away', { auto: auto ? t('hub.away.auto') : '' }), [...lines, ...(moved.length > 0 ? [t(safe ? 'hub.away.safe' : 'hub.away.unsafe')] : [])].join('\n') || t('hub.away.none'));
+    if (moved.length > 0 && safe) this.phone(t('phone.safe'));
+  }
+
+  /** Whether the runner lists each of these sessions as running, within two minutes. */
+  private async onRunner(moved: Session[]): Promise<boolean> {
+    if (moved.length === 0) return true;
+    const until = Date.now() + 120_000;
+    while (Date.now() < until && !this.quitting) {
+      const runner = await remoteRunner(this.opts.cfg.remoteWorkers);
+      const live = new Set((runner?.sessions ?? []).filter((r) => r.live).map((r) => r.id));
+      if (moved.every((s) => live.has(s.sessionId))) return true;
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+    return false;
   }
 
   private pauseForAway(s: Session, why: string): string {
@@ -2009,15 +2051,19 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * "I'm back": each worker on the server pushes its work and comes back to its own conversation on this PC, its
-   * folder pulled; a paused one goes on. One whose work could not be pushed stays there, and says why.
+   * "I'm back". The server is switched on if it switched itself off, and each worker there is connected again: what it
+   * wrote meanwhile reaches the master. `bring`: each one pushes its work and comes back to its own conversation on
+   * this PC, its folder pulled; one whose work could not be pushed stays there, and says why. `leave`: they finish
+   * there, this PC's folders pulled with what they pushed so far. A paused one goes on either way.
    */
-  async comeBack(): Promise<void> {
-    if (!this.opts.cfg.remoteWorkers.enabled || !this.awayMode || this.awayMode.phase !== 'away') return;
-    this.awayMode.phase = 'returning';
-    this.changed();
+  async comeBack(mode: 'bring' | 'leave' = 'bring'): Promise<void> {
     const away = [...this.sessions.values()].filter((s) => s.away);
-    const lines = await Promise.all(away.map((s) => this.bringBack(s)));
+    const phase = this.awayMode?.phase ?? null;
+    if (!this.opts.cfg.remoteWorkers.enabled || phase === 'leaving' || phase === 'returning' || (phase === null && away.length === 0)) return;
+    this.awayMode = { since: this.awayMode?.since ?? Date.now(), auto: this.awayMode?.auto ?? false, phase: 'returning' };
+    this.changed();
+    if (away.length > 0) await this.opts.remoteServer?.wake();
+    const lines = await Promise.all(away.map((s) => (mode === 'leave' ? this.letFinish(s) : this.bringBack(s))));
     for (const s of this.sessions.values()) {
       if (!s.awayPaused) continue;
       s.awayPaused = false;
@@ -2025,11 +2071,36 @@ export class SessionManager extends EventEmitter {
       this.deliver(s, { text: resumeNote(lang()), images: [], from: 'hub', shown: t('away.resume.shown') });
       lines.push(t('hub.back.resumed', { name: displayName(s) }));
     }
+    // The user is here: those still on the server show it on their card, and "Bring them back" stays at hand.
     const stayed = away.some((s) => s.away);
-    this.awayMode = stayed && this.awayMode ? { ...this.awayMode, phase: 'away' } : null;
+    this.awayMode = null;
     this.changed();
-    this.notifyMaster(t(stayed ? 'hub.back.partial' : 'hub.back'), lines.join('\n') || t('hub.away.none'));
+    this.notifyMaster(t(mode === 'leave' ? 'hub.back.leave' : stayed ? 'hub.back.partial' : 'hub.back'), lines.join('\n') || t('hub.away.none'));
     this.serverIdle();
+  }
+
+  /** Connected again to its session on the runner (which hands over what it kept): whether it answers. */
+  private async reattach(s: Session): Promise<boolean> {
+    if (!s.inbox) await this.launch(s, true);
+    const until = Date.now() + 90_000;
+    // Another call is starting it (the app's start, a cut): its process comes once its checks are done.
+    while (s.inbox && !s.query && Date.now() < until) await new Promise((r) => setTimeout(r, 250));
+    try {
+      await Promise.race([s.query?.ready() ?? Promise.reject(new Error('not started')), new Promise((_, no) => setTimeout(() => no(new Error('timeout')), Math.max(0, until - Date.now())))]);
+      return !!s.inbox && s.remoteRun?.state === 'live';
+    } catch {
+      return false;
+    }
+  }
+
+  /** Back, but it finishes on the server: connected again, this PC's folder pulled with what it pushed so far. */
+  private async letFinish(s: Session): Promise<string> {
+    const away = s.away;
+    if (!away) return '';
+    if (!(await this.reattach(s))) return t('hub.back.unreachable', { name: displayName(s) });
+    const pull = await pullBack(s.cwd, away.branch);
+    const commits = await commitsSince(s.cwd, away.base, away.branch);
+    return t('hub.back.left', { name: displayName(s), repo: away.slug, branch: away.branch, commits: commits.length, state: t(`away.pull.${pull}`) });
   }
 
   private async bringBack(s: Session): Promise<string> {
@@ -2039,17 +2110,10 @@ export class SessionManager extends EventEmitter {
     s.moving = true;
     this.changed();
     try {
-      let report = '';
-      if (s.inbox) {
-        report = (await this.saveTurn(s, 'pc')) ?? '';
-      } else {
-        const st = await remoteSession(cfg, s.sessionId);
-        if (st.state === 'running') return t('hub.back.stillRunning', { name: displayName(s) });
-        if (st.state === 'unreachable') return t('hub.back.unreachable', { name: displayName(s) });
-      }
-      // Reports written on the server while nobody listened reach the master first, as any report does.
-      const delivered = await this.deliverPending(s);
-      if (!report) report = delivered.at(-1) ?? s.lastMessage;
+      // Connected first: what it wrote while the hub was away reaches the master (the runner hands it over), then it
+      // saves its work, as any worker coming back does.
+      if (!(await this.reattach(s))) return t('hub.back.unreachable', { name: displayName(s) });
+      const report = (await this.saveTurn(s, 'pc')) || s.lastMessage;
       // Pushed, or it stays there: nothing is left behind on the server.
       const there = await this.remotePushed(away);
       if (there) {
@@ -2083,69 +2147,57 @@ export class SessionManager extends EventEmitter {
     return '';
   }
 
-  /** The reports a worker wrote on the server while the hub was gone, delivered to the master once each; their texts. */
-  private async deliverPending(s: Session): Promise<string[]> {
-    const run = s.remoteRun;
-    if (!run) return [];
-    const lines = await remoteTranscript(this.opts.cfg.remoteWorkers, s.sessionId).catch(() => null);
-    if (!lines) return [];
-    const texts: string[] = [];
-    for (const r of pendingReports(lines as TranscriptLine[])) {
-      if (run.delivered.includes(r.id)) continue;
-      try {
-        this.messageMaster(s, `${t('hub.report.offline')}\n${r.text}`);
-        run.delivered.push(r.id);
-        texts.push(r.text);
-      } catch {
-        // No master: the report stays in the transcript, read again next time.
-      }
-    }
-    return texts;
-  }
-
   /**
-   * Its remote process ended with an error: the link was cut (its turn may go on on the server), or the server still
-   * runs that conversation. Not a crash: said plainly, with a button to resume. False for any other failure.
+   * Its connection to the runner ended with an error: the link was cut, the runner restarted, the server is stopping.
+   * The session goes on there (or waits there): not a crash; the hub connects again by itself, and gets what it missed.
+   * False for any other failure.
    */
   private remoteEnded(s: Session, failure: string): boolean {
     const code = s.remoteExit?.code;
-    if (code !== SSH_FAILED && code !== STILL_RUNNING && code !== null) return false;
-    s.remoteRun = { state: 'detached', delivered: s.remoteRun?.delivered ?? [] };
+    if (code !== SSH_FAILED && code !== RUNNER_DOWN && code !== SERVER_STOPPING && code !== null) return false;
+    s.remoteRun = { state: 'detached', conv: s.remoteRun?.conv ?? s.sessionId, seq: this.remoteSeq(s) };
     s.error = '';
-    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t(code === STILL_RUNNING ? 'notice.remoteStillRunning' : 'notice.remoteCut'), tone: 'error', action: 'resume', detail: s.remoteExit?.stderr.trim() || failure });
-    if (s.role === 'worker') this.notifyMaster(t('hub.remoteCut', { name: displayName(s) }), t('hub.remoteCut.note'), s);
-    this.watchDetached();
+    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.remoteCut'), tone: 'info', action: 'resume', detail: s.remoteExit?.stderr.trim() || failure });
+    this.watchDetached(DETACHED_RETRY_MS);
     return true;
   }
 
-  /** Looks again at the turns left alone on the server: a real answer of the server each time, never a guess. */
-  private watchDetached(): void {
+  /** Looks again at the sessions the hub is not connected to: a real answer of the server each time, never a guess. */
+  private watchDetached(ms = DETACHED_CHECK_MS): void {
     if (this.detachedTimer || this.quitting || !this.opts.cfg.remoteWorkers.enabled) return;
     this.detachedTimer = setTimeout(() => {
       this.detachedTimer = null;
       void this.checkDetached();
-    }, DETACHED_CHECK_MS);
+    }, ms);
   }
 
-  /** Now (the PC woke up, the app started): where the detached turns are; the reports they wrote reach the master. */
+  /**
+   * Now (the app started, the PC woke up, a while after a cut): the runner says where each session the hub is not
+   * connected to stands. One still at work there, or with messages kept for the hub, is connected again (the master gets
+   * them); one that ended there rests, and starts again at its next message.
+   */
   async checkDetached(): Promise<void> {
     const cfg = this.opts.cfg.remoteWorkers;
-    if (!cfg.enabled) return;
-    for (const s of [...this.sessions.values()].filter((o) => !o.inbox && o.remoteRun?.state === 'detached')) {
-      const st = await remoteSession(cfg, s.sessionId);
-      if (st.state === 'running' || st.state === 'unreachable' || !s.remoteRun || s.inbox) continue;
-      s.remoteRun.state = 'done';
-      await this.deliverPending(s);
-      this.notice(s, t('notice.remoteDone'), 'info');
+    if (!cfg.enabled || this.quitting) return;
+    const detached = () => [...this.sessions.values()].filter((o) => !o.inbox && o.remoteRun?.state === 'detached');
+    if (detached().length === 0) return;
+    const runner = await remoteRunner(cfg);
+    for (const s of runner ? detached() : []) {
+      const r = runner?.sessions.find((x) => x.id === s.sessionId);
+      if (r && (r.live || r.outbox > 0)) {
+        void this.reattach(s);
+        continue;
+      }
+      if (s.remoteRun) s.remoteRun.state = 'done';
       this.changed();
     }
-    // The power guard switches the server off after its idle delay; nothing here does it on the spot.
-    if ([...this.sessions.values()].some((o) => !o.inbox && o.remoteRun?.state === 'detached')) this.watchDetached();
+    if (detached().length > 0) this.watchDetached();
   }
 
   private async stopDetached(s: Session): Promise<void> {
     await remoteStop(this.opts.cfg.remoteWorkers, s.sessionId);
-    await this.checkDetached();
+    if (s.remoteRun && !s.inbox) s.remoteRun.state = 'done';
+    this.changed();
   }
 
   /** No remote worker left: the server may switch off. */
@@ -2153,9 +2205,14 @@ export class SessionManager extends EventEmitter {
     if (!this.remoteBusy()) this.opts.remoteServer?.idle();
   }
 
+  /** Workers on the server now, connected or not: moved there, or of a post that runs there. */
+  remoteCount(): number {
+    return [...this.sessions.values()].filter((s) => s.away || (s.remoteRun && (s.inbox || s.remoteRun.state === 'detached'))).length;
+  }
+
   /** A remote worker runs, or may run detached, or is away: the server must stay on. */
   remoteBusy(): boolean {
-    return [...this.sessions.values()].some((s) => s.away || (s.remoteRun && (s.inbox || s.remoteRun.state === 'detached')));
+    return this.remoteCount() > 0;
   }
 
   /** Workers at work that stepping away would move or pause (for the automatic step-away). */
@@ -3247,7 +3304,7 @@ export class SessionManager extends EventEmitter {
    * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
    * hub's own channel always reaches this hub's master.
    */
-  private hubTools(s: Session, harness: HarnessId = 'claude'): HubTool[] {
+  private hubTools(s: Session, harness: HarnessId = 'claude', remote = false): HubTool[] {
     const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -3318,7 +3375,7 @@ export class SessionManager extends EventEmitter {
       const toLead = this.groupOf(s)
         ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }) => run(() => this.messageLead(s, message)))]
         : [];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' ? [] : [sendMessage])];
+      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -4755,10 +4812,15 @@ export class SessionManager extends EventEmitter {
         if (s.started && !s.contextBase) s.contextBase = { id: s.sessionId, tokens: 0 };
         if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
         // The app closed while it ran on the server: its turn may go on there alone.
-        if (s.remoteRun?.state === 'live') s.remoteRun.state = 'detached';
+        if (s.remoteRun) {
+          // Saved before the runner: no line number yet, so the runner gives what it kept from the start.
+          if (typeof s.remoteRun.seq !== 'number' || typeof s.remoteRun.conv !== 'string') s.remoteRun = { state: s.remoteRun.state, conv: s.sessionId, seq: 0 };
+          // The app closed while it ran there: it goes on, or waits, on the runner.
+          if (s.remoteRun.state === 'live') s.remoteRun.state = 'detached';
+        }
       }
       const away = saved.away;
-      if (away && typeof away.since === 'number') this.awayMode = { since: away.since, auto: away.auto === true, phase: 'away' };
+      if (away && typeof away.since === 'number') this.awayMode = { since: away.since, auto: away.auto === true, phase: 'away', safe: away.safe === true };
       // Nothing talks to them any more: what they left running ends now, with no wait for them.
       if (previous.size > 0) this.clearProcs(previous, 0);
       // The topics of the master's conversation, if they are this conversation's.
@@ -4828,7 +4890,7 @@ export class SessionManager extends EventEmitter {
       awayOwes: s.awayOwes,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
-      ...(s.inbox && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && this.isWorking(s) ? { resume: 'work' as const } : {}),
+      ...(s.inbox && !s.remoteRun && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && !s.remoteRun && this.isWorking(s) ? { resume: 'work' as const } : {}),
     }));
     // Write-then-rename: a crash mid-save can never leave a truncated state.json behind.
     const tmp = `${this.stateFile}.tmp`;

@@ -250,8 +250,8 @@ export class SetupView {
   private render(): void {
     const v = this.view;
     if (!v) return;
-    // The remote server's section shows once a server is set up, or while it is open (command palette).
-    const remote = this.mode === 'settings' && (v.settings.remoteWorkers.host !== '' || this.section === 'remote');
+    // The remote server's section is always in the settings: its sheet says what it is, and nothing runs until it is on.
+    const remote = this.mode === 'settings';
     const sections = this.mode === 'onboarding' ? STEPS : remote ? [...SECTIONS, 'remote' as const] : SECTIONS;
     const nav = h('nav', 'setup-nav');
     nav.append(h('div', 'setup-nav-title', this.mode === 'onboarding' ? t('setup.firstRun') : t('side.settings')));

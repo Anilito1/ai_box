@@ -1,7 +1,7 @@
 import type { ZodRawShape } from 'zod';
 import type { Totals } from '../../shared/costs';
 import type { Effort, HarnessId, Mode, RateLimits, RemoteWorkers } from '../../shared/types';
-import type { RemoteExit, RemoteNotify } from '../remote';
+import type { RemoteExit, RemoteNotify, RemoteTexts } from '../remote';
 import type { Block } from './blocks';
 
 // What the session manager knows of an AI agent, whichever program runs it. An adapter (providers/<harness>) starts the
@@ -218,10 +218,17 @@ export interface RemoteLaunch {
   cwd: string;
   /** How its connection ended: told before the SDK reports the failure. */
   onExit?: (exit: RemoteExit) => void;
-  /** What the server posts to the phone on its own when a detached turn ends. */
+  /** What the server posts to the phone on its own while the hub is away. */
   notify?: RemoteNotify;
+  /** What the runner answers the worker while the hub is away. */
+  texts?: RemoteTexts;
   /** Tokens of its scope (GH_TOKEN…), given to its process in memory. */
   secrets?: Record<string, string>;
+  /** The number of the last line the hub got from this conversation (read at each connection). */
+  since?: () => number;
+  onSeq?: (seq: number) => void;
+  /** The runner no longer keeps all the hub missed: the conversation is read again from its transcript. */
+  onGap?: () => void;
 }
 
 export interface AdapterContext {

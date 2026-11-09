@@ -1,35 +1,36 @@
 #!/usr/bin/env node
 // The only program the AI Box's SSH key may run on the server: /opt/aibox/launch.mjs, owned by root (setup.sh).
 // It reads one JSON line, then does one of:
-//   {"op":"launch","cwd":"/home/aibox/repos/x","args":[...],"env":{...},"notify":{...}}
-//        runs Claude Code there; the rest of stdin is its input, its output goes back. If the hub goes away in the middle
-//        of a turn (PC asleep, network cut), the turn goes on alone until it ends or needs the hub, then stops (see below);
+//   {"op":"launch","cwd":"/home/aibox/repos/x","args":[...],"env":{...},"notify":{...},"texts":{...},"since":N}
+//        joins the conversation's Claude Code on the runner (runner.mjs), started there first if it does not run; the
+//        rest of stdin is its input, its output goes back. The hub leaving (PC off, network cut) ends this connection
+//        only: the session goes on on the runner, which keeps what the hub missed for the next launch;
 //   {"op":"transcript","id":"<uuid>"}   prints a conversation's transcript (exit 3: none);
-//   {"op":"status"}                     this launcher's version, Claude Code's, signed in or not, memory, workers;
-//   {"op":"session","id":"<uuid>"}      whether that conversation still runs here (detached or not);
+//   {"op":"status"}                     this launcher's version, Claude Code's, signed in or not, memory, the runner;
+//   {"op":"session","id":"<uuid>"}      where that conversation stands on the runner;
 //   {"op":"stop","id":"<uuid>"}         ends it;
 //   {"op":"prepare","slug":"Owner/name","branch":"b"}   fetches the branch and gives it its own worktree in ~/repos;
 //   {"op":"head","cwd":"…","check":true} the branch a folder of ~/repos is on (check: committed and pushed?);
 //   {"op":"echo"}                       sends each input line back (the hub measures the round trip of an event).
 // Nothing else: no shell, no other program than claude and git, no folder outside ~/repos. Each request is logged in
 // ~/.aibox/launch.log (what, where, exit code; never the variables nor the content).
-import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+// Exit codes the hub reads: 2 refused, 3 no transcript, 5 the runner does not answer, 6 the server is full, 7 it stops.
+import { spawnSync } from 'node:child_process';
+import { appendFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { connect } from 'node:net';
 import { freemem, homedir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const VERSION = 4;
+const VERSION = 5;
 const HOME = homedir();
 const REPOS = join(HOME, 'repos');
 const CLAUDE = join(HOME, '.local', 'bin', 'claude');
 const STATE = join(HOME, '.aibox');
-const RUN = join(STATE, 'run');
+const SOCKET = join(STATE, 'runner.sock');
 const LOG = join(STATE, 'launch.log');
 const HEADER_MAX = 1024 * 1024;
 const SESSION_ID = /^[0-9a-f-]{36}$/i;
-/** A detached turn is given this long, at most, to end on its own. */
-const DETACHED_MAX_MS = 4 * 60 * 60_000;
 const SAFE_ENV = (k, v) =>
   /^(CLAUDE_CODE_|CLAUDE_AGENT_SDK_)/.test(k) && !/TOKEN|KEY|SECRET|PASSWORD|CONFIG_DIR|SHELL|HELPER|_PATH$|_DIR$/.test(k) && typeof v === 'string';
 /** The repos the user listed (root's file, written by the AI Box's setup): "owner/name" per line. */
@@ -79,58 +80,38 @@ function readHeader() {
   });
 }
 
-// ---------- the conversations running here ----------
+// ---------- the runner ----------
 
-const runFile = (id) => join(RUN, `${id}.json`);
-const readRun = (id) => {
-  try {
-    return JSON.parse(readFileSync(runFile(id), 'utf8'));
-  } catch {
-    return null;
-  }
-};
-const writeRun = (id, o) => {
-  mkdirSync(RUN, { recursive: true, mode: 0o700 });
-  writeFileSync(`${runFile(id)}.tmp`, JSON.stringify(o));
-  renameSync(`${runFile(id)}.tmp`, runFile(id));
-};
-/** A Claude Code process of ours, not a pid the system gave to another program since. */
-const alive = (pid) => {
-  if (!Number.isInteger(pid) || pid <= 1) return false;
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('claude');
-  } catch {
-    // No /proc (not Linux): the signal's answer is all there is.
-    return !existsSync('/proc');
-  }
-};
-/** The conversation Claude Code is asked to run: `--resume <id>` or `--session-id <id>`. */
+/** The conversation Claude Code is asked to run: `--resume <id>` or `--session-id <id>`, the SDK writes `--flag=<id>`. */
 const conversationOf = (args) => {
-  const i = args.findIndex((a) => a === '--resume' || a === '--session-id');
-  return i >= 0 && SESSION_ID.test(args[i + 1] ?? '') ? args[i + 1] : '';
+  for (let i = 0; i < args.length; i++) {
+    const m = /^--(?:resume|session-id)(?:=(.*))?$/.exec(args[i]);
+    if (!m) continue;
+    const id = m[1] ?? args[i + 1] ?? '';
+    return SESSION_ID.test(id) ? id : '';
+  }
+  return '';
 };
 
-function sessionState(id) {
-  const r = readRun(id);
-  if (!r) return { state: 'none' };
-  if (r.state !== 'done' && alive(r.pid)) return { state: 'running', detached: r.detached === true, blocked: r.blocked === true, since: r.since };
-  return { state: 'done', reason: r.reason ?? '', endedAt: r.endedAt ?? 0 };
-}
-
-// ---------- notifications (ntfy) ----------
-
-function notify(n, kind) {
-  const text = n && typeof n[kind] === 'string' ? n[kind].slice(0, 200) : '';
-  if (!text || typeof n.url !== 'string' || !/^https:\/\/ntfy\.sh\/aibox-[a-z0-9]{24}$/.test(n.url)) return Promise.resolve();
-  // Only the hub's fixed sentences: no name, no content of the conversation.
-  return fetch(n.url, { method: 'POST', body: text, headers: { Title: 'AI Box', Tags: kind === 'done' ? 'white_check_mark' : 'warning' }, signal: AbortSignal.timeout(10_000) })
-    .then(() => log(`notified ${kind}`))
-    .catch(() => log(`notify failed ${kind}`));
+/** One question to the runner: its answer, or null when it does not answer. */
+function askRunner(o) {
+  return new Promise((done) => {
+    const sock = connect(SOCKET);
+    let out = '';
+    const timer = setTimeout(() => sock.destroy(), 60_000);
+    sock.setEncoding('utf8');
+    sock.on('connect', () => sock.write(`${JSON.stringify(o)}\n`));
+    sock.on('data', (t) => (out += t));
+    sock.on('error', () => {});
+    sock.on('close', () => {
+      clearTimeout(timer);
+      try {
+        done(JSON.parse(out.trim().split('\n').pop() ?? ''));
+      } catch {
+        done(null);
+      }
+    });
+  });
 }
 
 // ---------- ops ----------
@@ -145,7 +126,7 @@ function transcript(id) {
   createReadStream(file).pipe(process.stdout);
 }
 
-function status() {
+async function status() {
   const v = spawnSync(CLAUDE, ['--version'], { encoding: 'utf8', timeout: 30_000 });
   const a = spawnSync(CLAUDE, ['auth', 'status', '--json'], { encoding: 'utf8', timeout: 30_000 });
   let signedIn = false;
@@ -161,26 +142,10 @@ function status() {
   } catch {
     // Not Linux: what the system says is free.
   }
-  const files = existsSync(RUN) ? readdirSync(RUN).filter((f) => f.endsWith('.json')) : [];
-  const states = files.map((f) => [f, sessionState(f.slice(0, -5))]);
-  // What ended a week ago is no news any more.
-  for (const [f, st] of states) if (st.state === 'done' && Date.now() - (st.endedAt || 0) > 7 * 86_400_000) rmSync(join(RUN, f), { force: true });
-  const running = states.filter(([, st]) => st.state === 'running').length;
-  answer({ version: VERSION, claude: (v.stdout ?? '').trim().slice(0, 80), signedIn, memory: { total: Math.round(totalmem() / 2 ** 20), available: Math.round(available / 2 ** 20) }, running });
-}
-
-function stop(id) {
-  if (typeof id !== 'string' || !SESSION_ID.test(id)) refuse('bad id');
-  const r = readRun(id);
-  if (r && r.state !== 'done' && alive(r.pid)) {
-    try {
-      process.kill(-r.pid, 'SIGTERM');
-    } catch {
-      // Already gone.
-    }
-    log(`stop ${id}`);
-  }
-  answer(sessionState(id));
+  const r = await askRunner({ op: 'status' });
+  // Where each conversation stands: ids and counts only, never a word of it.
+  const runner = r && { version: r.version, max: r.max, live: r.live, rssMb: r.rssMb, sessions: (r.sessions ?? []).slice(0, 100).map((x) => ({ id: x.id, live: x.live, state: x.state, tasks: x.tasks, waiting: x.waiting, outbox: x.outbox, attached: x.attached })) };
+  answer({ version: VERSION, claude: (v.stdout ?? '').trim().slice(0, 80), signedIn, memory: { total: Math.round(totalmem() / 2 ** 20), available: Math.round(available / 2 ** 20) }, running: r?.live ?? 0, runner });
 }
 
 /**
@@ -241,6 +206,7 @@ function prepare(slug, branch) {
 /** The branch a folder is on; with `check`, after a fetch, whether all of it is committed and on GitHub. */
 function head(cwd, check) {
   const dir = inRepos(cwd);
+  if (!repoOfFolder(dir)) refuse('folder of a repo that is not listed');
   const b = git(dir, ['symbolic-ref', '-q', '--short', 'HEAD']);
   const branch = b.status === 0 ? b.stdout.trim() : '';
   if (!check) return answer({ branch });
@@ -268,29 +234,47 @@ function repoOfFolder(dir) {
  * Claude Code flags that would run a program, or read a file, of the caller's choosing: the hub never sends them, so a
  * request that does is refused (the workers' key gives Claude Code, not a shell).
  */
+const PROGRAM_SETTINGS = ['hooks', 'env', 'apiKeyHelper', 'statusLine', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper', 'fileSuggestion', 'enabledPlugins', 'extraKnownMarketplaces'];
+const parsed = (value) => {
+  try {
+    const o = JSON.parse(value);
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
+  } catch {
+    return null;
+  }
+};
+/** Settings given inline, as the SDK does, and none that runs a program: a file path, or one of those keys, is refused. */
+const badSettings = (value) => {
+  const o = parsed(value);
+  return !o || Object.keys(o).some((k) => PROGRAM_SETTINGS.includes(k));
+};
+const badMcp = (value) => {
+  const o = parsed(value);
+  return !o || !Object.values(o.mcpServers ?? {}).every((s) => s && s.type === 'sdk');
+};
+const outside = (value) => {
+  try {
+    return !realpathSync(value).startsWith(`${REPOS}/`);
+  } catch {
+    return true;
+  }
+};
+
 function unsafeArg(args) {
+  // Flags only, as the SDK writes them: no subcommand (mcp add, plugin install, config…) before them.
+  if (args.length > 0 && !args[0].startsWith('--')) return args[0].slice(0, 40);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith('--')) continue;
     const eq = a.indexOf('=');
     const flag = eq > 0 ? a.slice(0, eq) : a;
-    const value = eq > 0 ? a.slice(eq + 1) : (args[i + 1] ?? '');
+    // Every value up to the next flag: --mcp-config and --add-dir take several, each one is looked at.
+    const values = eq > 0 ? [a.slice(eq + 1)] : [];
+    for (let j = i + 1; eq < 0 && j < args.length && !args[j].startsWith('--'); j++) values.push(args[j]);
     if (['--plugin-dir', '--debug-file', '--settings-file', '--ide'].includes(flag)) return flag;
-    if (flag === '--settings' && /"(hooks|env|apiKeyHelper|statusLine|awsAuthRefresh|awsCredentialExport|otelHeadersHelper|fileSuggestion)"/.test(value)) return flag;
-    if (flag === '--mcp-config') {
-      try {
-        if (!Object.values(JSON.parse(value).mcpServers ?? {}).every((s) => s && s.type === 'sdk')) return flag;
-      } catch {
-        return flag;
-      }
-    }
-    if (flag === '--add-dir') {
-      try {
-        if (!realpathSync(value).startsWith(`${REPOS}/`)) return flag;
-      } catch {
-        return flag;
-      }
-    }
+    if (flag === '--settings' && values.some(badSettings)) return flag;
+    if (flag === '--mcp-config' && values.some(badMcp)) return flag;
+    if (flag === '--add-dir' && values.some(outside)) return flag;
   }
   return '';
 }
@@ -302,117 +286,56 @@ function launch(h, rest) {
   const unsafe = unsafeArg(h.args);
   if (unsafe) refuse(`flag not allowed: ${unsafe}`);
   const id = conversationOf(h.args);
-  // One process per conversation: two would write the same transcript.
-  if (id && sessionState(id).state === 'running') {
-    log(`busy ${id}`);
-    process.stderr.write('aibox launcher: this conversation still runs on the server\n');
-    process.exit(4);
-  }
-  const env = { ...process.env, ...secrets };
+  if (!id) refuse('no conversation id');
+  const env = {};
   for (const [k, v] of Object.entries(h.env && typeof h.env === 'object' ? h.env : {})) if (SAFE_ENV(k, v)) env[k] = v;
-  const n = h.notify && typeof h.notify === 'object' ? h.notify : null;
-  // Its own process group: what it starts (shells, dev servers) ends with the session.
-  const child = spawn(CLAUDE, h.args, { cwd, env, stdio: ['pipe', 'pipe', 'inherit'], detached: true });
-  const since = Date.now();
-  const run = { pid: child.pid, since, detached: false, blocked: false, state: 'running' };
-  if (id) writeRun(id, run);
-  const save = () => id && writeRun(id, run);
-  log(`launch pid=${child.pid} cwd=${cwd}`);
-  const endGroup = () => {
-    try {
-      process.kill(-child.pid, 'SIGTERM');
-    } catch {
-      // Already gone.
-    }
-  };
-
-  let busy = false;
-  let hubGone = false;
-  let stopping = false;
-  /** The hub left in the middle of a turn: the turn goes on until it ends or needs the hub. */
-  const detach = () => {
-    if (hubGone) return;
-    hubGone = true;
-    if (!busy) {
-      log(`hub gone pid=${child.pid}, idle: ending`);
-      stopping = true;
-      return child.stdin.end();
-    }
-    log(`hub gone pid=${child.pid}, mid-turn: going on alone`);
-    run.detached = true;
-    save();
-    // It was already waiting for the hub: nobody will answer.
-    if (asked.size > 0) return finish('blocked');
-    setTimeout(() => finish('timeout'), DETACHED_MAX_MS).unref();
-  };
-  const finish = (kind) => {
-    if (stopping) return;
-    stopping = true;
-    run.reason = kind;
-    save();
-    void notify(n, kind).finally(() => {
-      child.stdin.end();
-      // Claude Code ends on the end of its input; a stuck one is ended after a while.
-      setTimeout(endGroup, 20_000).unref();
-    });
-  };
-
-  /** Requests of Claude Code waiting for the hub's answer. */
-  const asked = new Set();
-  const parse = (line) => {
-    try {
-      return JSON.parse(line);
-    } catch {
-      return null;
-    }
-  };
-  // What the hub writes: a user message starts a turn; an answer settles a request.
-  if (rest.length > 0) process.stdin.unshift(rest);
-  const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
-  input.on('line', (line) => {
-    const m = parse(line);
-    if (m?.type === 'user') busy = true;
-    if (m?.type === 'control_response') asked.delete(m.response?.request_id);
-    if (!hubGone) child.stdin.write(`${line}\n`);
+  const strings = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([, v]) => typeof v === 'string').map(([k, v]) => [k, v.slice(0, 500)]));
+  const since = Number.isInteger(h.since) && h.since >= 0 ? h.since : 0;
+  const sock = connect(SOCKET);
+  let code = null;
+  sock.on('error', () => {
+    log(`runner unreachable ${id.slice(0, 8)}`);
+    process.stderr.write('aibox launcher: the runner does not answer\n');
+    process.exit(5);
   });
-  input.on('close', detach);
-  process.stdin.resume();
-  child.stdin.on('error', () => {});
-
-  // What Claude Code says goes to the hub as long as it is there; a turn's end and a call for the hub are watched.
-  let out = true;
-  process.stdout.on('error', () => {
-    out = false;
-    detach();
+  sock.on('connect', () => {
+    log(`launch ${id.slice(0, 8)} cwd=${cwd} since=${since}`);
+    sock.write(`${JSON.stringify({ op: 'open', id, cwd, args: h.args, env, secrets, notify: strings(h.notify), texts: strings(h.texts), since })}\n`);
+    if (rest.length > 0) sock.write(rest);
+    process.stdin.pipe(sock);
+    process.stdin.resume();
   });
-  createInterface({ input: child.stdout }).on('line', (line) => {
-    if (out && !hubGone) process.stdout.write(`${line}\n`);
-    const m = parse(line);
-    if (m?.type === 'result') {
-      busy = false;
-      if (hubGone) finish('done');
-    } else if (m?.type === 'control_request') {
-      if (!hubGone) return void asked.add(m.request_id);
-      // A permission, one of the hub's tools, a question: nobody to answer it. What it was about is in the transcript.
-      run.blocked = true;
-      finish('blocked');
+  // The runner's own lines: how the process ended, and what it wrote on stderr. The rest is the session's stream.
+  createInterface({ input: sock, crlfDelay: Infinity }).on('line', (line) => {
+    if (line.startsWith('{"type":"aibox_exit"')) {
+      code = Number(/"code":(-?\d+)/.exec(line)?.[1] ?? 1);
+      return;
     }
+    if (line.startsWith('{"type":"aibox_stderr"')) {
+      try {
+        process.stderr.write(String(JSON.parse(line).text ?? ''));
+      } catch {
+        // A cut line: nothing to tell.
+      }
+      return;
+    }
+    process.stdout.write(`${line}\n`);
   });
-
-  // The connection's end: sshd hangs up. An explicit stop (op stop, the hub closing the session) is SIGTERM.
-  process.on('SIGHUP', detach);
-  process.on('SIGPIPE', detach);
-  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, endGroup);
-  child.on('error', (err) => refuse(`claude: ${err.message}`));
-  child.on('exit', (code, signal) => {
-    log(`exit pid=${child.pid} code=${code} signal=${signal ?? ''}`);
-    Object.assign(run, { state: 'done', endedAt: Date.now(), reason: run.reason ?? (hubGone ? 'cut' : 'ended') });
-    save();
-    endGroup();
-    const end = () => process.exit(code ?? 1);
-    // A detached turn that died on its own still says so; one ended by the hub (op stop: SIGTERM) does not.
-    if (hubGone && !stopping && signal !== 'SIGTERM') void notify(n, 'cut').finally(end);
-    else end();
+  // The hub left: only this connection ends, the session goes on on the runner.
+  let left = false;
+  const leave = () => {
+    left = true;
+    sock.destroy();
+  };
+  process.stdout.on('error', leave);
+  process.on('SIGHUP', leave);
+  process.on('SIGPIPE', leave);
+  process.on('SIGTERM', leave);
+  process.stdin.on('end', () => (left = true));
+  sock.on('close', () => {
+    log(`left ${id.slice(0, 8)} code=${code ?? ''}`);
+    // Ended without a word of the runner and not by the hub: the runner went away (restart, crash), the session may not.
+    process.exit(code ?? (left ? 0 : 5));
   });
 }
 
@@ -432,15 +355,18 @@ switch (header?.op) {
     takeSecrets(header.secrets);
     launch(header, rest);
     break;
+  case 'runner':
+    // The runner's sessions only, at once: no Claude Code started to ask its version.
+    answer((await askRunner({ op: 'status' })) ?? { error: 'unreachable' });
+    break;
   case 'status':
-    status();
+    await status();
     break;
   case 'session':
-    if (typeof header.id !== 'string' || !SESSION_ID.test(header.id)) refuse('bad id');
-    answer(sessionState(header.id));
-    break;
   case 'stop':
-    stop(header.id);
+    if (typeof header.id !== 'string' || !SESSION_ID.test(header.id)) refuse('bad id');
+    log(`${header.op} ${header.id.slice(0, 8)}`);
+    answer((await askRunner({ op: header.op, id: header.id })) ?? { state: 'unreachable' });
     break;
   case 'prepare':
     takeSecrets(header.secrets);

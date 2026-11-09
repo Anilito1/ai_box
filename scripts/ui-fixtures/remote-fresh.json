@@ -1,0 +1,94 @@
+{
+  "wizard": {
+    "target": null,
+    "steps": {
+      "local": {
+        "state": "todo",
+        "detail": ""
+      },
+      "hostkey": {
+        "state": "todo",
+        "detail": ""
+      },
+      "admin": {
+        "state": "todo",
+        "detail": ""
+      },
+      "setup": {
+        "state": "todo",
+        "detail": ""
+      },
+      "worker": {
+        "state": "todo",
+        "detail": ""
+      },
+      "login": {
+        "state": "todo",
+        "detail": ""
+      },
+      "repos": {
+        "state": "todo",
+        "detail": ""
+      },
+      "save": {
+        "state": "todo",
+        "detail": ""
+      }
+    },
+    "adminKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample aibox-admin",
+    "fingerprint": "SHA256:ExampleExampleExampleExampleExampleExample",
+    "loginUrl": "",
+    "repos": [],
+    "claude": "",
+    "latencyMs": 0,
+    "memoryMb": {
+      "total": 7751,
+      "available": 7100
+    },
+    "log": [],
+    "running": false
+  },
+  "enabled": false,
+  "ntfyUrl": "",
+  "autoAway": false,
+  "max": 4,
+  "power": {
+    "kind": "always",
+    "project": "",
+    "instance": "",
+    "idleHours": 2,
+    "keys": false,
+    "pending": false,
+    "selfOff": false
+  },
+  "server": "",
+  "lists": {
+    "allowed": [],
+    "denied": [],
+    "orgs": []
+  },
+  "secrets": {
+    "personal": [],
+    "org": []
+  },
+  "app": {
+    "id": "",
+    "org": "",
+    "key": false
+  },
+  "env": {
+    "state": "idle",
+    "at": 0,
+    "sent": 0,
+    "removed": 0,
+    "held": [],
+    "pluginsFailed": [],
+    "reason": "",
+    "detail": ""
+  },
+  "missions": 0,
+  "candidates": [
+    "octo/site",
+    "octo/blog"
+  ]
+}

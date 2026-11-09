@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { installationToken } from './githubApp';
 import { EnvSyncError, personalRepos, sshEnvExec, syncEnvironment } from './remote/envSync';
-import { isOwner, isPersonalGithubToken, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, personalSecrets, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
+import { githubSlug, isOwner, isPersonalGithubToken, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, personalSecrets, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
 import type { AwayView } from '../shared/types';
 
 // The remote server as the app runs it: its setup (Settings › Remote server), its power (switched on before a move,
@@ -92,7 +92,9 @@ export class RemoteServer implements RemoteServerControl {
       ntfyUrl: this.r.ntfy ? ntfyUrl(this.r.ntfy) : '',
       autoAway: this.r.autoAway,
       max: this.r.max,
-      power: { kind: p.kind, project: p.project, instance: p.instance, idleHours: p.idleHours, keys: this.keys() !== null, pending: this.pendingCk !== '' },
+      power: { kind: p.kind, project: p.project, instance: p.instance, idleHours: p.idleHours, keys: this.keys() !== null, pending: this.pendingCk !== '', selfOff: p.selfOff },
+      missions: this.mgr?.remoteCount() ?? 0,
+      candidates: [...new Set(this.o.cfg.mainRepos.map((r) => githubSlug(originOf(mainRepoPath(this.o.cfg, r)))).filter((x): x is string => !!x))].slice(0, 50),
       server: this.state(),
       lists: { allowed: this.r.allowed, denied: this.r.denied, orgs: this.r.orgs },
       secrets: {
@@ -163,7 +165,11 @@ export class RemoteServer implements RemoteServerControl {
     if (s.kind === 'autoAway') r.autoAway = on;
     if (s.kind === 'max' && Number.isInteger(value) && value >= 1 && value <= 16) r.max = value;
     if (s.kind === 'ntfy') r.ntfy = on ? newTopic() : '';
-    if (s.kind === 'idleHours' && value >= 0.5 && value <= 48) r.power.idleHours = value;
+    if (s.kind === 'idleHours' && value >= 0.5 && value <= 48) {
+      // The server that switches itself off waits as long: kept only once it took it, never one delay here and another there.
+      if (r.power.selfOff && !(await this.wizard().serverPower('delay', value))) throw new Error('server');
+      r.power.idleHours = value;
+    }
     if (s.kind === 'repos') {
       const list = (v: unknown, ok: (x: unknown) => boolean) => (Array.isArray(v) ? [...new Set(v.filter(ok) as string[])].slice(0, 50) : []);
       r.allowed = list(s.allowed, isSlug);
@@ -328,6 +334,30 @@ export class RemoteServer implements RemoteServerControl {
     return this.view();
   }
 
+  /**
+   * The server's own key, that may only read and shelve this instance (made on OVH's createToken page with those two
+   * rights): checked against the instance, then handed to the server, which keeps it encrypted for its power service.
+   * Never kept on this PC. `{ off: true }` takes it back from the server.
+   */
+  async setServerPower(raw: unknown): Promise<RemoteView> {
+    const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const p = this.r.power;
+    if (o.off === true) {
+      if (!(await this.wizard().serverPower(null, p.idleHours))) throw new Error('server');
+      p.selfOff = false;
+    } else {
+      const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+      const keys = { appKey: str(o.appKey), appSecret: str(o.appSecret), consumerKey: str(o.consumerKey) };
+      if (p.kind !== 'ovh' || !Object.values(keys).every((k) => /^[A-Za-z0-9]{8,64}$/.test(k))) throw new Error('invalid');
+      if ((await ovhPower(p, keys).state()) === 'unknown') throw new Error('not-validated');
+      if (!(await this.wizard().serverPower({ ...keys, project: p.project, instance: p.instance }, p.idleHours))) throw new Error('server');
+      p.selfOff = true;
+    }
+    this.o.save();
+    this.push();
+    return this.view();
+  }
+
   async forgetOvh(): Promise<RemoteView> {
     for (const k of ['ovhAppKey', 'ovhAppSecret', 'ovhConsumerKey'] as const) await this.o.secrets.set(k, null);
     this.r.power.kind = 'always';
@@ -346,7 +376,8 @@ export class RemoteServer implements RemoteServerControl {
   async wake(): Promise<string | null> {
     // Always on: nothing to switch, and the request that follows says itself whether the server answers.
     if (this.r.power.kind !== 'ovh') return null;
-    if (this.power === 'on' && this.mgr?.remoteBusy()) return null;
+    // A server that may shelve itself (PC away) is asked: the last state seen here may be hours old.
+    if (this.power === 'on' && this.mgr?.remoteBusy() && !this.r.power.selfOff) return null;
     // A shelve still under way ends first; an unshelve OVH drops is asked again while time is left.
     const r = await switchOn(this.control(), {
       timeoutMs: WAKE_MS,
@@ -445,11 +476,11 @@ export class RemoteServer implements RemoteServerControl {
     }
   }
 
-  async comeBack(): Promise<void> {
+  async comeBack(mode: 'bring' | 'leave' = 'bring'): Promise<void> {
     if (!this.mgr) return;
     const release = this.o.keepAwake();
     try {
-      await this.mgr.comeBack();
+      await this.mgr.comeBack(mode);
     } finally {
       release();
     }

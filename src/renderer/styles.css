@@ -7382,6 +7382,148 @@ input[type='radio']:focus-visible {
   gap: var(--sp-2);
   width: 100%;
 }
+.remote-fail {
+  color: var(--danger-text);
+}
+/* Where things stand now: one line, a dot coloured by the server's own state. */
+.remote-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.remote-status-sep {
+  color: var(--text-3);
+}
+.remote-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--text-3);
+}
+.remote-status-dot.s-ready,
+.remote-status-dot.s-always {
+  background: var(--ok);
+}
+.remote-status-dot.s-busy {
+  background: var(--accent);
+}
+.remote-status-dot.s-starting,
+.remote-status-dot.s-stopping {
+  background: var(--warn);
+}
+.remote-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.remote-sheet-list li::marker {
+  color: var(--text-3);
+}
+.remote-guide-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+.remote-guide {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.remote-guide-step {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: var(--sp-2) var(--sp-3);
+}
+.remote-guide-step[open] {
+  border-color: var(--line-strong);
+}
+.remote-guide-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+.remote-guide-summary::-webkit-details-marker {
+  display: none;
+}
+.remote-guide-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--line-strong);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.remote-guide-badge.ok {
+  border-color: transparent;
+  background: var(--ok);
+  color: var(--elevated);
+}
+.remote-guide-badge.fail {
+  border-color: var(--danger);
+  color: var(--danger-text);
+}
+.remote-guide-badge.wait,
+.remote-guide-badge.run {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.remote-guide-badge .ico {
+  width: 14px;
+  height: 14px;
+}
+.remote-guide-name {
+  min-width: 0;
+}
+.remote-guide-optional {
+  font-weight: 400;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.remote-guide-text {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.remote-guide-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  min-width: 0;
+}
+.remote-guide-body > .setup-row,
+.remote-guide-body > .remote-code,
+.remote-guide-body > .remote-ovh,
+.remote-guide-body > .setup-field {
+  width: 100%;
+}
+.remote-more > summary {
+  cursor: pointer;
+}
 .ph-away.on {
   color: var(--accent);
 }

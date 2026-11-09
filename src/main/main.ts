@@ -1126,8 +1126,9 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('vps:app', (o) => this.remote.setApp(o));
     handle('vps:ovh-forget', () => this.remote.forgetOvh());
     handle('vps:test-ntfy', () => this.remote.testNotification());
+    handle('vps:server-power', (o) => this.remote.setServerPower(o));
     on('away:leave', () => void this.remote.stepAway(false));
-    on('away:back', () => void this.remote.comeBack());
+    on('away:back', (mode) => void this.remote.comeBack(mode === 'leave' ? 'leave' : 'bring'));
     // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
     handle('caps:get', () => this.caps.inventory());
     handle('caps:check', async () => {

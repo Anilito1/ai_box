@@ -100,11 +100,12 @@ const api: HubApi = {
   remoteApp: (o) => ipcRenderer.invoke('vps:app', o),
   remoteOvhForget: () => ipcRenderer.invoke('vps:ovh-forget'),
   remoteTestNtfy: () => ipcRenderer.invoke('vps:test-ntfy'),
+  remoteServerPower: (o) => ipcRenderer.invoke('vps:server-power', o),
   onRemote: (cb) => {
     ipcRenderer.on('vps:state', (_e, view) => cb(view));
   },
   awayLeave: () => ipcRenderer.send('away:leave'),
-  awayBack: () => ipcRenderer.send('away:back'),
+  awayBack: (mode) => ipcRenderer.send('away:back', mode),
   capabilities: () => ipcRenderer.invoke('caps:get'),
   checkCapabilities: () => ipcRenderer.invoke('caps:check'),
   addMcp: (draft) => ipcRenderer.invoke('caps:mcp-add', draft),

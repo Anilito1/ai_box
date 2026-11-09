@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { askConsumerKey, ovhPower, ovhSignature, powerOf, switchOn } from './power';
 
-const p = { kind: 'ovh' as const, endpoint: 'ovh-eu' as const, project: 'abcdef0123456789', instance: '11111111-2222-3333-4444-555555555555', idleHours: 2 };
+const p = { kind: 'ovh' as const, endpoint: 'ovh-eu' as const, project: 'abcdef0123456789', instance: '11111111-2222-3333-4444-555555555555', idleHours: 2, selfOff: false };
 const keys = { appKey: 'AK0123456789', appSecret: 'AS0123456789abcdef', consumerKey: 'CK0123456789' };
 
 test("OVH's signature: $1$ and the SHA1 of secret, consumer, method, url, body and time", () => {

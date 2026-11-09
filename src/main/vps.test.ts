@@ -70,7 +70,7 @@ function fakeServer() {
   const status = async (r: RemoteWorkers): Promise<ServerStatus | null> => {
     assert.equal(r.user, 'aibox');
     assert.ok(r.key.endsWith('aibox_worker'));
-    return srv.installed ? { version: LAUNCHER_VERSION, claude: '2.1.311 (Claude Code)', signedIn: srv.signedIn, memory: { total: 7941, available: 7100 }, running: 0 } : null;
+    return srv.installed ? { version: LAUNCHER_VERSION, claude: '2.1.311 (Claude Code)', signedIn: srv.signedIn, memory: { total: 7941, available: 7100 }, running: 0, runner: { version: 1, max: 8, live: 0, rssMb: 50, sessions: [] } } : null;
   };
   const tty = (_cmd: string, args: string[]): Tty => {
     assert.ok(args.includes('-tt'));
@@ -96,7 +96,7 @@ function wizard() {
   const home = mkdtempSync(join(tmpdir(), 'hub-vps-'));
   mkdirSync(join(home, '.ssh'));
   const scripts = mkdtempSync(join(tmpdir(), 'hub-vps-scripts-'));
-  for (const f of ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh']) writeFileSync(join(scripts, f), `# ${f}`);
+  for (const f of ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh', 'runner.mjs', 'relay.mjs', 'power.mjs', 'power-key.sh']) writeFileSync(join(scripts, f), `# ${f}`);
   const fake = fakeServer();
   let saved: RemoteWorkers = parseRemote({ allowed: ['octo/site', 'octo/shop', 'acme-corp/crm'], denied: ['acme-corp'] });
   let token = '';

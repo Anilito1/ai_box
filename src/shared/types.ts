@@ -121,6 +121,8 @@ export interface ServerPower {
   instance: string;
   /** Switched off after this many hours without a remote worker. */
   idleHours: number;
+  /** The server holds its own key that may only shelve it: it switches itself off while the PC is away too. */
+  selfOff: boolean;
 }
 
 /**
@@ -381,6 +383,10 @@ export interface AwayView {
   auto: boolean;
   /** The server, as its power control last said: off, starting, ready, busy; '' when it is always on. */
   server: 'off' | 'starting' | 'ready' | 'busy' | 'stopping' | 'unknown' | '';
+  /** The runner said it holds every worker that moved: the PC may be switched off. */
+  safe: boolean;
+  /** Workers moved to the server and not back yet (they may stay there after the user is back). */
+  onServer: number;
 }
 
 /** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
@@ -977,9 +983,12 @@ export interface HubApi {
   remoteApp(o: { id: string; org: string; key: string }): Promise<RemoteView>;
   remoteOvhForget(): Promise<RemoteView>;
   remoteTestNtfy(): Promise<boolean>;
+  /** The server's own key that may only shelve it (never kept here), or { off: true } to take it back. */
+  remoteServerPower(o: { appKey: string; appSecret: string; consumerKey: string } | { off: true }): Promise<RemoteView>;
   onRemote(cb: (view: RemoteView) => void): void;
   awayLeave(): void;
-  awayBack(): void;
+  /** `leave`: the workers on the server finish there; `bring` (default): they come back to this PC. */
+  awayBack(mode?: 'bring' | 'leave'): void;
   /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
   capabilities(): Promise<Capabilities>;
   /** Asks Claude Code for each server's state (some seconds). */

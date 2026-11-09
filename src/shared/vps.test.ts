@@ -14,7 +14,6 @@ import {
   parseRepos,
   parseStatus,
   parseTarget,
-  pendingReports,
   isPersonalGithubToken,
   isSecretValue,
   personalSecrets,
@@ -104,8 +103,15 @@ test("the server's answers are read for what the hub needs only", () => {
     signedIn: true,
     memory: { total: 7941, available: 7012 },
     running: 1,
+    runner: null,
   });
   assert.equal(parseStatus('not json'), null);
+  // The runner's sessions: ids and counts only; a malformed one is left out, nothing of a conversation comes through.
+  const id = '0f8e2c4a-1111-2222-3333-444455556666';
+  const st = parseStatus(
+    JSON.stringify({ version: 5, runner: { version: 1, max: 8, live: 1, rssMb: 54.4, sessions: [{ id, live: true, state: 'running', tasks: 1, waiting: 0, outbox: 2, attached: false, text: 'secret' }, { id: '../x', live: true }] } }),
+  );
+  assert.deepEqual(st?.runner, { version: 1, max: 8, live: 1, rssMb: 54, sessions: [{ id, live: true, state: 'running', tasks: 1, waiting: 0, outbox: 2, attached: false }] });
 });
 
 test('a branch is written from one side at a time, and by one worker on the server', () => {
@@ -117,17 +123,6 @@ test('a branch is written from one side at a time, and by one worker on the serv
   // Two sessions of this PC in one checkout stay as they are today.
   const local: Lease[] = [{ ...held[0], side: 'pc' }];
   assert.equal(leaseConflict(local, { slug: 'octo/site', branch: 'ai-box/site', side: 'pc', session: 'b' }), null);
-});
-
-test('the reports a worker wrote while the hub was gone are found in its transcript, once each', () => {
-  const lines = [
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'mcp__hub__message_master', input: { message: 'first report' } }] } },
-    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'delivered' }] } },
-    { type: 'assistant', message: { content: [{ type: 'text', text: 'work' }, { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'git push' } }] } },
-    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't3', name: 'mcp__hub__message_master', input: { message: 'done: pushed ai-box/site at abc123' } }] } },
-  ];
-  assert.deepEqual(pendingReports(lines), [{ id: 't3', text: 'done: pushed ai-box/site at abc123' }]);
-  assert.deepEqual(pendingReports([{ type: 'summary' }, { message: { content: 'x' } }]), []);
 });
 
 test('branch names that git and the launcher take', () => {

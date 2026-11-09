@@ -1,15 +1,18 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import type { SessionStore, SessionStoreEntry, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { RemoteWorkers } from '../shared/types';
-import { isBranch, isOwner, isSlug, isTopic, ntfyUrl, parseStatus, REMOTE_MAX_DEFAULT, REMOTE_REPOS, type ServerStatus } from '../shared/vps';
+import { isBranch, isOwner, isSlug, isTopic, ntfyUrl, parseRunner, parseStatus, REMOTE_MAX_DEFAULT, REMOTE_REPOS, SESSION_ID, type RunnerStatus, type ServerStatus } from '../shared/vps';
 
 /**
  * Workers on the remote server (experimental). The hub runs `ssh` instead of Claude Code: on the server, its key only
- * runs /opt/aibox/launch.mjs (scripts/vps/launch.mjs, installed by setup.sh), which reads one JSON line (what to do) then gives the rest of stdin to Claude Code.
+ * runs /opt/aibox/launch.mjs (scripts/vps/launch.mjs, installed by setup.sh), which reads one JSON line (what to do),
+ * then joins the conversation's Claude Code on the runner (scripts/vps/runner.mjs), which starts it if needed.
  * The SDK speaks to it over that pipe as to a local process, the hub's tools and permission prompts included.
- * A cut connection leaves a turn in progress going on alone on the server until it ends or needs the hub (launch.mjs).
+ * A cut connection, or the app closed, leaves the session running on the runner: it keeps the numbered lines the hub
+ * missed, the messages for the master and the requests waiting, and gives them at the next launch (`since`).
  * Nothing here runs while remote workers are off.
  */
 
@@ -29,7 +32,7 @@ export const REMOTE_DEFAULTS: RemoteWorkers = {
   max: REMOTE_MAX_DEFAULT,
   ntfy: '',
   autoAway: false,
-  power: { kind: 'always', endpoint: 'ovh-eu', project: '', instance: '', idleHours: 2 },
+  power: { kind: 'always', endpoint: 'ovh-eu', project: '', instance: '', idleHours: 2, selfOff: false },
 };
 
 const HOST = /^[a-z0-9.-]{1,253}$|^\d{1,3}(\.\d{1,3}){3}$/i;
@@ -71,6 +74,7 @@ export function parseRemote(raw: unknown): RemoteWorkers {
       project: typeof p.project === 'string' && OVH_ID.test(p.project) ? p.project : '',
       instance: typeof p.instance === 'string' && OVH_ID.test(p.instance) ? p.instance : '',
       idleHours: typeof p.idleHours === 'number' && p.idleHours >= 0.5 && p.idleHours <= 48 ? p.idleHours : 2,
+      selfOff: p.selfOff === true,
     },
   };
   if (r.power.kind === 'ovh' && (!r.power.project || !r.power.instance)) r.power.kind = 'always';
@@ -132,27 +136,40 @@ export function sshArgs(r: RemoteWorkers): string[] {
 
 /** What the hub asks the launcher (scripts/vps/launch.mjs). */
 export type Header =
-  | { op: 'launch'; cwd: string; args: string[]; env: Record<string, string>; notify?: RemoteNotify; secrets?: Record<string, string> }
+  | { op: 'launch'; cwd: string; args: string[]; env: Record<string, string>; notify?: RemoteNotify; texts?: RemoteTexts; secrets?: Record<string, string>; since?: number }
   | { op: 'transcript'; id: string }
   | { op: 'status' }
+  | { op: 'runner' }
   | { op: 'session'; id: string }
   | { op: 'stop'; id: string }
   | { op: 'prepare'; slug: string; branch: string; secrets?: Record<string, string> }
   | { op: 'head'; cwd: string; check?: boolean; secrets?: Record<string, string> }
   | { op: 'echo' };
 
-/** The fixed sentences the server posts on its own (a detached turn that ends, waits for the hub, or stops). */
+/** The fixed sentences the server posts on its own (a turn that ends while the hub is away, waits for it, or stops). */
 export interface RemoteNotify {
   url: string;
   done: string;
+  report: string;
   blocked: string;
   cut: string;
   timeout: string;
 }
 
+/** What the runner answers the worker while the hub is away, in the user's language. */
+export interface RemoteTexts {
+  /** A message to the master (or a lead, a peer), kept for the hub. */
+  queued: string;
+  /** Any other tool of the hub. */
+  offline: string;
+  /** The first line of a kept message, when the hub gets it; {time} is when it was written. */
+  late: string;
+  /** Too many messages kept already (or one too long). */
+  full: string;
+}
+
 export const notifyOf = (r: RemoteWorkers, texts: Omit<RemoteNotify, 'url'>): RemoteNotify | undefined => (r.ntfy ? { url: ntfyUrl(r.ntfy), ...texts } : undefined);
 
-const SESSION_ID = /^[0-9a-f-]{36}$/i;
 
 function openSsh(r: RemoteWorkers, header: Header, signal?: AbortSignal, onStderr?: (text: string) => void) {
   const child = spawn(sshProgram('ssh'), sshArgs(r), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(signal ? { signal } : {}) });
@@ -173,27 +190,126 @@ export interface RemoteExit {
 
 /** ssh's own failure (connection refused, cut, key refused), not the program's on the server. */
 export const SSH_FAILED = 255;
-/** The launcher: this conversation still runs on the server (detached). */
-export const STILL_RUNNING = 4;
+/** The launcher could not reach the runner (it restarts), or the server is stopping: the session is back in a moment. */
+export const RUNNER_DOWN = 5;
+export const SERVER_FULL = 6;
+export const SERVER_STOPPING = 7;
+
+/** A line from the runner: a message's number, a gap in what it kept, one of its own lines, or none of these. */
+export function runnerLine(line: string): { seq: number } | 'gap' | 'meta' | null {
+  if (line.startsWith('{"type":"aibox_gap"')) return 'gap';
+  if (line.startsWith('{"type":"aibox_')) return 'meta';
+  const m = /,"aibox_seq":(\d+)}$/.exec(line);
+  return m ? { seq: Number(m[1]) } : null;
+}
+
+/**
+ * The runner's stream as the SDK reads it: its own lines taken out, each message's number told (the last one the hub
+ * got is where the next launch starts from).
+ */
+export function readRunner(from: NodeJS.ReadableStream, hooks: { onSeq?: (seq: number) => void; onGap?: () => void; onTooLong?: () => void }): PassThrough {
+  const out = new PassThrough();
+  let buf = '';
+  let gap = false;
+  let last = -1;
+  const take = (line: string) => {
+    const r = runnerLine(line);
+    // Once per connection: a server repeating it would have the transcript read again and again.
+    if (r === 'gap') {
+      if (!gap) hooks.onGap?.();
+      gap = true;
+      return;
+    }
+    if (r === 'meta') return;
+    out.write(`${line}\n`);
+    // Only forward: a number that goes back, or out of range, says nothing true about what the hub got.
+    if (r && Number.isSafeInteger(r.seq) && r.seq > last) {
+      last = r.seq;
+      hooks.onSeq?.(r.seq);
+    }
+  };
+  from.setEncoding?.('utf8');
+  from.on('data', (chunk: string) => {
+    buf += chunk;
+    let start = 0;
+    for (let nl = buf.indexOf('\n'); nl >= 0; nl = buf.indexOf('\n', start)) {
+      take(buf.slice(start, nl).replace(/\r$/, ''));
+      start = nl + 1;
+    }
+    buf = buf.slice(start);
+    // A line no Claude Code writes: the connection is ended rather than this PC's memory.
+    if (buf.length > LINE_MAX) {
+      buf = '';
+      hooks.onTooLong?.();
+    }
+  });
+  from.on('end', () => {
+    if (buf) take(buf);
+    out.end();
+  });
+  from.on('close', () => out.end());
+  return out;
+}
+
+/** The longest line taken from the server (a transcript's tool result fits many times over). */
+const LINE_MAX = 64 * 2 ** 20;
 
 /** The SDK's spawnClaudeCodeProcess for a session working in `remoteCwd` on the server. */
 export function remoteSpawner(
   r: RemoteWorkers,
   remoteCwd: string,
-  hooks: { onSpawn?: (pid: number) => void; onStderr?: (text: string) => void; onExit?: (exit: RemoteExit) => void; notify?: RemoteNotify; secrets?: Record<string, string> } = {},
+  hooks: {
+    onSpawn?: (pid: number) => void;
+    onStderr?: (text: string) => void;
+    onExit?: (exit: RemoteExit) => void;
+    notify?: RemoteNotify;
+    texts?: RemoteTexts;
+    secrets?: Record<string, string>;
+    /** The number of the last line the hub got from this conversation: the runner gives what follows. */
+    since?: () => number;
+    onSeq?: (seq: number) => void;
+    onGap?: () => void;
+  } = {},
 ): (o: SpawnOptions) => SpawnedProcess {
   // The SDK's own command is this PC's binary; the launcher runs the server's. Its arguments are flags and values.
   return (o) => {
     let tail = '';
-    const child = openSsh(r, { op: 'launch', cwd: remoteCwd, args: o.args, env: forwardedEnv(o.env), ...(hooks.notify ? { notify: hooks.notify } : {}), ...(hooks.secrets ? { secrets: hooks.secrets } : {}) }, o.signal, (text) => {
+    const header: Header = {
+      op: 'launch',
+      cwd: remoteCwd,
+      args: o.args,
+      env: forwardedEnv(o.env),
+      since: hooks.since?.() ?? 0,
+      ...(hooks.notify ? { notify: hooks.notify } : {}),
+      ...(hooks.texts ? { texts: hooks.texts } : {}),
+      ...(hooks.secrets ? { secrets: hooks.secrets } : {}),
+    };
+    const child = openSsh(r, header, o.signal, (text) => {
       tail = (tail + text).slice(-2000);
       hooks.onStderr?.(text);
     });
     // Registered before the SDK's: the session knows why it ended when the SDK reports the failure.
     child.on('exit', (code) => hooks.onExit?.({ code, stderr: tail }));
-    // Not the hub's process reaper (src/main/procTree.ts): ssh has no children here, the launcher ends those on the server.
+    // Not the hub's process reaper (src/main/procTree.ts): ssh has no children here, the runner ends those on the server.
     if (child.pid) hooks.onSpawn?.(child.pid);
-    return child;
+    const stdout = readRunner(child.stdout, { ...hooks, onTooLong: () => child.kill() });
+    return {
+      stdin: child.stdin,
+      stdout,
+      get killed() {
+        return child.killed;
+      },
+      get exitCode() {
+        return child.exitCode;
+      },
+      get signalCode() {
+        return child.signalCode;
+      },
+      kill: (signal: NodeJS.Signals) => child.kill(signal),
+      on: (event: string, listener: (...a: unknown[]) => void) => void child.on(event, listener),
+      once: (event: string, listener: (...a: unknown[]) => void) => void child.once(event, listener),
+      off: (event: string, listener: (...a: unknown[]) => void) => void child.off(event, listener),
+    } as SpawnedProcess;
   };
 }
 
@@ -247,15 +363,10 @@ export async function remoteStatus(r: RemoteWorkers): Promise<ServerStatus | nul
   return res.code === 0 ? parseStatus(res.out.toString('utf8')) : null;
 }
 
-export type RemoteSessionState = { state: 'running'; detached: boolean; blocked: boolean } | { state: 'done' | 'none' } | { state: 'unreachable' };
-
-/** Whether a conversation still runs on the server; `unreachable` when the server cannot be asked. */
-export async function remoteSession(r: RemoteWorkers, id: string): Promise<RemoteSessionState> {
-  const res = await remoteCall(r, { op: 'session', id }, { timeoutMs: 30_000 });
-  const o = res.code === 0 ? json(res.out) : null;
-  if (!o) return { state: 'unreachable' };
-  if (o.state === 'running') return { state: 'running', detached: o.detached === true, blocked: o.blocked === true };
-  return { state: o.state === 'done' ? 'done' : 'none' };
+/** The runner's sessions, at once (no Claude Code started on the server to answer); null when it cannot be asked. */
+export async function remoteRunner(r: RemoteWorkers): Promise<RunnerStatus | null> {
+  const res = await remoteCall(r, { op: 'runner' }, { timeoutMs: 30_000 });
+  return res.code === 0 ? parseRunner(json(res.out)) : null;
 }
 
 export async function remoteStop(r: RemoteWorkers, id: string): Promise<void> {

@@ -19,7 +19,7 @@ ADMIN="${ADMIN:-${SUDO_USER:-}}"
 [ -n "${WORKER_KEY:-}" ] || { echo "WORKER_KEY (public key of the AI Box) is missing" >&2; exit 1; }
 [[ "$WORKER_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+(\ [A-Za-z0-9@._-]+)?$ ]] || { echo "WORKER_KEY is not one ssh-ed25519 public key" >&2; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in launch.mjs repos.sh envsync.mjs tools.sh; do [ -f "$HERE/$f" ] || { echo "$f must sit next to setup.sh" >&2; exit 1; }; done
+for f in launch.mjs repos.sh envsync.mjs tools.sh runner.mjs relay.mjs power.mjs power-key.sh; do [ -f "$HERE/$f" ] || { echo "$f must sit next to setup.sh" >&2; exit 1; }; done
 # The admin must keep a way in before SSH is narrowed.
 [ -s "/home/$ADMIN/.ssh/authorized_keys" ] || { echo "/home/$ADMIN/.ssh/authorized_keys is empty: refusing to lock SSH" >&2; exit 1; }
 
@@ -127,6 +127,74 @@ step "environment sync and tools"
 # Before the launcher: its environment requests load envsync.mjs. A tool that fails does not stop the setup.
 install -m 644 -o root -g root "$HERE/envsync.mjs" /opt/aibox/envsync.mjs
 bash "$HERE/tools.sh" || echo "tools.sh failed: the server works without the missing tools"
+
+step "runner (keeps the sessions while the PC is off)"
+install -m 644 -o root -g root "$HERE/relay.mjs" /opt/aibox/relay.mjs
+install -m 644 -o root -g root "$HERE/power.mjs" /opt/aibox/power.mjs
+# A running runner takes the new version up by itself once no session runs (it watches its own files).
+install -m 644 -o root -g root "$HERE/runner.mjs" /opt/aibox/runner.mjs
+# Shelving the server needs an OVHcloud key: only this user reads it, never aibox, whom the workers run as.
+id aibox-power >/dev/null 2>&1 || adduser --system --group --no-create-home --shell /usr/sbin/nologin aibox-power >/dev/null
+cat >/etc/systemd/system/aibox-runner.service <<'EOF'
+[Unit]
+Description=AI Box runner: the remote workers' Claude Code sessions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=aibox
+Group=aibox
+WorkingDirectory=/home/aibox
+Environment=HOME=/home/aibox PATH=/home/aibox/.local/bin:/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8
+ExecStart=/usr/bin/node /opt/aibox/runner.mjs
+Restart=always
+RestartSec=5
+# The stop goes to the runner alone: it interrupts the turns in progress and ends its sessions, then the rest goes.
+KillMode=mixed
+TimeoutStopSec=100
+RuntimeDirectory=aibox
+RuntimeDirectoryMode=0755
+NoNewPrivileges=yes
+ProtectSystem=full
+MemoryHigh=85%
+MemoryMax=92%
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat >/etc/systemd/system/aibox-power.service <<'EOF'
+[Unit]
+Description=AI Box: shelve this server once nothing has run for the user's delay
+ConditionPathExists=/etc/aibox/ovh.cred
+
+[Service]
+Type=oneshot
+User=aibox-power
+Group=aibox-power
+ExecStart=/usr/bin/node /opt/aibox/power.mjs
+TimeoutStartSec=120
+LoadCredentialEncrypted=ovh:/etc/aibox/ovh.cred
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+EOF
+cat >/etc/systemd/system/aibox-power.path <<'EOF'
+[Unit]
+Description=AI Box: the runner asks for the server to be shelved
+
+[Path]
+PathChanged=/run/aibox/shelve-request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+install -m 644 -o root -g root "$HERE/power-key.sh" /opt/aibox/power-key.sh
+systemctl daemon-reload
+systemctl enable --now aibox-runner.service aibox-power.path >/dev/null
+for i in $(seq 1 20); do [ -S /home/aibox/.aibox/runner.sock ] && break; sleep 1; done
+[ -S /home/aibox/.aibox/runner.sock ] || { journalctl -u aibox-runner -n 20 --no-pager; echo "the runner did not start" >&2; exit 1; }
+systemctl is-active aibox-runner
 
 step "launcher"
 # Last: the app sees its version only once everything above went through, so a stopped run is run again.

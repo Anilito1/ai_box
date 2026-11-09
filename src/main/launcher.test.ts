@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -31,16 +31,14 @@ test('the launcher refuses anything but its own requests, and logs the refusals'
   assert.match(readFileSync(join(home, '.aibox', 'launch.log'), 'utf8'), /refused: unknown op/);
 });
 
-test("the launcher tells whether a conversation still runs on the server, and gone means gone", () => {
+test('where a conversation stands is the runner’s answer: without it, “unreachable”, never a guess', () => {
   const home = mkdtempSync(join(tmpdir(), 'hub-launcher-'));
   const id = '0f8e2c4a-1111-2222-3333-444455556666';
-  assert.deepEqual(JSON.parse(run(`${JSON.stringify({ op: 'session', id })}\n`, home).out), { state: 'none' });
-  mkdirSync(join(home, '.aibox', 'run'), { recursive: true });
-  // This test's own process stands for a detached Claude Code.
-  writeFileSync(join(home, '.aibox', 'run', `${id}.json`), JSON.stringify({ pid: process.pid, since: 1, detached: true, blocked: false, state: 'running' }));
-  assert.deepEqual(JSON.parse(run(`${JSON.stringify({ op: 'session', id })}\n`, home).out), { state: 'running', detached: true, blocked: false, since: 1 });
-  writeFileSync(join(home, '.aibox', 'run', `${id}.json`), JSON.stringify({ pid: 999999, state: 'running' }));
-  assert.equal(JSON.parse(run(`${JSON.stringify({ op: 'session', id })}\n`, home).out).state, 'done');
+  // No runner listens here (it runs on the server, under systemd): the hub hears that it cannot know.
+  assert.deepEqual(JSON.parse(run(`${JSON.stringify({ op: 'session', id })}\n`, home).out), { state: 'unreachable' });
+  assert.deepEqual(JSON.parse(run(`${JSON.stringify({ op: 'stop', id })}\n`, home).out), { state: 'unreachable' });
+  assert.match(run(`${JSON.stringify({ op: 'session', id: 'x; rm -rf ~' })}\n`, home).err, /bad id/);
+  assert.match(readFileSync(join(home, '.aibox', 'launch.log'), 'utf8'), /session 0f8e2c4a/);
 });
 
 test('the launcher echoes lines back, so the hub can time an event through the connection', () => {
