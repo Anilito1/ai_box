@@ -94,6 +94,49 @@ export function ovhPower(p: ServerPower, keys: OvhKeys, f: Fetch = fetch): Power
   };
 }
 
+export interface SwitchOn<T> {
+  /** The server's own answer once the instance runs (SSH): a value ends the wait. */
+  answer(): Promise<T | null>;
+  /** Every state read, for the window. */
+  seen(s: PowerState): void;
+  timeoutMs: number;
+  everyMs?: number;
+  askAgainMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * Switches the instance on and waits for the server's answer. OVH answers an unshelve with 200 and can still leave the
+ * instance shelved, or start it and let it fall back (seen on GRA11): while it is, or is again, off it is asked again.
+ * `off`: OVH never switched it on; `silent`: on, or on its way, but the server did not answer in time.
+ */
+export async function switchOn<T>(c: PowerControl, o: SwitchOn<T>): Promise<{ answer: T } | { why: 'off' | 'silent' }> {
+  const now = o.now ?? Date.now;
+  const sleep = o.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const until = now() + o.timeoutMs;
+  let askedAt = -Infinity;
+  let last: PowerState = 'unknown';
+  while (now() < until) {
+    try {
+      last = await c.state();
+      if (last === 'off' && now() - askedAt >= (o.askAgainMs ?? 60_000)) {
+        await c.start();
+        askedAt = now();
+        last = 'starting';
+      }
+    } catch {
+      // A refused or failed call: asked again at the next turn.
+      last = 'unknown';
+    }
+    o.seen(last);
+    const a = last === 'on' ? await o.answer() : null;
+    if (a !== null) return { answer: a };
+    await sleep(o.everyMs ?? 10_000);
+  }
+  return { why: last === 'off' ? 'off' : 'silent' };
+}
+
 /**
  * A consumer key for the hub, limited to this one instance (read, start, unshelve, shelve): the user validates it at
  * `validationUrl`, signed in to OVH. Asked with the application key only, as OVH wants it.

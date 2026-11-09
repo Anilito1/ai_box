@@ -5,7 +5,7 @@ import { remoteOf as originOf } from './repos';
 import { mainRepoPath } from './config';
 import type { Secrets } from './secrets';
 import type { RemoteServerControl, SessionManager } from './sessions';
-import { alwaysOn, askConsumerKey, ovhPower, type PowerControl, type PowerState } from './power';
+import { alwaysOn, askConsumerKey, ovhPower, switchOn, type PowerControl, type PowerState } from './power';
 import { parseRemote, remoteLatency, remoteStatus, sendNtfy } from './remote';
 import { newTopic, realExec, realTty, VpsWizard } from './vps';
 import { execFile } from 'node:child_process';
@@ -114,7 +114,7 @@ export class RemoteServer implements RemoteServerControl {
     const stop = new AbortController();
     const timer = setTimeout(() => stop.abort(), limitMs);
     try {
-      if (wake && (await this.wake()) === 'unreachable') throw new EnvSyncError('unreachable', 'server not answering');
+      if (wake && ['unreachable', 'off'].includes((await this.wake()) ?? '')) throw new EnvSyncError('unreachable', 'server not answering');
       const rep = await syncEnvironment(sshEnvExec(this.r, stop.signal), { repos: personalRepos(this.r, originOf), forbid: [this.r.host, ...this.r.orgs, ...this.r.denied] });
       const held = rep.skipped.map((s) => `${s.path.replace(/^\.claude\//, '')} (${s.why})`).slice(0, 50);
       this.env = { state: 'done', at: Date.now(), sent: rep.sent, removed: rep.removed, held, pluginsFailed: rep.pluginsFailed, reason: '', detail: '' };
@@ -337,32 +337,21 @@ export class RemoteServer implements RemoteServerControl {
     // Always on: nothing to switch, and the request that follows says itself whether the server answers.
     if (this.r.power.kind !== 'ovh') return null;
     if (this.power === 'on' && this.mgr?.remoteBusy()) return null;
-    const c = this.control();
-    const until = Date.now() + WAKE_MS;
-    let asked = false;
-    while (Date.now() < until) {
-      // Asked to start as soon as it is off: a shelve still under way ends first, an API hiccup is asked again.
-      try {
-        this.power = await c.state();
-        if (this.power === 'off' && !asked) {
-          await c.start();
-          asked = true;
-          this.power = 'starting';
-          this.push();
-        }
-      } catch {
-        this.power = 'unknown';
-      }
-      const st = this.power === 'on' ? await remoteStatus(this.r) : null;
-      if (st) {
-        this.power = 'on';
-        this.lastBusy = Date.now();
+    // A shelve still under way ends first; an unshelve OVH drops is asked again while time is left.
+    const r = await switchOn(this.control(), {
+      timeoutMs: WAKE_MS,
+      answer: () => remoteStatus(this.r),
+      seen: (s) => {
+        if (s === this.power) return;
+        this.power = s;
         this.push();
-        return st.signedIn ? null : 'login';
-      }
-      await new Promise((r) => setTimeout(r, 10_000));
-    }
-    return 'unreachable';
+      },
+    });
+    if ('why' in r) return r.why === 'off' ? 'off' : 'unreachable';
+    this.power = 'on';
+    this.lastBusy = Date.now();
+    this.push();
+    return r.answer.signedIn ? null : 'login';
   }
 
   idle(): void {
