@@ -1627,10 +1627,11 @@ export class SessionManager extends EventEmitter {
     const held = typeof remote === 'string' ? null : await this.leaseFor(s, remote);
     // Its scope's tokens (GH_TOKEN…), given in memory: the user's for their repos, the App's for an organisation's.
     if (remote && typeof remote === 'object') {
-      // A server switched off by the hour is switched on first (at once when it already runs).
-      const down = await this.opts.remoteServer?.wake();
-      const secrets = down ? downWhy(down) : await this.remoteSecrets(s);
-      remote = typeof secrets === 'string' ? secrets : { ...remote, secrets };
+      // A worker refused its tokens does not switch the server on; then a server switched off by the hour is switched
+      // on first (at once when it already runs).
+      const secrets = await this.remoteSecrets(s);
+      const down = typeof secrets === 'string' ? null : await this.opts.remoteServer?.wake();
+      remote = typeof secrets === 'string' ? secrets : down ? downWhy(down) : { ...remote, secrets };
     }
     if (this.quitting || s.inbox !== inbox) return;
     if (held) return this.leaseRefused(s, held, firstPrompt);
