@@ -1,3 +1,4 @@
+import { openLocalFile } from './localFiles';
 import './shellPath';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -1027,6 +1028,9 @@ class Hub {
       if (!parsed) throw new Error(t('repo.badAction'));
       return c.repo.act(c.path, parsed);
     });
+    handle('session:open-file', (id, path, action) =>
+      openLocalFile(isStr(id) ? mgr.snapshot().sessions.find((s) => s.id === id)?.cwd : undefined, path, action, shell),
+    );
     on('open-external', (url) => {
       if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
     });

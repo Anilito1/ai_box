@@ -1,5 +1,7 @@
 import DOMPurify from 'dompurify';
-import { marked } from 'marked';
+import { marked, Renderer } from 'marked';
+import { LOCAL_FILE_PREFIX, localFilePath } from '../shared/localFiles';
+import { decorateLocalFiles } from './localFiles';
 import {
   ATTACH_LIMITS,
   base64Bytes,
@@ -29,9 +31,18 @@ import { mascotMark, sessionMascot } from './mascot';
 import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
+const linkRenderer = new Renderer();
+linkRenderer.link = function (token) {
+  let target = token.href;
+  try { target = decodeURIComponent(target); } catch { /* Main rejects malformed paths. */ }
+  const path = localFilePath(target);
+  const href = path === null ? token.href : LOCAL_FILE_PREFIX + encodeURIComponent(path);
+  return `<a href="${href.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}">${this.parser.parseInline(token.tokens)}</a>`;
+};
+
 // Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
 const markdown = (text: string): string =>
-  DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true }), {
+  DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, renderer: linkRenderer }), {
     FORBID_ATTR: ['style', 'class'],
     FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select'],
   });
@@ -190,7 +201,14 @@ export class ChatView {
       if (!a) return;
       e.preventDefault();
       const href = a.getAttribute('href');
-      if (href) this.hub.openExternal(href);
+      if (!href) return;
+      if (href.startsWith(LOCAL_FILE_PREFIX) && this.session) {
+        let path: string;
+        try { path = decodeURIComponent(href.slice(LOCAL_FILE_PREFIX.length)); } catch { return; }
+        void this.hub.openLocalFile(this.session.id, path, e.altKey ? 'reveal' : 'open').then((result) => {
+          if (!result.ok) this.attachError(t(`localFile.${result.error}`), 8000);
+        }).catch(() => this.attachError(t('localFile.failed'), 8000));
+      } else if (/^https?:\/\//i.test(href)) this.hub.openExternal(href);
     });
 
     // Grows with its text through CSS (field-sizing), without measuring on every keystroke.
@@ -964,6 +982,7 @@ export class ChatView {
         }
         if (this.live?.id === item.id) this.live = null;
         body.innerHTML = cachedMarkdown(this.cacheKey(item.id), item.text);
+        decorateLocalFiles(body, this.session?.cwd ?? '', t('localFile.hint'));
         this.addCodeCopy(body);
         el.append(this.actions(item.text));
         return el;

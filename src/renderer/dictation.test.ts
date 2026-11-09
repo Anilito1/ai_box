@@ -91,7 +91,7 @@ before(async () => {
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ onboarded: true, language: 'fr' }));
   const env = { ...process.env, AI_BOX_REBUILT: '1' } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await _electron.launch({ executablePath: load('electron') as unknown as string, args: ['.', `--user-data-dir=${dataDir}`], cwd: root, env, timeout: 60_000 });
+  app = await _electron.launch({ executablePath: load('electron') as unknown as string, args: ['scripts/ui-entry.cjs', `--user-data-dir=${dataDir}`], cwd: root, env, timeout: 60_000 });
   page = await app.firstWindow();
   page.setDefaultTimeout(TIMEOUT_MS);
   await page.waitForSelector('.composer-input', { timeout: 30_000 });

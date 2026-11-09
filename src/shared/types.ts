@@ -826,6 +826,7 @@ export interface HubApi {
   stop(id: string): void;
   resume(id: string): void;
   remove(id: string): void;
+  openLocalFile(id: string, path: string, action: 'open' | 'reveal'): Promise<import('./localFiles').LocalFileResult>;
   openExternal(url: string): void;
   getSettings(): Promise<SettingsView>;
   saveSettings(patch: SettingsPatch): Promise<SettingsView & Result>;

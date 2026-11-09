@@ -1,0 +1,32 @@
+[
+  [
+    "press",
+    "Escape"
+  ],
+  [
+    "send",
+    "hub:items",
+    "[\"master\", [{\"kind\": \"assistant\", \"id\": \"files-demo\", \"live\": false, \"text\": \"[Texte](<read%20me.md>) \\u00b7 [Image](image.png) \\u00b7 [PDF](paper.pdf) \\u00b7 [Vid\\u00e9o](video.mp4) \\u00b7 [Samples](samples)\"}], true]"
+  ],
+  [
+    "count",
+    ".msg-assistant a[href^=\"#ai-box-file=\"]"
+  ],
+  [
+    "eval",
+    "JSON.stringify([...document.querySelectorAll('.msg-assistant a')].map(a=>({label:a.textContent,path:a.title.split('\\n')[0]})))"
+  ],
+  [
+    "mock",
+    "session:open-file",
+    "{\"ok\":false,\"error\":\"missing\"}"
+  ],
+  [
+    "click",
+    ".msg-assistant a"
+  ],
+  [
+    "text",
+    ".attach-note"
+  ]
+]

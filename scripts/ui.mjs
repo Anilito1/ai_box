@@ -93,7 +93,7 @@ if (!opts.data) writeFileSync(join(dataDir, 'config.json'), JSON.stringify({ onb
 const electronPath = require('electron');
 const env = { ...process.env, AI_BOX_REBUILT: '1' };
 delete env.ELECTRON_RUN_AS_NODE;
-const app = await _electron.launch({ executablePath: electronPath, args: ['.', `--user-data-dir=${dataDir}`], cwd: root, env, timeout: 60_000 });
+const app = await _electron.launch({ executablePath: electronPath, args: ['scripts/ui-entry.cjs', `--user-data-dir=${dataDir}`], cwd: root, env, timeout: 60_000 });
 const child = app.process();
 let exitCode = 0;
 const cleanup = async () => {
