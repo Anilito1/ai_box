@@ -7,7 +7,9 @@ dans les réglages et le trousseau du PC.
 1. **Commander** : OVHcloud Public Cloud, instance **d2-8** (4 vCPU / 8 Go, à l'heure), Ubuntu 24.04, Gravelines ou
    Strasbourg. À la création, colle la clé administrateur que montre Ctrl+K › « Serveur distant » (bouton Copier).
 2. **Assistant** : IP, utilisateur `ubuntu`, « Connecter et installer ». Compare l'empreinte avec la console OVH (KVM :
-   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), « Faire confiance ». L'installation tourne seule (10 à 15 min) :
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), « Faire confiance ». Sans console à portée, une instance neuve
+   connectée dans la minute de sa création peut être acceptée telle quelle (« première vue ») : risque d'interception
+   faible, mais choisi. Le journal de démarrage d'OVH ne la donne plus après une mise en veille. L'installation tourne seule (10 à 15 min) :
    pare-feu, utilisateur `aibox` sans sudo, Claude Code, puis les outils des skills (gh, ripgrep, jq, ffmpeg, Python et
    uv, Chromium sans écran, playwright-cli, outils des documents PDF et Office). Un outil qui échoue est signalé sans
    bloquer ; relancer réessaie.

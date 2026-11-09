@@ -69,7 +69,7 @@ let s = await w.run({ host, admin: opt('admin') ?? 'ubuntu', port: Number(opt('p
 if (s.steps.hostkey.state === 'wait') {
   console.log(`FINGERPRINT ${s.fingerprint}`);
   if (opt('trust') !== s.fingerprint) process.exit(3);
-  s = await w.trust();
+  s = await w.trust(s.fingerprint);
 }
 if (watch) clearInterval(watch);
 show(s);

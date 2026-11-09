@@ -20,7 +20,8 @@ failed=()
 lock_conf=/etc/apt/apt.conf.d/90aibox-tools-lock
 echo 'DPkg::Lock::Timeout "600";' >"$lock_conf"
 trap 'rm -f "$lock_conf"' EXIT
-as_aibox() { sudo -iu aibox bash -lc "$1"; }
+# Not `sudo -i`: it hands the command to a login shell that expands its $variables first, empty.
+as_aibox() { sudo -u aibox -H bash -lc "cd ~ && $1"; }
 tool() {
   local name="$1"
   shift
@@ -69,14 +70,16 @@ uv_tool() {
 }
 
 # The document skills (pdf, docx, xlsx, pptx): their command-line tools, and their Python modules from Ubuntu's own
-# packages (pip may not write the system Python, and aibox has no sudo). A module Ubuntu does not package is named.
+# packages (pip may not write the system Python, and aibox has no sudo); one Ubuntu does not package goes in aibox's
+# own folder (pip --user).
 documents() {
   apt-get update -qq && apt-get install -y -qq poppler-utils qpdf pandoc imagemagick tesseract-ocr >/dev/null || return 1
-  local mods=() m
-  for m in defusedxml lxml pypdf pdfplumber pil openpyxl pandas docx pptx reportlab markdown; do
-    if apt-cache show "python3-$m" >/dev/null 2>&1; then mods+=("python3-$m"); else echo "   python3-$m: not packaged by Ubuntu, skipped"; fi
+  local debs=() pips=() m
+  for m in defusedxml lxml pypdf pdfplumber:pdfplumber pil:pillow openpyxl pandas docx:python-docx pptx:python-pptx reportlab markdown; do
+    if apt-cache show "python3-${m%%:*}" >/dev/null 2>&1; then debs+=("python3-${m%%:*}"); else pips+=("${m#*:}"); fi
   done
-  apt-get install -y -qq "${mods[@]}" >/dev/null
+  apt-get install -y -qq "${debs[@]}" >/dev/null || return 1
+  [ ${#pips[@]} -eq 0 ] || as_aibox "python3 -m pip install -q --user --break-system-packages ${pips[*]}"
 }
 
 # Office files to PDF and back (docx, xlsx, pptx skills): LibreOffice without its interface, about 400 MB.

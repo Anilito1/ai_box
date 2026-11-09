@@ -76,7 +76,8 @@ rm -f /home/aibox/.ssh/authorized_keys
 
 step "Claude Code for aibox"
 if [ ! -x /home/aibox/.local/bin/claude ]; then
-  sudo -iu aibox bash -c 'f="$(mktemp)" && curl -fsSL https://claude.ai/install.sh -o "$f" && bash "$f" && rm -f "$f"' >/dev/null
+  # Not `sudo -i`: it hands the command to a login shell that expands its $variables first, empty.
+  sudo -u aibox -H bash -c 'cd ~ && f="$(mktemp)" && curl -fsSL https://claude.ai/install.sh -o "$f" && bash "$f" && rm -f "$f"' >/dev/null
 fi
 sudo -iu aibox /home/aibox/.local/bin/claude --version
 grep -q '.local/bin' /home/aibox/.profile || echo 'export PATH="$HOME/.local/bin:$PATH"' >>/home/aibox/.profile
