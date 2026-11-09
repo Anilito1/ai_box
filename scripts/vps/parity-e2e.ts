@@ -127,7 +127,7 @@ m.send(
     `2. Lis ~/.claude/CLAUDE.md et cite mot pour mot une règle de la section « Regles de code ».`,
     `3. Invoque le skill taste (outil Skill) et cite une de ses règles.`,
     `4. Avec playwright-cli (sans écran), ouvre ${page} et fais une capture dans ${shot} ; note le titre de la page et la taille du fichier.`,
-    `5. Note la sortie de \`hostname\`, \`whoami\` et \`playwright-cli --version\`.`,
+    `5. Note la sortie de \`hostname\`, \`whoami\`, \`playwright-cli --version\` et \`gh auth status\` (compte et type de jeton, jamais le jeton), puis ce que répond \`gh api "orgs/${r.orgs[0] ?? 'github'}/repos?type=private" --jq length\` (une organisation : un jeton de tes repos seulement n'y voit aucun repo privé).`,
     `6. Commite ${file} et ${shot}, pousse la branche sur origin.`,
     `7. Fais ton rapport au maître avec message_master : une ligne par point (2 à 6), avec le dernier commit.`,
   ].join('\n'),
