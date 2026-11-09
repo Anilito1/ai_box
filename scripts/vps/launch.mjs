@@ -19,7 +19,7 @@ import { freemem, homedir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const VERSION = 3;
+const VERSION = 4;
 const HOME = homedir();
 const REPOS = join(HOME, 'repos');
 const CLAUDE = join(HOME, '.local', 'bin', 'claude');
@@ -452,6 +452,11 @@ switch (header?.op) {
     break;
   case 'echo':
     echo(rest);
+    break;
+  case 'env-state':
+  case 'env-apply':
+    // The environment sync (src/main/remote/envSync.ts): writes only under ~/.claude, next to this file and root's too.
+    (await import('./envsync.mjs')).run(header, rest, log);
     break;
   default:
     refuse('unknown op');

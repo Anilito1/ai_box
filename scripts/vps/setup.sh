@@ -19,7 +19,7 @@ ADMIN="${ADMIN:-${SUDO_USER:-}}"
 [ -n "${WORKER_KEY:-}" ] || { echo "WORKER_KEY (public key of the AI Box) is missing" >&2; exit 1; }
 [[ "$WORKER_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/=]+(\ [A-Za-z0-9@._-]+)?$ ]] || { echo "WORKER_KEY is not one ssh-ed25519 public key" >&2; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
-for f in launch.mjs repos.sh; do [ -f "$HERE/$f" ] || { echo "$f must sit next to setup.sh" >&2; exit 1; }; done
+for f in launch.mjs repos.sh envsync.mjs tools.sh; do [ -f "$HERE/$f" ] || { echo "$f must sit next to setup.sh" >&2; exit 1; }; done
 # The admin must keep a way in before SSH is narrowed.
 [ -s "/home/$ADMIN/.ssh/authorized_keys" ] || { echo "/home/$ADMIN/.ssh/authorized_keys is empty: refusing to lock SSH" >&2; exit 1; }
 
@@ -121,6 +121,11 @@ systemctl enable fail2ban >/dev/null
 systemctl restart fail2ban
 sleep 2
 fail2ban-client status sshd | sed -n '1,4p'
+
+step "environment sync and tools"
+# Before the launcher: its environment requests load envsync.mjs. A tool that fails does not stop the setup.
+install -m 644 -o root -g root "$HERE/envsync.mjs" /opt/aibox/envsync.mjs
+bash "$HERE/tools.sh" || echo "tools.sh failed: the server works without the missing tools"
 
 step "launcher"
 # Last: the app sees its version only once everything above went through, so a stopped run is run again.

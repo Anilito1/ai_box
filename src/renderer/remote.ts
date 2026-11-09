@@ -280,6 +280,7 @@ export class RemoteSection {
     max.append(sel);
     box.append(max);
     if (v.wizard.latencyMs) box.append(h('p', 'setup-hint', t('remote.latency', { ms: String(v.wizard.latencyMs) })));
+    box.append(this.envSync(v));
     const phone = this.field(t('remote.ntfy'), t('remote.ntfy.hint'));
     if (v.ntfyUrl) {
       const code = h('div', 'remote-code');
@@ -293,6 +294,21 @@ export class RemoteSection {
     } else phone.append(this.button(t('remote.ntfy.on'), 'btn small', () => this.act(this.hub.remoteSet({ kind: 'ntfy', on: true }))));
     box.append(phone);
     return box;
+  }
+
+  /** This PC's skills, plugins and CLAUDE.md copied to the server: by hand here, and by itself on stepping away. */
+  private envSync(v: RemoteView): HTMLElement {
+    const field = this.field(t('remote.env'), t('remote.env.hint'));
+    const e = v.env;
+    const time = e.at ? new Date(e.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '';
+    if (e.state === 'done') field.append(h('p', 'setup-hint', t('remote.env.done', { time, sent: String(e.sent), removed: String(e.removed), held: String(e.held.length) })));
+    if (e.state === 'done' && e.pluginsFailed.length > 0) field.append(h('p', 'setup-hint', t('remote.env.plugins', { list: e.pluginsFailed.map((p) => p.split('@')[0]).join(', ') })));
+    if (e.state === 'failed') field.append(h('p', 'setup-hint remote-fail', t(e.reason === 'refused' ? 'remote.env.refused' : 'remote.env.failed', { time })));
+    const details = e.state === 'failed' ? e.detail : e.state === 'done' ? e.held.join('\n') : '';
+    if (details) field.append(techDetails(details));
+    const running = e.state === 'running';
+    field.append(this.button(t(running ? 'remote.env.running' : 'remote.env.sync'), 'btn small', () => this.act(this.hub.remoteWizard('syncEnv')), running || !v.enabled));
+    return field;
   }
 
   private power(v: RemoteView): HTMLElement {

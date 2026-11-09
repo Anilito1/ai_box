@@ -99,5 +99,15 @@
     "id": "",
     "org": "",
     "key": false
+  },
+  "env": {
+    "state": "done",
+    "at": 1762700000000,
+    "sent": 12,
+    "removed": 3,
+    "held": ["skills/company-skill (local only)", "skills/unity-mcp (local only)", "skills/synced (local only)"],
+    "pluginsFailed": [],
+    "reason": "",
+    "detail": ""
   }
 }

@@ -1,7 +1,12 @@
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
+import { frontMatterProblem, SERVER_PLUGINS, SETTINGS_KEPT } from '../../../scripts/vps/envsync.mjs';
+import { allowedRepo, scopeOf } from '../../shared/vps';
+import type { RemoteWorkers } from '../../shared/types';
+import { sshArgs, sshProgram } from '../remote';
 
 /**
  * This PC's Claude environment, copied to the remote server's worker user so a remote worker works as a local one:
@@ -15,7 +20,9 @@ import { basename, join } from 'node:path';
  *   use, the PC's visible browser), anything about the company (COMPANY terms), any project not in the remote repos;
  * - CLAUDE.md: a section whose heading names a COMPANY or PC_ONLY term is dropped whole, and so is any paragraph,
  *   list item (with its sub-items) or code block that names one; the rest is kept as written;
- * - settings.json: only the keys of SETTINGS_KEPT; plugins and marketplaces minus the excluded ones;
+ * - settings.json: only the keys of SETTINGS_KEPT, and of the plugins turned on here only those of SERVER_PLUGINS
+ *   (no hooks, no local MCP or language server, none of the company's): the server refuses anything else, since
+ *   hooks, env, helpers or a plugin's hooks would run programs there without the hub's permission prompts;
  * - last, every file is scanned for anything shaped like a secret or an account id (LEAKS) and for the caller's own
  *   terms (the server's address, ids from the settings): a file that has one is not sent at all.
  */
@@ -49,14 +56,11 @@ const LEAKS: Array<[string, RegExp]> = [
 const NEVER = /^(\.env(\..*)?|\.wrangler|\.cloudflare-profiles|\.git|node_modules|\.credentials\.json|credentials(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa)(\.pub)?|\.bucket-.*)$/i;
 /** Skills folders that stay here: account-synced (the server's sign-in has them) or tied to this PC's programs. */
 const SKILLS_LOCAL = /^(synced|.*unity.*|.*blender.*|.*computer-use.*|.*chrome.*)$/i;
-/** Plugins that stay here: the company's, deploy accounts, and MCP servers driving this PC (its visible browser). */
-const PLUGINS_LOCAL = /^(brain|cloudflare|playwright|blender|unity|computer-use|chrome.*|claude-in-chrome)$/i;
-const MARKETPLACES_LOCAL = /coiffissimo|cloudflare/i;
-
-const SETTINGS_KEPT = ['model', 'effortLevel', 'alwaysThinkingEnabled', 'outputStyle', 'language', 'includeCoAuthoredBy', 'enabledPlugins', 'extraKnownMarketplaces'];
 
 const MAX_FILES = 5000;
 const MAX_BYTES = 100 * 1024 * 1024;
+/** The server's limit per file (envsync.mjs): a larger one would make it refuse the whole request. */
+const MAX_FILE = 20 * 1024 * 1024;
 
 export interface EnvFile {
   /** Relative to the home folder, with forward slashes ('.claude/skills/taste/SKILL.md'). */
@@ -173,27 +177,14 @@ function dropEmptyHeadings(lines: string[]): string[] {
   return out;
 }
 
-const pluginName = (id: string) => id.split('@')[0];
-const marketplaceOf = (id: string) => id.split('@')[1] ?? '';
-
-/** The server's settings.json: SETTINGS_KEPT only, plugins and marketplaces of this PC's programs or company out. */
+/** The server's settings.json: SETTINGS_KEPT only, and of the plugins on here those SERVER_PLUGINS allows. */
 export function filterSettings(raw: unknown): Record<string, unknown> {
   const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  for (const k of SETTINGS_KEPT) if (k in s && k !== 'enabledPlugins' && k !== 'extraKnownMarketplaces') out[k] = s[k];
+  for (const k of SETTINGS_KEPT) if (k in s && k !== 'enabledPlugins') out[k] = s[k];
   const plugins: Record<string, boolean> = {};
-  for (const [id, on] of Object.entries((s.enabledPlugins ?? {}) as Record<string, unknown>)) {
-    if (on === true && !PLUGINS_LOCAL.test(pluginName(id)) && !MARKETPLACES_LOCAL.test(marketplaceOf(id))) plugins[id] = true;
-  }
+  for (const [id, on] of Object.entries((s.enabledPlugins ?? {}) as Record<string, unknown>)) if (on === true && SERVER_PLUGINS.includes(id)) plugins[id] = true;
   out.enabledPlugins = plugins;
-  const used = new Set(Object.keys(plugins).map(marketplaceOf));
-  const markets: Record<string, unknown> = {};
-  for (const [name, m] of Object.entries((s.extraKnownMarketplaces ?? {}) as Record<string, { source?: { source?: string } }>)) {
-    // A marketplace in a folder of this PC does not exist on the server: only GitHub, git and URL sources travel.
-    const kind = m?.source?.source;
-    if (used.has(name) && !MARKETPLACES_LOCAL.test(name) && (kind === 'github' || kind === 'git' || kind === 'url')) markets[name] = m;
-  }
-  if (Object.keys(markets).length) out.extraKnownMarketplaces = markets;
   return out;
 }
 
@@ -245,7 +236,7 @@ export function collectEnvironment(src: EnvSource): { files: EnvFile[]; skipped:
     const leak = findLeak(data.toString('latin1'), forbid, own);
     if (leak) return skipped.push({ path, why: leak });
     bytes += data.length;
-    if (bytes > MAX_BYTES || files.length >= MAX_FILES) return skipped.push({ path, why: 'too large' });
+    if (data.length > MAX_FILE || bytes > MAX_BYTES || files.length >= MAX_FILES) return skipped.push({ path, why: 'too large' });
     files.push(file(path, data));
   };
 
@@ -270,7 +261,10 @@ export function collectEnvironment(src: EnvSource): { files: EnvFile[]; skipped:
       // Agents are the user's own writing; skills mostly third-party.
       const own = kind === 'agents';
       const read = found.map(([abs, path]) => [path, readFileSync(abs)] as const);
-      const bad = read.map(([path, data]) => [path, findLeak(data.toString('latin1'), forbid, own)] as const).find(([, leak]) => leak);
+      // Too large for the server, or a front matter with hooks or MCP servers (they would run programs there): the same.
+      const problem = (path: string, data: Buffer) =>
+        data.length > MAX_FILE ? 'too large' : (/.md$/i.test(path) && frontMatterProblem(data.toString('utf8'))) || findLeak(data.toString('latin1'), forbid, own);
+      const bad = read.map(([path, data]) => [path, problem(path, data)] as const).find(([, why]) => why);
       if (bad) skipped.push({ path: rel, why: `${bad[1]} in ${basename(bad[0])}` });
       else for (const [path, data] of read) add(path, data, own);
     }
@@ -329,14 +323,33 @@ export interface EnvSyncReport {
   unchanged: number;
   /** Held back on this PC, and why (company, secret, local only…). Paths, never contents. */
   skipped: EnvSkip[];
+  /** The plugins the server could not install (or removed: they would run programs there), as of its last try. */
+  pluginsFailed: string[];
 }
 
 /** Under launch.mjs's header limit (1 MB), with room: a sync of thousands of files goes in several requests. */
 const BATCH = 1500;
 
+/** A failure of the sync: the server out of reach, or its refusal and why (paths and reasons, never contents). */
+export class EnvSyncError extends Error {
+  constructor(
+    readonly reason: 'unreachable' | 'refused',
+    readonly detail: string,
+  ) {
+    super(`${reason}: ${detail}`);
+  }
+}
+
 function answer(r: Awaited<ReturnType<EnvExec>>, what: string): Record<string, unknown> {
-  if (r.code !== 0) throw new Error(`${what}: ${r.stderr.trim().split('\n').pop() || `exit ${r.code}`}`);
-  return JSON.parse(r.stdout) as Record<string, unknown>;
+  const last = r.stderr.trim().split('\n').pop()?.slice(0, 300) || `exit ${r.code}`;
+  // 2: the launcher or envsync.mjs said no (an older launcher: "unknown op"); anything else: no answer at all.
+  if (r.code === 2) throw new EnvSyncError('refused', `${what}: ${last}`);
+  if (r.code !== 0) throw new EnvSyncError('unreachable', `${what}: ${last}`);
+  try {
+    return JSON.parse(r.stdout) as Record<string, unknown>;
+  } catch {
+    throw new EnvSyncError('refused', `${what}: unreadable answer`);
+  }
 }
 
 /** Brings the server's copy of this PC's environment up to date: only what changed travels, PC → server only. */
@@ -346,7 +359,8 @@ export async function syncEnvironment(exec: EnvExec, src: EnvSource): Promise<En
   const plan = planSync(files, (state.files ?? {}) as Record<string, string>);
   const batches: EnvFile[][] = [];
   for (let i = 0; i < plan.put.length; i += BATCH) batches.push(plan.put.slice(i, i + BATCH));
-  if (!batches.length && plan.del.length) batches.push([]);
+  // Always one request at least: the server also installs then the plugins it still misses.
+  if (!batches.length) batches.push([]);
   let removed = 0;
   for (const [i, put] of batches.entries()) {
     // The removals ride with the first request.
@@ -354,5 +368,55 @@ export async function syncEnvironment(exec: EnvExec, src: EnvSource): Promise<En
     const out = answer(await exec(header, Buffer.concat(put.map((f) => f.data))), 'server write');
     removed += Number(out.removed) || 0;
   }
-  return { sent: plan.put.length, removed, unchanged: files.length - plan.put.length, skipped };
+  const plugins = (state.plugins ?? {}) as { failed?: Array<{ id?: unknown }> };
+  const pluginsFailed = (plugins.failed ?? []).map((f) => String(f?.id ?? '')).filter((id) => /^[w.-]+@[w.-]+$/.test(id));
+  return { sent: plan.put.length, removed, unchanged: files.length - plan.put.length, skipped, pluginsFailed };
+}
+
+/** The checkouts whose memory goes: mapped to a server clone, listed by the user, of no organisation. */
+export function personalRepos(r: RemoteWorkers, originOf: (dir: string) => string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [local, remote] of Object.entries(r.repos)) {
+    let slug: string | null = null;
+    try {
+      slug = allowedRepo(originOf(local), r.allowed, r.denied);
+    } catch {
+      // A checkout gone or without an origin: its memory stays here.
+    }
+    if (slug && scopeOf(slug, r.orgs) === 'personal') out[local] = remote;
+  }
+  return out;
+}
+
+const ENV_TIMEOUT_MS = 5 * 60_000;
+const ENV_ANSWER_MAX = 16 * 1024 * 1024;
+
+/** envsync.mjs over the workers' SSH key, through the launcher: one connection per request. */
+export function sshEnvExec(r: RemoteWorkers, signal?: AbortSignal): EnvExec {
+  return (header, body) =>
+    new Promise((done) => {
+      const child = spawn(sshProgram('ssh'), sshArgs(r), { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...(signal ? { signal } : {}) });
+      const out: Buffer[] = [];
+      let err = '';
+      const timer = setTimeout(() => child.kill(), ENV_TIMEOUT_MS);
+      let size = 0;
+      child.stdout.on('data', (b: Buffer) => {
+        size += b.length;
+        if (size > ENV_ANSWER_MAX) child.kill();
+        else out.push(b);
+      });
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (t: string) => (err = (err + t).slice(-2000)));
+      child.stdin.on('error', () => {});
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        done({ code: null, stdout: '', stderr: e.message });
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        done({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err });
+      });
+      child.stdin.write(`${JSON.stringify(header)}\n`);
+      child.stdin.end(body ?? Buffer.alloc(0));
+    });
 }
