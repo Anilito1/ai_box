@@ -40,6 +40,7 @@ export class CodexClient {
   private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private stderr = '';
   private closed = false;
+  private finished = false;
   /** Set by the adapter before `start()`. */
   onNotification: (method: string, params: Json) => void = () => undefined;
   onRequest: (req: ServerRequest) => Promise<unknown> = () => Promise.reject(new RpcError('unsupported', -32601));
@@ -69,6 +70,12 @@ export class CodexClient {
         this.finish(code);
         resolve();
       });
+      // A process that dies under a write (after a sleep, signed out) breaks the pipe: without a listener it is an uncaught exception.
+      child.stdin?.on('error', (err) => {
+        this.stderr += String(err.message);
+        this.finish(null);
+        resolve();
+      });
     });
     if (child.stdout) createInterface({ input: child.stdout }).on('line', (line) => this.receive(line));
     // A process that never started (no such file) fails the handshake with its own message.
@@ -82,6 +89,8 @@ export class CodexClient {
   }
 
   private finish(code: number | null): void {
+    if (this.finished) return;
+    this.finished = true;
     for (const w of this.waiting.values()) w.reject(new Error(this.stderr.trim().split('\n').pop() || 'codex app-server exited'));
     this.waiting.clear();
     this.onExit({ code, stderr: this.stderr, closed: this.closed });
@@ -89,11 +98,16 @@ export class CodexClient {
 
   private send(message: Json): void {
     if (!this.child?.stdin?.writable) return;
-    this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    try {
+      this.child.stdin.write(`${JSON.stringify(message)}\n`);
+    } catch (err) {
+      this.stderr += String(err instanceof Error ? err.message : err);
+      this.finish(null);
+    }
   }
 
   request<T = Json>(method: string, params: Json = {}): Promise<T> {
-    if (this.closed || !this.child) return Promise.reject(new Error('codex app-server is closed'));
+    if (this.closed || this.finished || !this.child) return Promise.reject(new Error('codex app-server is closed'));
     const id = ++this.nextId;
     return new Promise<T>((resolve, reject) => {
       this.waiting.set(id, { resolve: resolve as (v: unknown) => void, reject });

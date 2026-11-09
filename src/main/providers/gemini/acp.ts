@@ -43,6 +43,7 @@ export class AcpClient {
   private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private stderr = '';
   private closed = false;
+  private finished = false;
   onNotification: (method: string, params: Json) => void = () => undefined;
   onRequest: (req: AcpRequest) => Promise<unknown> = () => Promise.reject(new AcpError('unsupported', -32601));
   onExit: (info: { code: number | null; stderr: string; closed: boolean }) => void = () => undefined;
@@ -66,6 +67,12 @@ export class AcpClient {
         this.finish(code);
         resolve();
       });
+      // A process that dies under a write (after a sleep, signed out) breaks the pipe: without a listener it is an uncaught exception.
+      child.stdin?.on('error', (err) => {
+        this.stderr += String(err.message);
+        this.finish(null);
+        resolve();
+      });
     });
     if (child.stdout) createInterface({ input: child.stdout }).on('line', (line) => this.receive(line));
     return (await Promise.race([
@@ -77,6 +84,8 @@ export class AcpClient {
   }
 
   private finish(code: number | null): void {
+    if (this.finished) return;
+    this.finished = true;
     for (const w of this.waiting.values()) w.reject(new Error(this.stderr.trim().split('\n').pop() || 'gemini exited'));
     this.waiting.clear();
     this.onExit({ code, stderr: this.stderr, closed: this.closed });
@@ -84,11 +93,16 @@ export class AcpClient {
 
   private send(message: Json): void {
     if (!this.child?.stdin?.writable) return;
-    this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+    try {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+    } catch (err) {
+      this.stderr += String(err instanceof Error ? err.message : err);
+      this.finish(null);
+    }
   }
 
   request<T = Json>(method: string, params: Json = {}): Promise<T> {
-    if (this.closed || !this.child) return Promise.reject(new Error('gemini is closed'));
+    if (this.closed || this.finished || !this.child) return Promise.reject(new Error('gemini is closed'));
     const id = ++this.nextId;
     return new Promise<T>((resolve, reject) => {
       this.waiting.set(id, { resolve: resolve as (v: unknown) => void, reject });

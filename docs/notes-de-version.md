@@ -20,6 +20,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Plus de message d’erreur au réveil de l’ordinateur quand un agent OpenAI ou Gemini ne peut pas démarrer.
 - Les mascottes animées demandent nettement moins au processeur, surtout quand l’AI Box est en arrière-plan.
 - Sous Windows, quand un worker s’arrête, les serveurs, navigateurs de test et outils qu’il avait lancés en arrière-plan s’arrêtent avec lui au lieu de continuer à tourner.
 
