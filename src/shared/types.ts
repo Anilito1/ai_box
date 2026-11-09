@@ -969,7 +969,7 @@ export interface HubApi {
   forum(action: ForumAction): Promise<ForumResult>;
   /** The remote server (experimental): its setup, settings and power; "I'm stepping away" and back. */
   remoteState(): Promise<RemoteView>;
-  remoteWizard(action: 'run' | 'retry' | 'trust' | 'forget' | 'code' | 'cancel', arg?: unknown): Promise<RemoteView>;
+  remoteWizard(action: 'run' | 'retry' | 'trust' | 'forget' | 'code' | 'cancel' | 'syncEnv', arg?: unknown): Promise<RemoteView>;
   remoteSet(setting: RemoteSetting): Promise<RemoteView>;
   remoteOvh(o: { project: string; instance: string; appKey: string; appSecret: string; consumerKey?: string }): Promise<RemoteView>;
   remoteOvhConfirm(): Promise<RemoteView>;

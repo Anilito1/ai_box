@@ -96,7 +96,7 @@ function wizard() {
   const home = mkdtempSync(join(tmpdir(), 'hub-vps-'));
   mkdirSync(join(home, '.ssh'));
   const scripts = mkdtempSync(join(tmpdir(), 'hub-vps-scripts-'));
-  for (const f of ['setup.sh', 'launch.mjs', 'repos.sh']) writeFileSync(join(scripts, f), `# ${f}`);
+  for (const f of ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh']) writeFileSync(join(scripts, f), `# ${f}`);
   const fake = fakeServer();
   let saved: RemoteWorkers = parseRemote({ allowed: ['octo/site', 'octo/shop', 'acme-corp/crm'], denied: ['acme-corp'] });
   let token = '';

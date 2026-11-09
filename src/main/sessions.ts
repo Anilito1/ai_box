@@ -364,6 +364,8 @@ export interface RemoteServerControl {
   state(): AwayView['server'];
   /** The tokens of a repo's scope for its worker (GH_TOKEN…), or why it may not run there. */
   secretsFor(slug: string): Promise<Record<string, string> | string>;
+  /** This PC's Claude environment to the server, within limitMs; never throws. */
+  syncEnv?(limitMs?: number): Promise<void>;
 }
 
 /** `notes`: the master's changes that a choice the user made by hand kept from applying. */
@@ -1943,6 +1945,8 @@ export class SessionManager extends EventEmitter {
     const workers = [...this.sessions.values()].filter((s) => s.role === 'worker' && s.inbox && !s.away && !s.remoteRun && (this.isWorking(s) || s.owesReport || s.queued > 0));
     const movable = workers.filter((s) => !this.awayClass(s));
     const down = movable.length > 0 ? await (this.opts.remoteServer?.wake() ?? Promise.resolve(null)) : null;
+    // Workers on the server find this PC's skills, plugins and CLAUDE.md there: at most a minute, then they move without.
+    if (movable.length > 0 && !down) await this.opts.remoteServer?.syncEnv?.(60_000);
     let slots = cfg.max - [...this.sessions.values()].filter((s) => s.remoteRun && (s.inbox || s.remoteRun.state === 'detached')).length;
     const lines = await Promise.all(
       workers.map((s) => {

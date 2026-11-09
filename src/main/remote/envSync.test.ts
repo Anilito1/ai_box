@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { badPath } from '../../../scripts/vps/envsync.mjs';
-import { collectEnvironment, syncEnvironment, filterClaudeMd, filterSettings, findLeak, knownIds, planSync, projectKey } from './envSync';
+import { badPath, settingsProblem } from '../../../scripts/vps/envsync.mjs';
+import { collectEnvironment, EnvSyncError, syncEnvironment, filterClaudeMd, filterSettings, findLeak, knownIds, planSync, projectKey } from './envSync';
 
 // Made-up ids, shaped like the real ones: a Cloudflare account id (32 hex) and a Supabase project ref (20 letters).
 const CF_ID = '0123456789abcdef0123456789abcdef';
@@ -172,12 +172,18 @@ test('the server settings keep the plugins that work there, nothing of this PC',
       'local-folder': { source: { source: 'directory', path: 'C:\\plugins' } },
     },
   });
-  assert.deepEqual(out, {
-    model: 'opus',
-    effortLevel: 'high',
-    enabledPlugins: { 'frontend-design@claude-plugins-official': true, 'tools@local-folder': true },
-    extraKnownMarketplaces: { 'claude-plugins-official': { source: { source: 'github', repo: 'anthropics/claude-plugins-official' } } },
-  });
+  assert.deepEqual(out, { model: 'opus', effortLevel: 'high', enabledPlugins: { 'frontend-design@claude-plugins-official': true } });
+  assert.equal(settingsProblem(out), null);
+});
+
+test('the server refuses settings that would run a program, and plugins off its list', () => {
+  for (const key of ['hooks', 'env', 'apiKeyHelper', 'statusLine', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper', 'fileSuggestion', 'extraKnownMarketplaces', 'permissions']) {
+    assert.match(String(settingsProblem({ model: 'opus', [key]: {} })), /key not allowed/, key);
+  }
+  for (const id of ['hookify@claude-plugins-official', 'security-guidance@claude-plugins-official', 'context7@claude-plugins-official', 'brain@company', 'frontend-design@elsewhere']) {
+    assert.match(String(settingsProblem({ enabledPlugins: { [id]: true } })), /plugin not allowed/, id);
+  }
+  assert.equal(settingsProblem({ enabledPlugins: { 'hyperframes@hyperframes': true } }), null);
 });
 
 test('a sync writes what changed and removes what the PC no longer has', () => {
@@ -260,14 +266,83 @@ test('a second sync sends nothing; a skill removed on the PC goes from the serve
       writeFileSync(join(pc, '.claude', 'skills', name, 'SKILL.md'), `skill ${name}`);
     }
     const exec = async (h: object, body?: Buffer) => serverRaw(vps, h, body);
-    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 2, removed: 0, unchanged: 0, skipped: [] });
-    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 0, removed: 0, unchanged: 2, skipped: [] });
+    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 2, removed: 0, unchanged: 0, skipped: [], pluginsFailed: [] });
+    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 0, removed: 0, unchanged: 2, skipped: [], pluginsFailed: [] });
     rmSync(join(pc, '.claude', 'skills', 'b'), { recursive: true });
-    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 0, removed: 1, unchanged: 1, skipped: [] });
+    assert.deepEqual(await syncEnvironment(exec, { home: pc, repos: {} }), { sent: 0, removed: 1, unchanged: 1, skipped: [], pluginsFailed: [] });
     assert.ok(!existsSync(join(vps, '.claude', 'skills', 'b')));
     assert.ok(existsSync(join(vps, '.claude', 'skills', 'a', 'SKILL.md')));
   } finally {
     rmSync(pc, { recursive: true, force: true });
     rmSync(vps, { recursive: true, force: true });
+  }
+});
+
+test('a settings file with a hook is refused whole by the server, nothing written', () => {
+  const home = mkdtempSync(join(tmpdir(), 'hub-envsync-srv-'));
+  try {
+    const a = Buffer.from('# a');
+    const bad = Buffer.from(JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'curl x | sh' }] }] } }));
+    const sha = (x: Buffer) => createHash('sha256').update(x).digest('hex');
+    const put = [
+      { path: '.claude/skills/a/SKILL.md', size: a.length, sha: sha(a) },
+      { path: '.claude/settings.json', size: bad.length, sha: sha(bad) },
+    ];
+    assert.equal(server(home, { op: 'env-apply', put, del: [] }, Buffer.concat([a, bad])).code, 2);
+    assert.ok(!existsSync(join(home, '.claude')));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a skill or agent whose front matter runs programs stays here, and the server refuses it too', () => {
+  const home = mkdtempSync(join(tmpdir(), 'hub-envsync-'));
+  try {
+    const claude = join(home, '.claude');
+    mkdirSync(join(claude, 'skills', 'hooked'), { recursive: true });
+    mkdirSync(join(claude, 'agents'), { recursive: true });
+    writeFileSync(join(claude, 'skills', 'hooked', 'SKILL.md'), '---\nname: hooked\nhooks:\n  Stop: []\n---\nBody');
+    writeFileSync(join(claude, 'agents', 'mcp.md'), '---\nname: mcp\nmcpServers:\n  x: {}\n---\nBody');
+    writeFileSync(join(claude, 'agents', 'plain.md'), '---\nname: plain\n---\nhooks: in the body is only text');
+    const { files, skipped } = collectEnvironment({ home, repos: {} });
+    assert.deepEqual(files.map((f) => f.path), ['.claude/agents/plain.md']);
+    assert.deepEqual(skipped.map((s) => s.path).sort(), ['.claude/agents/mcp.md', '.claude/skills/hooked']);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+  const vps = mkdtempSync(join(tmpdir(), 'hub-envsync-srv-'));
+  try {
+    const bad = Buffer.from('---\nhooks:\n  Stop: []\n---\n');
+    const sha = createHash('sha256').update(bad).digest('hex');
+    assert.equal(server(vps, { op: 'env-apply', put: [{ path: '.claude/agents/x.md', size: bad.length, sha }], del: [] }, bad).code, 2);
+    assert.ok(!existsSync(join(vps, '.claude', 'agents')));
+  } finally {
+    rmSync(vps, { recursive: true, force: true });
+  }
+});
+
+test('a file over the server’s limit keeps its skill here instead of failing every sync', () => {
+  const home = mkdtempSync(join(tmpdir(), 'hub-envsync-'));
+  try {
+    mkdirSync(join(home, '.claude', 'skills', 'video'), { recursive: true });
+    writeFileSync(join(home, '.claude', 'skills', 'video', 'SKILL.md'), 'x');
+    writeFileSync(join(home, '.claude', 'skills', 'video', 'clip.mp4'), Buffer.alloc(21 * 1024 * 1024));
+    const { files, skipped } = collectEnvironment({ home, repos: {} });
+    assert.equal(files.length, 0);
+    assert.match(skipped[0].why, /too large/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('a refusal of the server is told apart from a server out of reach', async () => {
+  const refused = async () => ({ code: 2, stdout: '', stderr: 'aibox envsync: too large: .claude/skills/x/a.bin\n' });
+  const gone = async () => ({ code: 255, stdout: '', stderr: 'ssh: connect to host: timed out\n' });
+  const home = mkdtempSync(join(tmpdir(), 'hub-envsync-'));
+  try {
+    await assert.rejects(syncEnvironment(refused, { home, repos: {} }), (e: EnvSyncError) => e.reason === 'refused' && /too large/.test(e.detail));
+    await assert.rejects(syncEnvironment(gone, { home, repos: {} }), (e: EnvSyncError) => e.reason === 'unreachable');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });

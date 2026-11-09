@@ -97,7 +97,7 @@ export function realTty(cmd: string, args: string[]): Tty {
 }
 
 const WORKER_PUB = /^ssh-ed25519 [A-Za-z0-9+/=]+( [\w@.-]+)?$/;
-const SCRIPTS = ['setup.sh', 'launch.mjs', 'repos.sh'] as const;
+const SCRIPTS = ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh'] as const;
 const LOG_MAX = 300;
 
 export class VpsWizard {

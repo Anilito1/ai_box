@@ -1,62 +1,55 @@
-# Serveur distant : guide pas à pas (expérimental)
+# Serveur distant : guide (expérimental)
 
-Un clic sur « Je m'absente » et les workers au travail continuent sur ton serveur ; « Je suis de retour » les ramène,
-dossiers à jour. Désactivé, rien ne change : pas d'écran, pas de connexion. Aucune valeur à toi (adresse, identifiants,
-jetons, liste de repos) n'est dans ce repo : tout reste dans les réglages et le trousseau de ton PC.
+« Je m'absente » : les workers au travail continuent sur ton serveur ; « Je suis de retour » les ramène, dossiers à jour.
+Désactivé, rien ne change. Aucune valeur à toi (adresse, identifiants, jetons, repos) n'est dans ce repo : tout reste
+dans les réglages et le trousseau du PC.
 
-## Mise en place (une fois, 20 minutes)
+1. **Commander** : OVHcloud Public Cloud, instance **d2-8** (4 vCPU / 8 Go, à l'heure), Ubuntu 24.04, Gravelines ou
+   Strasbourg. À la création, colle la clé administrateur que montre Ctrl+K › « Serveur distant » (bouton Copier).
+2. **Assistant** : IP, utilisateur `ubuntu`, « Connecter et installer ». Compare l'empreinte avec la console OVH (KVM :
+   `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), « Faire confiance ». L'installation tourne seule (10 à 15 min) :
+   pare-feu, utilisateur `aibox` sans sudo, Claude Code, puis les outils des skills (gh, ripgrep, jq, ffmpeg, Python et
+   uv, Chromium sans écran, playwright-cli). Un outil qui échoue est signalé sans bloquer ; relancer réessaie.
+3. **Login Claude** : « Ouvrir la page de connexion », connecte-toi, colle le code, « Envoyer le code ».
+4. **Jetons** (« Repos et accès ») : repos autorisés (`propriétaire/nom`), propriétaires interdits, organisations. Un
+   jeton GitHub *fine-grained* sur tes repos (Contents, Pull requests, Workflows en écriture, Metadata en lecture) dans
+   « GH_TOKEN ». Il reste dans le trousseau ; le serveur ne le reçoit qu'en mémoire, à chaque lancement.
+5. **Environnement** : « Synchroniser l'environnement » (Réglages › Serveur distant) copie tes skills, tes agents, la
+   bibliothèque design-md, tes plugins, ton CLAUDE.md global et la mémoire de tes repos autorisés. Seuls les fichiers
+   modifiés repartent ; rien ne revient du serveur. « Je m'absente » le fait aussi (une minute au plus, sinon on part
+   sans). « Détails » liste ce qui est resté sur le PC.
+6. **Je m'absente** (ou écran verrouillé / 10 min d'inactivité si tu l'actives) : le serveur démarre, chaque worker
+   pousse sa branche et continue là-bas. PC en veille, le tour en cours va au bout et le téléphone (ntfy) sonne.
+   **Je suis de retour** : chaque worker pousse, revient ici avec ses commits, ton dossier est tiré, le serveur se met
+   en veille (*shelve* : seul le disque est facturé).
+7. **Coût** : 0,04 € HT l'heure allumée + ~0,55 €/mois de disque en veille. 60 h par mois ≈ 3 € ; toujours allumé ≈ 29 €.
+   Le quota de l'abonnement Claude est le même qu'ici : la nuit consomme celui du lendemain.
+8. **Si ça casse** : clé refusée → ajoute la clé admin par la console OVH ; « identité changée » → réinstallé ?
+   « Oublier l'ancienne identité », sinon arrête-toi ; serveur injoignable → les workers restent en pause ici ;
+   synchronisation « n'a pas abouti » → relance une fois le serveur allumé ; jeton expiré → colle-en un neuf,
+   « Revérifier les repos ». Tout arrêter : supprime le jeton, `claude auth logout` sur le serveur (ou l'instance),
+   « Oublier l'accès OVH », décoche « Workers distants activés ».
 
-1. **Commander** : OVHcloud Public Cloud, instance **d2-8** (4 vCPU / 8 Go, à l'heure), Ubuntu 24.04, région Gravelines ou
-   Strasbourg. Un VPS toujours allumé marche aussi (choisis alors « toujours allumé »).
-2. **Clé** : Ctrl+K › « Serveur distant (expérimental) » affiche la clé administrateur de ce PC (bouton Copier) :
-   colle-la comme clé SSH à la création de l'instance.
-3. **Connecter** : adresse IP, utilisateur `ubuntu`, port 22, « Connecter et installer ».
-4. **Empreinte** : compare-la avec la console OVH (KVM) : `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, puis
-   « Faire confiance » (une fenêtre te la redemande). L'installation tourne seule (5 à 10 min) : pare-feu, utilisateur
-   `aibox` sans sudo, Node, `gh`, Claude Code.
-5. **Login Claude** : « Ouvrir la page de connexion », connecte-toi, colle le code affiché, « Envoyer le code ».
-6. **Repos et accès** : liste les repos autorisés (un `propriétaire/nom` par ligne), les propriétaires interdits et tes
-   organisations. Crée un jeton GitHub *fine-grained* (tes repos seulement : Contents, Pull requests, Workflows en
-   écriture, Metadata en lecture, 1 an) et colle-le dans « GH_TOKEN ». Il reste dans le trousseau du PC ; le serveur ne
-   le reçoit qu'en mémoire, à chaque lancement. « Revérifier les repos » : l'étape « Enregistré » passe au vert.
-7. **Téléphone** : « Créer une adresse », abonne-toi dans l'app ntfy, « Envoyer un test ».
-8. **Allumage à l'heure** : sur https://eu.api.ovh.com/createToken/, un jeton limité à l'instance (GET de l'instance,
-   POST start, shelve, unshelve) ; colle project id, instance id et les trois clés dans « Alimentation ». Éteinte, elle
-   est mise en *shelve* (seul le disque est facturé), jamais simplement arrêtée (toujours facturée chez OVH).
-9. **Postes** : rien à régler. Un poste qui pilote Blender, Unity, le navigateur ou plusieurs dossiers reste sur ce PC et
-   se met en pause pendant ton absence ; « Tourne sur » (Réglages › Équipe) ne sert qu'aux exceptions.
+## Ce qui part sur le serveur, ce qui reste
 
-## Au quotidien
+- Jamais : `~/.claude.json` (serveurs MCP du PC), identifiants, `.env`, clés, `.wrangler`, `.cloudflare-profiles`, les
+  skills que ton compte Claude synchronise (le serveur les reçoit par sa propre connexion), tout ce qui pilote le PC
+  (Blender, Unity, navigateur visible, computer use), tout ce qui nomme l'entreprise (skill ou plugin entier), la
+  mémoire d'un repo non autorisé ou d'une organisation.
+- CLAUDE.md : une section dont le titre nomme l'entreprise, Cloudflare, Supabase, Windows ou un programme du PC part
+  entière ; ailleurs, chaque paragraphe, puce (avec ses sous-puces) ou bloc de code qui en nomme un est retiré. Puis
+  tout identifiant que ce fichier donne (comptes, projets) est refusé dans n'importe quel fichier envoyé, et un fichier
+  qui contient quelque chose qui ressemble à un secret ne part pas.
+- Réglages : modèle, effort, langue, style, et parmi tes plugins seulement ceux d'une liste blanche (sans hooks ni
+  serveur MCP : frontend-design, code-review, feature-dev, pr-review-toolkit, claude-md-management, claude-api,
+  document-skills, hyperframes). Ni hooks, ni variables, ni programmes d'aide : le serveur les refuse aussi.
 
-10. **« Je m'absente »** (ou écran verrouillé / 10 min d'inactivité si tu l'actives) : le serveur démarre, chaque worker
-    au travail commite et pousse sa branche, puis continue là-bas à partir d'un brief (mission, dernier rapport, branche,
-    commit). Le maître et le worker le notent dans leur conversation.
-11. Pendant l'absence : les rapports arrivent au maître comme d'habitude tant que l'app est ouverte. PC en veille, le tour
-    en cours continue seul sur le serveur jusqu'à sa fin (ou jusqu'à ce qu'il ait besoin du hub), et le téléphone sonne.
-12. **« Je suis de retour »** : chaque worker distant pousse, revient dans sa conversation d'ici avec la liste des commits
-    et son rapport, ton dossier est mis à jour (pull), et le serveur se met en veille.
+## Organisation : application GitHub (prête, pas activée)
 
-## Si ça casse (chaque cas a son message et sa sortie propre)
-
-13. « Le serveur refuse la clé » : ajoute la clé administrateur depuis la console OVH, relance.
-14. « L'identité du serveur a changé » : réinstallé ? « Oublier l'ancienne identité ». Sinon, arrête-toi là.
-15. Connexion coupée (Wi-Fi, veille) : « connexion coupée » et un bouton Reprendre ; le tour continue seul là-bas.
-    « Tourne encore seul sur le serveur » : attends la notification, puis Reprendre.
-16. Serveur éteint ou injoignable : « Je m'absente » met les workers en pause ici ; ils reprennent au retour.
-17. Branche déjà prise : le message dit qui l'écrit, de quel côté et depuis quand ; ramène (ou ferme) l'autre d'abord.
-18. Au retour, « reste sur le serveur » : son travail n'était pas poussé ; rien n'est rapatrié ni effacé. Reprends-le,
-    « pousse ta branche », puis « Je suis de retour ». « Conflit » : la branche a bougé des deux côtés, le worker
-    réconcilie par rebase. « À relire » : le serveur a touché des fichiers qui lancent des programmes ici (réglages de
-    Claude Code, hooks, CI) : rien n'est tiré sans ton accord.
-19. Jeton révoqué ou expiré : les repos passent « refusé par GitHub » ; colle un nouveau jeton, « Revérifier les repos ».
-20. Tout arrêter : supprime le jeton GitHub, `claude auth logout` sur le serveur (ou supprime l'instance), « Oublier
-    l'accès OVH », puis décoche « Workers distants activés » : l'app redevient exactement comme avant.
-
-## Ce qui marche pareil, ce qui diffère
-
-- Pareil : git, `gh` (PR, releases, `gh api`), npm, builds et tests, Playwright sans écran, rapports au maître.
-- Différent : pas de serveurs MCP du PC (Blender, Unity, navigateur visible) ; les CLI qui veulent un jeton (Supabase,
-  Cloudflare, npm, Vercel) le reçoivent seulement s'il est rangé dans « Repos et accès », par périmètre (perso ou
-  organisation) ; une organisation passe par son application GitHub (jeton d'une heure), jamais par ton jeton perso.
-- Pas encore (phase 2, un service sur le serveur) : reprendre la main sur un tour détaché sans attendre sa fin, un
-  maître qui lance de nouvelles missions PC fermé, et l'extinction du serveur décidée par le serveur lui-même.
+Un repo d'organisation tourne sur le serveur seulement avec le jeton d'une heure d'une application GitHub installée
+sur l'organisation, jamais avec ton jeton perso ; tant qu'elle n'est pas configurée, ses workers restent sur le PC.
+Un **propriétaire** de l'organisation la crée : https://github.com/organizations/Coiffissimo-professional/settings/apps/new
+- Nom : « AI Box workers » ; URL de la page d'accueil : celle du repo de l'AI Box ; Webhook : décoché.
+- Permissions de repo : Contents, Pull requests, Workflows en lecture et écriture ; Metadata en lecture. Rien d'autre.
+- « Only on this account », créer, puis « Generate a private key » (un fichier .pem) et « Install » sur les repos voulus.
+- Dans « Accès de l'organisation » : colle l'App ID et le contenu du .pem. La clé reste dans le trousseau du PC.

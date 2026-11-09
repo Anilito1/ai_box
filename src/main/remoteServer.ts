@@ -11,6 +11,7 @@ import { newTopic, realExec, realTty, VpsWizard } from './vps';
 import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { installationToken } from './githubApp';
+import { EnvSyncError, personalRepos, sshEnvExec, syncEnvironment } from './remote/envSync';
 import { isOwner, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
 import type { AwayView } from '../shared/types';
 
@@ -95,7 +96,35 @@ export class RemoteServer implements RemoteServerControl {
         org: REMOTE_SECRETS.filter((n) => this.o.secrets.has(`remote:org:${n}`)),
       },
       app: { ...this.r.app, key: this.o.secrets.has('githubAppKey') },
+      env: this.env,
     };
+  }
+
+  private env: RemoteView['env'] = { state: 'idle', at: 0, sent: 0, removed: 0, held: [], pluginsFailed: [], reason: '', detail: '' };
+
+  /**
+   * This PC's Claude environment to the server (remote/envSync.ts), within `limitMs`; `wake`: switched on first if
+   * it sleeps (the button; stepping away has just woken it). Never throws: a failure is shown in Settings, and the
+   * caller (stepping away) goes on without it.
+   */
+  async syncEnv(limitMs = 5 * 60_000, wake = false): Promise<void> {
+    if (!this.r.enabled || this.env.state === 'running') return;
+    this.env = { ...this.env, state: 'running' };
+    this.push();
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), limitMs);
+    try {
+      if (wake && (await this.wake()) === 'unreachable') throw new EnvSyncError('unreachable', 'server not answering');
+      const rep = await syncEnvironment(sshEnvExec(this.r, stop.signal), { repos: personalRepos(this.r, originOf), forbid: [this.r.host, ...this.r.orgs, ...this.r.denied] });
+      const held = rep.skipped.map((s) => `${s.path.replace(/^\.claude\//, '')} (${s.why})`).slice(0, 50);
+      this.env = { state: 'done', at: Date.now(), sent: rep.sent, removed: rep.removed, held, pluginsFailed: rep.pluginsFailed, reason: '', detail: '' };
+    } catch (err) {
+      const e = err instanceof EnvSyncError ? err : new EnvSyncError('unreachable', stop.signal.aborted ? 'took too long' : 'no answer');
+      this.env = { ...this.env, state: 'failed', at: Date.now(), reason: e.reason, detail: e.detail };
+    } finally {
+      clearTimeout(timer);
+    }
+    this.push();
   }
 
   private push(): void {
@@ -111,6 +140,8 @@ export class RemoteServer implements RemoteServerControl {
     else if (action === 'forget') void w.forget();
     else if (action === 'code') w.code(arg);
     else if (action === 'cancel') w.cancel();
+    // Switched on first if it sleeps; unreachable, the sync fails and says so.
+    else if (action === 'syncEnv') void this.syncEnv(undefined, true);
     return this.view();
   }
 

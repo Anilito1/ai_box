@@ -8,7 +8,7 @@ export const REMOTE_REPOS = `${REMOTE_HOME}/repos`;
 /** Workers the server runs at once, by default: ~300 MB per idle Claude Code, plus the builds, on 8 GB. */
 export const REMOTE_MAX_DEFAULT = 4;
 /** Version of scripts/vps/launch.mjs this app speaks to; the setup installs it again when the server's differs. */
-export const LAUNCHER_VERSION = 3;
+export const LAUNCHER_VERSION = 4;
 
 /** "owner/name" of a GitHub repo, nothing else (it is written into the server's list and into commands). */
 export const isSlug = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]{1,39}\/[\w.-]{1,100}$/.test(v) && !v.includes('..');
@@ -190,6 +190,20 @@ export interface RemoteView {
   /** The tokens set for each scope (names only, never values). */
   secrets: Record<SecretScope, RemoteSecret[]>;
   app: { id: string; org: string; key: boolean };
+  /** The last sync of this PC's Claude environment to the server: counts and what stayed here (paths, no content). */
+  env: {
+    state: 'idle' | 'running' | 'done' | 'failed';
+    at: number;
+    sent: number;
+    removed: number;
+    /** What stayed on this PC, with why ("skills/x (company)"). */
+    held: string[];
+    /** Plugins the server could not install, or removed because they would run programs there. */
+    pluginsFailed: string[];
+    /** Why the last sync failed: the server out of reach, or its refusal (with its reason in `detail`). */
+    reason: '' | 'unreachable' | 'refused';
+    detail: string;
+  };
 }
 
 export type RemoteSetting =
