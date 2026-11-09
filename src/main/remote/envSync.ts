@@ -369,7 +369,7 @@ export async function syncEnvironment(exec: EnvExec, src: EnvSource): Promise<En
     removed += Number(out.removed) || 0;
   }
   const plugins = (state.plugins ?? {}) as { failed?: Array<{ id?: unknown }> };
-  const pluginsFailed = (plugins.failed ?? []).map((f) => String(f?.id ?? '')).filter((id) => /^[w.-]+@[w.-]+$/.test(id));
+  const pluginsFailed = (plugins.failed ?? []).map((f) => String(f?.id ?? '')).filter((id) => /^[\w.-]+@[\w.-]+$/.test(id));
   return { sent: plan.put.length, removed, unchanged: files.length - plan.put.length, skipped, pluginsFailed };
 }
 

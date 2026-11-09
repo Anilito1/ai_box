@@ -346,3 +346,14 @@ test('a refusal of the server is told apart from a server out of reach', async (
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('the plugins the server could not install are reported by their id', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'hub-envsync-'));
+  try {
+    const failed = [{ id: 'hyperframes@hyperframes', why: 'install' }, { id: 'x; rm -rf /', why: 'install' }];
+    const exec = async (h: object) => ({ code: 0, stdout: JSON.stringify((h as { op: string }).op === 'env-state' ? { files: {}, plugins: { failed } } : { written: 0, removed: 0 }), stderr: '' });
+    assert.deepEqual((await syncEnvironment(exec, { home, repos: {} })).pluginsFailed, ['hyperframes@hyperframes']);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
