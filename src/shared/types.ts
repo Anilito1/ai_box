@@ -1,4 +1,5 @@
 import type { AttachedFile, FileInput } from './attachments';
+import type { RemoteSetting, RemoteView } from './vps';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { DayCost, TurnRecord } from './costs';
 import type { DictationEvent, DictationSettings, DictationSupport } from './dictation';
@@ -102,25 +103,57 @@ export interface TeamRole {
   /** Account its worker runs on (an account id, or "default"); empty = the workers' account. */
   account: string;
   enabled: boolean;
-  /** Where its worker runs: this PC, or the remote server (experimental, `remoteWorkers`). Local tools force 'local'. */
+  /**
+   * Where its worker may run once remote workers are on: `auto` = moves to the server when the user steps away, unless
+   * it drives a program of this PC (then it pauses); `local` = this PC only; `remote` = always on the server.
+   */
   placement: Placement;
 }
 
-export type Placement = 'local' | 'remote';
+export type Placement = 'auto' | 'local' | 'remote';
+
+/** How the remote server is switched on and off: always on, or an OVHcloud Public Cloud instance (shelved when unused). */
+export interface ServerPower {
+  kind: 'always' | 'ovh';
+  endpoint: 'ovh-eu';
+  /** Public Cloud project (service name) and instance ids. */
+  project: string;
+  instance: string;
+  /** Switched off after this many hours without a remote worker. */
+  idleHours: number;
+}
 
 /**
- * The remote server workers may run on (experimental). Set in config.json by hand, never by the renderer: an SSH key
- * whose server side only runs the hub's launcher (scripts/vps/launch.mjs), and the server's clone of each repo.
+ * The remote server workers may run on (experimental). Written by the main process only (Settings › Remote server sets
+ * it up), never by a renderer patch: an SSH key whose server side only runs the hub's launcher
+ * (scripts/vps/launch.mjs), and the server's clone of each repo. Off: nothing of it runs.
  */
 export interface RemoteWorkers {
   enabled: boolean;
   host: string;
+  /** The workers' account on the server (no sudo), and the administrator's (sudo, setup only). */
   user: string;
+  admin: string;
   port: number;
-  /** Private key file on this PC. */
+  /** Private key file of the workers on this PC, and the server's key recorded at setup. */
   key: string;
+  knownHosts: string;
   /** Local checkout (a post's first folder) → the same repo's clone on the server. */
   repos: Record<string, string>;
+  /** The repos ("owner/name") the server may hold, and the owners it never may: the user's lists, never in the code. */
+  allowed: string[];
+  denied: string[];
+  /** Owners whose repos are an organisation's: their workers get the GitHub App's token, never the user's. */
+  orgs: string[];
+  /** The GitHub App installed on an organisation (its private key is in the keychain). */
+  app: { id: string; org: string };
+  /** Remote workers at once, at most. */
+  max: number;
+  /** ntfy topic for the phone; empty = no notification. */
+  ntfy: string;
+  /** Steps away by itself when the screen locks or the PC stays idle while workers are busy. */
+  autoAway: boolean;
+  power: ServerPower;
 }
 
 /**
@@ -327,6 +360,27 @@ export interface SessionView {
   ultracode: boolean;
   /** What its account's plan allows of Ultracode (see shared/ultracode.ts). */
   ultracodeAccess: UltracodeAccess;
+  /** Remote workers on only: where it works while the user is away, or that it waits for them. */
+  remote?: RemoteBadge;
+}
+
+/**
+ * `moving`: saving its work before it moves (or comes back); `server`: its process runs there; `detached`: the link is
+ * gone and its turn may go on there alone; `paused`: a post of this PC, stopped until the user is back.
+ */
+export interface RemoteBadge {
+  state: 'moving' | 'server' | 'detached' | 'done' | 'paused';
+  branch: string;
+}
+
+/** "I'm stepping away", as the window shows it; absent while remote workers are off. */
+export interface AwayView {
+  /** null: the user is here. */
+  phase: 'leaving' | 'away' | 'returning' | null;
+  since: number;
+  auto: boolean;
+  /** The server, as its power control last said: off, starting, ready, busy; '' when it is always on. */
+  server: 'off' | 'starting' | 'ready' | 'busy' | 'stopping' | 'unknown' | '';
 }
 
 /** One-off happenings of a session, sent apart from the snapshot (which only carries levels) so none is lost. */
@@ -528,6 +582,8 @@ export interface HubSnapshot {
   accounts: AccountBadge[];
   /** The providers, connected or not, with the models of each. */
   providers: ProviderBadge[];
+  /** Remote workers on only. */
+  away?: AwayView;
 }
 
 /** What the composer and the post editor show of a provider. */
@@ -643,8 +699,8 @@ export type ChatItem = (
       /** A short sentence for the user. */
       text: string;
       tone: 'info' | 'error';
-      /** A button that opens Settings › Claude. */
-      action?: 'accounts-settings';
+      /** A button that opens Settings › Claude, or resumes the session (its remote link was cut). */
+      action?: 'accounts-settings' | 'resume';
       /** The raw message behind an error, shown folded under "Details". */
       detail?: string;
     }
@@ -911,6 +967,19 @@ export interface HubApi {
   agentFiles(): Promise<AgentFile[]>;
   /** The ideas forum: every call answers with the forum's state, fresh or from the cache. */
   forum(action: ForumAction): Promise<ForumResult>;
+  /** The remote server (experimental): its setup, settings and power; "I'm stepping away" and back. */
+  remoteState(): Promise<RemoteView>;
+  remoteWizard(action: 'run' | 'retry' | 'trust' | 'forget' | 'code' | 'cancel', arg?: unknown): Promise<RemoteView>;
+  remoteSet(setting: RemoteSetting): Promise<RemoteView>;
+  remoteOvh(o: { project: string; instance: string; appKey: string; appSecret: string; consumerKey?: string }): Promise<RemoteView>;
+  remoteOvhConfirm(): Promise<RemoteView>;
+  remoteSecret(o: { scope: 'personal' | 'org'; name: string; value: string | null }): Promise<RemoteView>;
+  remoteApp(o: { id: string; org: string; key: string }): Promise<RemoteView>;
+  remoteOvhForget(): Promise<RemoteView>;
+  remoteTestNtfy(): Promise<boolean>;
+  onRemote(cb: (view: RemoteView) => void): void;
+  awayLeave(): void;
+  awayBack(): void;
   /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
   capabilities(): Promise<Capabilities>;
   /** Asks Claude Code for each server's state (some seconds). */

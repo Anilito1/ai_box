@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Expérimental : un serveur distant où tes workers continuent pendant ton absence, avec « Je m’absente » et « Je suis de retour » ; il se configure depuis la palette de commandes (Serveur distant).
 - Les fichiers et dossiers liés dans les réponses finales s’ouvrent localement, avec un contrôle du périmètre et un message s’ils sont indisponibles.
 - Chaque sujet peut garder une mémoire courte pour reprendre le travail sans emporter toute la conversation.
 - Un forum d’idées, ouvert par le bouton « Idées » : chacun peut proposer une idée, dire ce qu’il aime ou non, signaler un problème et soutenir les messages des autres d’un +1 ; les brouillons sont gardés sur l’ordinateur.

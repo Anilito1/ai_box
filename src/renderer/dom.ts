@@ -9,7 +9,8 @@ export const failed = (s: SessionView) => s.status === 'exited' && s.error !== '
 /** A permanent worker with nothing to do: closed on purpose, a message wakes it. */
 export const asleep = (s: SessionView) => s.post !== null && s.status === 'exited' && s.error === '';
 /** The state's word, with "stopped on an error" for a failed session and "asleep" for a resting permanent one. */
-export const statusLabel = (s: SessionView) => (failed(s) ? t('status.failed') : asleep(s) ? t('status.asleep') : t(`status.${s.status}`));
+export const statusLabel = (s: SessionView) =>
+  (failed(s) ? t('status.failed') : asleep(s) ? t('status.asleep') : t(`status.${s.status}`)) + (s.remote ? ` · ${t(`remote.badge.${s.remote.state}`)}` : '');
 /** Class of its status dot. */
 export const statusDot = (s: SessionView) => `dot s-${failed(s) ? 'failed' : s.status}`;
 

@@ -1017,6 +1017,12 @@ export class ChatView {
           open.addEventListener('click', () => window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' })));
           el.append(open);
         }
+        if (item.action === 'resume') {
+          const id = this.session?.id ?? '';
+          const resume = h('button', 'btn small notice-action', t('notice.resume'));
+          resume.addEventListener('click', () => id && this.hub.resume(id));
+          el.append(resume);
+        }
         if (item.detail) el.append(techDetails(item.detail));
         return el;
       }

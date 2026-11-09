@@ -7315,3 +7315,77 @@ input[type='radio']:focus-visible {
   font-size: var(--fs-xl);
   font-weight: 600;
 }
+
+/* Settings › Remote server (experimental) and the "I'm stepping away" button */
+.remote-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 0 18px;
+}
+.remote-title {
+  margin: 6px 0 2px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.remote-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.remote-target .setup-input:nth-child(2) {
+  max-width: 120px;
+}
+.remote-target .setup-input:nth-child(3) {
+  max-width: 70px;
+}
+.remote-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.remote-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+}
+.remote-step.ok,
+.remote-step.run,
+.remote-step.wait {
+  color: var(--text);
+}
+.remote-step.fail {
+  color: var(--danger);
+}
+.remote-step-detail {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.remote-key-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.remote-ovh {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+  width: 100%;
+}
+.ph-away.on {
+  color: var(--accent);
+}
+/* Remote workers off: no button at all (.ph-settings would show it). */
+.ph-away[hidden] {
+  display: none;
+}

@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { applyPatch, loadConfig, prepareRole } from './config';
 import { forwardedEnv, parseJsonl, parseRemote, remoteCwdOf, sshArgs } from './remote';
 
-const server = { enabled: true, host: '203.0.113.7', user: 'aibox', port: 22, key: 'C:\\Users\\me\\.ssh\\aibox_worker', repos: { 'C:\\repos\\site': '/home/aibox/repos/site' } };
+const server = { enabled: true, host: '203.0.113.7', user: 'aibox', port: 22, key: 'C:\\Users\\me\\.ssh\\aibox_worker', knownHosts: 'C:\\Users\\me\\.ssh\\aibox_known_hosts', repos: { 'C:\\repos\\site': '/home/aibox/repos/site' } };
 
 test('remote workers are off unless the settings name a server and a key', () => {
   assert.equal(parseRemote(undefined).enabled, false);
@@ -15,6 +15,13 @@ test('remote workers are off unless the settings name a server and a key', () =>
   assert.equal(parseRemote(server).enabled, true);
   assert.equal(parseRemote({ ...server, user: 'root;x' }).user, 'aibox');
   assert.equal(parseRemote({ ...server, port: 70000 }).port, 22);
+});
+
+test('settings a hand edit broke fall back to safe values: off, four workers, no phone, always-on power', () => {
+  const r = parseRemote({ ...server, max: 99, ntfy: 'public', autoAway: 'yes', admin: 'root', power: { kind: 'ovh', project: '../x', instance: 'y' } });
+  assert.deepEqual([r.max, r.ntfy, r.autoAway, r.admin, r.power.kind], [4, '', false, 'ubuntu', 'always']);
+  // A clone outside the workers' repos folder is dropped.
+  assert.deepEqual(parseRemote({ ...server, repos: { 'C:\\x': '/root/x', 'C:\\y': '/home/aibox/.ssh/x' } }).repos, {});
 });
 
 test("only the listed checkouts run on the server, in a clone given by an absolute path that stays where it is", () => {
@@ -44,6 +51,10 @@ test("the server gets the SDK's own variables, never this PC's paths, keys or ac
 
 test('ssh never asks, never trusts an unknown server and notices a dead connection', () => {
   const args = sshArgs(parseRemote(server));
+  assert.ok(args.includes(`UserKnownHostsFile=${server.knownHosts}`));
+  // None of the user's ~/.ssh/config, no agent, no forwarding.
+  assert.deepEqual(args.slice(args.indexOf('-F'), args.indexOf('-F') + 2), ['-F', 'none']);
+  for (const o of ['ForwardAgent=no', 'ClearAllForwardings=yes', 'PermitLocalCommand=no']) assert.ok(args.includes(o), o);
   const opts = args.filter((_, i) => args[i - 1] === '-o');
   for (const o of ['BatchMode=yes', 'StrictHostKeyChecking=yes', 'IdentitiesOnly=yes', 'ServerAliveInterval=15']) assert.ok(opts.includes(o), o);
   assert.equal(args.at(-1), 'aibox@203.0.113.7');
@@ -77,7 +88,9 @@ test('a post that drives a program of this PC cannot be saved as remote, any oth
   assert.deepEqual(prepareRole(cfg, role('blender-3d', site, 'remote')), { error: { field: 'placement', problem: 'localTool' } });
   const ok = prepareRole(cfg, role('site', site, 'remote'));
   assert.ok('role' in ok && ok.role.placement === 'remote' && ok.role.folders[0] === resolve(site));
-  // Local is the default, and always allowed.
+  // Auto is the default (it moves only when the user steps away, unless it drives a program of this PC), always allowed.
   const plain = prepareRole(cfg, { name: 'jeux', description: 'x', instructions: '', folders: [unity] });
-  assert.ok('role' in plain && plain.role.placement === 'local');
+  assert.ok('role' in plain && plain.role.placement === 'auto');
+  const here = prepareRole(cfg, role('jeux', unity, 'local'));
+  assert.ok('role' in here && here.role.placement === 'local');
 });

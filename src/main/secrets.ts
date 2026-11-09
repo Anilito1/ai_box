@@ -4,11 +4,13 @@ import { safeStorage } from 'electron';
 
 /**
  * `account:<id>`: the key of an extra account (an Anthropic API key, an OpenAI key). `forumToken`: this install's
- * identity on the ideas forum; `forumAdminKey`: the moderators' key, when pasted.
+ * identity on the ideas forum; `forumAdminKey`: the moderators' key, when pasted. `ovh*`: the keys that switch the
+ * remote server on and off (OVHcloud API, limited to its instance). `remote:<scope>:<NAME>`: tokens a remote worker gets
+ * in memory (GH_TOKEN…), by scope; `githubAppKey`: the private key of the organisation's GitHub App.
  */
-export type SecretName = 'anthropicApiKey' | 'githubToken' | 'forumToken' | 'forumAdminKey' | `account:${string}`;
-const NAMES = ['anthropicApiKey', 'githubToken', 'forumToken', 'forumAdminKey'];
-const isName = (name: string): name is SecretName => NAMES.includes(name) || /^account:a-[a-z0-9]{8}$/.test(name);
+export type SecretName = 'anthropicApiKey' | 'githubToken' | 'forumToken' | 'forumAdminKey' | 'ovhAppKey' | 'ovhAppSecret' | 'ovhConsumerKey' | 'githubAppKey' | `account:${string}` | `remote:${'personal' | 'org'}:${string}`;
+const NAMES = ['anthropicApiKey', 'githubToken', 'forumToken', 'forumAdminKey', 'ovhAppKey', 'ovhAppSecret', 'ovhConsumerKey', 'githubAppKey'];
+const isName = (name: string): name is SecretName => NAMES.includes(name) || /^account:a-[a-z0-9]{8}$/.test(name) || /^remote:(personal|org):[A-Z][A-Z0-9_]{1,40}$/.test(name);
 
 /**
  * Secrets encrypted with the OS keychain (DPAPI, Keychain, libsecret/kwallet) through Electron's safeStorage, in

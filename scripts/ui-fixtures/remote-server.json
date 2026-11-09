@@ -1,0 +1,103 @@
+{
+  "wizard": {
+    "target": {
+      "host": "203.0.113.7",
+      "admin": "ubuntu",
+      "port": 22
+    },
+    "steps": {
+      "local": {
+        "state": "ok",
+        "detail": ""
+      },
+      "hostkey": {
+        "state": "ok",
+        "detail": ""
+      },
+      "admin": {
+        "state": "ok",
+        "detail": ""
+      },
+      "setup": {
+        "state": "ok",
+        "detail": ""
+      },
+      "worker": {
+        "state": "ok",
+        "detail": ""
+      },
+      "login": {
+        "state": "ok",
+        "detail": ""
+      },
+      "repos": {
+        "state": "wait",
+        "detail": "refused"
+      },
+      "save": {
+        "state": "todo",
+        "detail": ""
+      }
+    },
+    "adminKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample aibox-admin",
+    "fingerprint": "SHA256:ExampleExampleExampleExampleExampleExample",
+    "loginUrl": "",
+    "repos": [
+      {
+        "slug": "octo/site",
+        "ready": true
+      },
+      {
+        "slug": "octo/shop",
+        "ready": false
+      }
+    ],
+    "claude": "2.1.319 (Claude Code)",
+    "latencyMs": 80,
+    "memoryMb": {
+      "total": 7751,
+      "available": 7100
+    },
+    "log": [
+      "== packages",
+      "== done"
+    ],
+    "running": false
+  },
+  "enabled": true,
+  "ntfyUrl": "https://ntfy.sh/aibox-exampleexampleexample1",
+  "autoAway": false,
+  "max": 4,
+  "power": {
+    "kind": "always",
+    "project": "",
+    "instance": "",
+    "idleHours": 2,
+    "keys": false,
+    "pending": false
+  },
+  "server": "",
+  "lists": {
+    "allowed": [
+      "octo/site",
+      "octo/shop"
+    ],
+    "denied": [
+      "acme-corp"
+    ],
+    "orgs": [
+      "acme-corp"
+    ]
+  },
+  "secrets": {
+    "personal": [
+      "GH_TOKEN"
+    ],
+    "org": []
+  },
+  "app": {
+    "id": "",
+    "org": "",
+    "key": false
+  }
+}

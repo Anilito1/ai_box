@@ -135,7 +135,7 @@ export const claudeAdapter: ProviderAdapter = {
     const options: Options = {
       // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
       cwd: spec.remote?.cwd ?? spec.cwd,
-      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd) } : {}),
+      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, { onExit: spec.remote.onExit, notify: spec.remote.notify, secrets: spec.remote.secrets }) } : {}),
       ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
       ...(spec.model ? { model: spec.model } : {}),
