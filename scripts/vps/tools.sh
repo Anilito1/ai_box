@@ -8,7 +8,8 @@
 # the document skills' tools (poppler, qpdf, pandoc, ImageMagick, Tesseract, their Python modules, LibreOffice headless).
 # The plugins are installed by envsync.mjs, from its own list, when the environment is synced.
 # Not installed, on purpose: Blender, Unity, a visible browser or a desktop, computer use (they drive the PC), deploy
-# tools and their accounts (deploys stay on the PC), whisper.cpp and its models (large; the skills say what is missing).
+# tools and their accounts (deploys stay on the PC), whisper.cpp and its models (large; the skills say what is missing),
+# Docker (HyperFrames can render without it; its group is as good as root).
 set -uo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }

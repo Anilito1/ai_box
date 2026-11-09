@@ -51,6 +51,7 @@ dans les réglages et le trousseau du PC.
 
 Le test `scripts/vps/parity-e2e.ts` le vérifie de bout en bout : synchro, puis un worker distant lit le CLAUDE.md,
 utilise le skill taste, fait une capture avec playwright-cli, pousse un fichier de preuve et fait son rapport.
+Mesuré le 2026-11-09 sur une d2-8 : 56 s pour le tout, mémoire utilisée du serveur de 0,7 à 1,4 Go sur 7,7 Go.
 
 | Domaine | Sur le serveur | Pourquoi |
 |---|---|---|
@@ -61,15 +62,16 @@ utilise le skill taste, fait une capture avec playwright-cli, pousse un fichier 
 | Outils du hub (rapport au maître, sujets, questions) | identique | ils passent par la connexion SSH, comme ici |
 | CLAUDE.md global | différent | sans les parties PC et entreprise (Windows, Cloudflare, Supabase, comptes), avec une note « version serveur » |
 | Plugins | différent | seulement la liste blanche ci-dessus ; hookify, LSP TypeScript, Cloudflare, Supabase et brain restent ici (hooks, programme ou serveur MCP) |
-| Navigateur | différent | Chromium sans écran : captures et tests oui, fenêtre visible non |
+| Navigateur | différent | Chromium sans écran : captures et tests oui, fenêtre visible non ; WebGL en rendu logiciel, pas de WebGPU (une 3D qui l'exige ne s'affiche pas) |
 | Système | différent | Linux, utilisateur sans sudo : un worker n'installe rien avec apt (pip et uv dans son dossier) |
-| Outils en ligne de commande | identique | git, gh, ripgrep, jq, Python, Node, ffmpeg, playwright-cli, poppler, qpdf, pandoc, ImageMagick, Tesseract, LibreOffice sans interface |
+| Outils en ligne de commande | identique | git, gh, ripgrep, jq, Python et ses modules des documents, Node, ffmpeg, uv, playwright-cli, poppler, qpdf, pandoc, Tesseract, LibreOffice sans interface ; ImageMagick 6 (`convert`, pas `magick`) |
+| Connecteurs de ton compte claude.ai | différent | ils arrivent avec la connexion Claude du serveur, sans être authentifiés ; ne les authentifie pas là-bas |
 | Serveurs MCP du PC (Playwright MCP, Blender, MasterTools…) | exclu | `~/.claude.json` ne part jamais ; playwright-cli remplace le Playwright MCP |
 | Blender, Unity, computer use, navigateur visible | exclu | ils pilotent ce PC |
 | Déploiements (wrangler, CLI Supabase) et leurs comptes | exclu | les déploiements restent sur le PC |
 | Hooks, variables, programmes d'aide de tes réglages | exclu | ils lanceraient des programmes là-bas sans tes demandes de permission |
 | Jetons | différent | seul GH_TOKEN, en mémoire, à chaque lancement ; `.env`, clés et profils Cloudflare jamais |
-| Whisper et ses modèles | exclu | lourds ; les skills disent ce qui manque |
+| Whisper et ses modèles, Docker | exclu | lourds, ou un accès équivalent à root ; les skills disent ce qui manque |
 
 ## Organisation : application GitHub (prête, pas activée)
 
