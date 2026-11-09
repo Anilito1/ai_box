@@ -20,6 +20,8 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - Serveur distant : PC éteint, les workers continuent : ils codent, testent, envoient leur travail sur GitHub et écrivent au maître ; ces messages l’attendent sur le serveur et ton téléphone peut te prévenir.
 - Serveur distant : « Je suis de retour » rallume le serveur s’il dort, transmet au maître ce qui a été écrit pendant ton absence, met tes dossiers à jour, puis ramène les workers ici ou les laisse finir là-bas, au choix.
 - Serveur distant : ce qui pilote ton PC (Blender, Unity, le navigateur que tu vois) n’y part pas : ces workers attendent ton retour. Le maître reste sur ton PC, donc rien de nouveau ne démarre pendant ton absence.
+- Serveur distant : si le serveur redémarre pendant le travail d’un worker, sa mission est marquée interrompue, ton téléphone est prévenu, et « Reprendre » la relance à ton retour.
+- Serveur distant : un même serveur ne fait tourner qu’un seul accès GitHub à la fois (tes repos, ou une organisation), car ses workers peuvent voir les accès les uns des autres.
 - Serveur distant : environ 3 € par mois s’il se met en veille quand il ne sert pas (il peut s’éteindre tout seul, PC éteint), jusqu’à 20 € s’il reste allumé ; le réveiller prend environ 10 minutes.
 
 ## 2026-11-09

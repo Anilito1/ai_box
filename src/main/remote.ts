@@ -154,6 +154,7 @@ export interface RemoteNotify {
   blocked: string;
   cut: string;
   timeout: string;
+  interrupted: string;
 }
 
 /** What the runner answers the worker while the hub is away, in the user's language. */

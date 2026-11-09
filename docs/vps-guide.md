@@ -77,10 +77,21 @@ Mesuré le 2026-11-09 sur une d2-8 (`scripts/vps/night-e2e.ts`, worker réel sur
 « Je suis de retour » en 19 s. Relais : 54 à 69 Mo ; un Claude Code : environ 250 Mo. `scripts/vps/runner-e2e.ts` refait
 le cœur du protocole en une minute (le hub part en plein tour, un rapport est écrit pendant son absence, il revient).
 
-Limites connues : un message au maître est livré **au moins** une fois (coupure juste après son envoi : il peut arriver
-deux fois) ; un tour coupé par un redémarrage du serveur ne reprend pas seul (demande-lui de continuer) ; GH_TOKEN reste
-dans la mémoire de la session tant qu'elle tourne, et un worker peut lire celui d'un autre worker du même serveur
-(même utilisateur Unix : un serveur par niveau de confiance) ; l'adresse ntfy est dans les réglages du PC.
+Doublons : chaque message au maître, au chef ou à un pair porte l'identifiant de l'appel d'outil que lui donne Claude
+Code ; le hub garde les derniers livrés et ne livre jamais deux fois le même, même rejoué après une coupure.
+
+Tour coupé par un arrêt ou un redémarrage du serveur : le relais l'écrit sur disque à chaque changement d'activité ;
+au redémarrage il marque la session « interrompue » et prévient le téléphone. À la reconnexion, la conversation le dit,
+le maître aussi, et « Reprendre » relance le worker avec sa mission et son dernier message ; « Les laisser finir sur le
+serveur » le relance aussitôt.
+
+Jetons : les workers d'un serveur tournent sous le même utilisateur Unix ; chacun pourrait lire l'environnement des
+autres (`/proc/<pid>/environ`) ou piéger leurs dossiers. Un fichier d'environnement à 0600 ou un assistant qui ne répond
+qu'à un PID ne changeraient rien sous un même utilisateur. Ce qui est garanti : **un serveur ne porte qu'un accès GitHub
+à la fois** (tes repos, ou une organisation) ; l'app refuse d'y lancer un worker d'un autre accès tant qu'un worker y
+tourne. Les jetons qu'un worker pourrait lire chez un autre sont donc les siens. Une isolation par worker demanderait un
+utilisateur Unix par worker (phase 3). L'adresse ntfy est gardée sur le serveur (`~aibox/.aibox`, 700) pour prévenir
+le téléphone après un redémarrage, comme dans les réglages du PC.
 
 ## Garde-fous
 
@@ -107,8 +118,9 @@ dans la mémoire de la session tant qu'elle tourne, et un worker peut lire celui
 |---|---|---|
 | Wi-Fi coupé, PC en veille | « La connexion au serveur a été coupée : le worker continue là-bas » | Le hub se reconnecte seul (20 s, puis toutes les 2 min) et reçoit ce qu'il a manqué. |
 | AI Box fermée, PC éteint | rien | Les workers partis continuent ; leurs messages au maître attendent sur le serveur. |
-| Le relais redémarre (mise à jour, plantage) | coupure brève | systemd le relance ; les sessions repartent à la reconnexion, depuis leur conversation. Un tour coupé en plein milieu reste interrompu : redemande-lui de continuer. |
-| Serveur redémarré ou mis en veille | « Serveur en veille » | Les tours en cours sont interrompus proprement ; au retour, chaque session repart de sa conversation. |
+| Le relais redémarre (mise à jour, plantage) | coupure brève | systemd le relance ; les sessions repartent à la reconnexion, depuis leur conversation. Un tour coupé est marqué interrompu : « Reprendre » le relance. |
+| Serveur redémarré ou mis en veille | « Serveur en veille », puis « mission interrompue » | Les tours en cours sont interrompus proprement et marqués ; le téléphone est prévenu ; au retour, « Reprendre » relance chaque worker coupé. |
+| Un worker d'un autre accès GitHub | « un worker d'un autre accès GitHub tourne déjà sur le serveur » | Il reste en pause ici jusqu'à ce que le serveur soit libre de l'autre accès. |
 | Plus de place sur le serveur | « le serveur tient déjà N workers » | Le worker reste en pause ici. |
 | Une permission attend pendant l'absence | téléphone : « attend une réponse » | Elle t'est posée à la reconnexion. |
 | Serveur injoignable au retour | « le serveur ne répond pas ; il reste là-bas » | Rien n'est perdu ; réessaie « Je suis de retour » une fois le serveur rallumé. |

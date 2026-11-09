@@ -146,8 +146,10 @@ function notify(s, kind) {
     .catch(() => log(`notify failed ${kind} ${short(s.id)}`));
 }
 
+// `busy`: at work when last saved, so that a server stopped without warning still knows which turn it cut.
+// `notify`: the phone's address and the hub's fixed sentences, kept to tell the phone after a restart, alone.
 function saveMeta(s) {
-  writeJson(join(dirOf(s.id), 'meta.json'), { id: s.id, cwd: s.cwd, createdAt: s.createdAt, endedAt: s.endedAt, reason: s.reason, texts: s.texts });
+  writeJson(join(dirOf(s.id), 'meta.json'), { id: s.id, cwd: s.cwd, createdAt: s.createdAt, endedAt: s.endedAt, reason: s.reason, texts: s.texts, notify: s.notify, busy: s.busy, interrupted: s.interrupted, cutNotified: s.cutNotified });
 }
 
 function sessionOf(id, cwd) {
@@ -163,7 +165,11 @@ function sessionOf(id, cwd) {
     endedAt: meta.endedAt ?? 0,
     reason: meta.reason ?? '',
     texts: meta.texts && typeof meta.texts === 'object' ? meta.texts : null,
-    notify: null,
+    notify: meta.notify && typeof meta.notify === 'object' ? meta.notify : null,
+    busy: meta.busy === true,
+    /** Its turn was cut by a stop or a restart of the server: the hub offers to take it up again. */
+    interrupted: meta.interrupted === true,
+    cutNotified: meta.cutNotified === true,
     notifiedAt: {},
     child: null,
     sock: null,
@@ -188,6 +194,17 @@ function sessionOf(id, cwd) {
     notify: (kind) => notify(s, kind),
     texts: () => ({ ...DEFAULT_TEXTS, ...(s.texts ?? {}) }),
     newId: () => randomUUID(),
+    // A new turn asked by the hub: the cut one is taken up, or let go.
+    onUser: () => {
+      if (!s.interrupted) return;
+      s.interrupted = false;
+      saveMeta(s);
+    },
+    onBusy: (busy) => {
+      if (busy === s.busy) return;
+      s.busy = busy;
+      saveMeta(s);
+    },
     restart: (sameInit, sendInit) => {
       if (!s.child || !s.next || (sameInit && sameArgs(s.args, s.next.args))) return false;
       log(`settings changed ${short(s.id)}, at rest: starting it again`);
@@ -292,7 +309,7 @@ const refuse = (sock, why, code) => {
 };
 
 function sessionView(s) {
-  return { id: s.id, live: s.child !== null, reason: s.reason, endedAt: s.endedAt, ...s.relay.view() };
+  return { id: s.id, live: s.child !== null, reason: s.reason, endedAt: s.endedAt, interrupted: s.interrupted, ...s.relay.view() };
 }
 
 const strings = (v) => Array.isArray(v) && v.every((a) => typeof a === 'string');
@@ -305,7 +322,10 @@ function open(h, sock, lines) {
   if (!strings(h.args)) return refuse(sock, 'bad args', 2);
   const s = sessionOf(h.id, h.cwd);
   if (s.cwd !== h.cwd) return refuse(sock, 'this conversation runs in another folder', 2);
-  if (h.notify && typeof h.notify === 'object') s.notify = stringMap(h.notify);
+  if (h.notify && typeof h.notify === 'object') {
+    s.notify = stringMap(h.notify);
+    saveMeta(s);
+  }
   if (h.texts && typeof h.texts === 'object') {
     s.texts = stringMap(h.texts);
     saveMeta(s);
@@ -459,7 +479,13 @@ async function shutdown() {
   log(`stopping: ${live().length} sessions`);
   server.close();
   // A turn in progress is interrupted first: its transcript ends cleanly, and a resume takes it up.
-  for (const s of live()) if (s.relay.state !== 'idle') s.relay.ask({ subtype: 'interrupt' }, () => {});
+  for (const s of live()) {
+    if (!s.relay.busy()) continue;
+    s.interrupted = true;
+    s.cutNotified = false;
+    saveMeta(s);
+    if (s.relay.state !== 'idle') s.relay.ask({ subtype: 'interrupt' }, () => {});
+  }
   const until = Date.now() + 30_000;
   while (Date.now() < until && live().some((s) => s.relay.state !== 'idle')) await new Promise((r) => setTimeout(r, 500));
   for (const s of live()) {
@@ -481,6 +507,15 @@ if (process.argv[1]?.endsWith('/runner.mjs')) {
     if (!s.endedAt) {
       s.reason = 'restart';
       s.endedAt = Date.now();
+      // At work when the server went down without a word: its turn was cut all the same.
+      if (s.busy) Object.assign(s, { interrupted: true, cutNotified: false });
+      s.busy = false;
+      saveMeta(s);
+    }
+    // The phone hears it now, with the PC perhaps off: nobody else would. Once per cut, not at each start.
+    if (s.interrupted && !s.cutNotified) {
+      notify(s, 'interrupted');
+      s.cutNotified = true;
       saveMeta(s);
     }
   }

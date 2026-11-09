@@ -165,7 +165,7 @@ export class RemoteSection {
     const box = h(begun ? 'details' : 'div', begun ? 'remote-block remote-sheet remote-more' : 'remote-block remote-sheet');
     if (begun) box.append(h('summary', 'remote-title', t('remote.sheet.title')));
     const list = h('ul', 'remote-sheet-list');
-    for (const k of ['what', 'needs', 'away', 'off', 'stays', 'limits'] as const) list.append(h('li', '', t(`remote.sheet.${k}`)));
+    for (const k of ['what', 'needs', 'away', 'off', 'stays', 'shared', 'limits'] as const) list.append(h('li', '', t(`remote.sheet.${k}`)));
     const row = h('div', 'setup-row');
     const install = () => {
       this.setup = true;

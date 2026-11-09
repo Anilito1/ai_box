@@ -144,7 +144,7 @@ async function status() {
   }
   const r = await askRunner({ op: 'status' });
   // Where each conversation stands: ids and counts only, never a word of it.
-  const runner = r && { version: r.version, max: r.max, live: r.live, rssMb: r.rssMb, sessions: (r.sessions ?? []).slice(0, 100).map((x) => ({ id: x.id, live: x.live, state: x.state, tasks: x.tasks, waiting: x.waiting, outbox: x.outbox, attached: x.attached })) };
+  const runner = r && { version: r.version, max: r.max, live: r.live, rssMb: r.rssMb, sessions: (r.sessions ?? []).slice(0, 100).map((x) => ({ id: x.id, live: x.live, state: x.state, tasks: x.tasks, waiting: x.waiting, outbox: x.outbox, attached: x.attached, interrupted: x.interrupted })) };
   answer({ version: VERSION, claude: (v.stdout ?? '').trim().slice(0, 80), signedIn, memory: { total: Math.round(totalmem() / 2 ** 20), available: Math.round(available / 2 ** 20) }, running: r?.live ?? 0, runner });
 }
 

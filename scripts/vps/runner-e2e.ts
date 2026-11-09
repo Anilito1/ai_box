@@ -12,9 +12,13 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createSdkMcpServer, query, tool, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { parseRemote, remoteSpawner, remoteStatus, remoteStop } from '../../src/main/remote';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { notifyOf, parseRemote, remoteSpawner, remoteStatus, remoteStop } from '../../src/main/remote';
 
-const [configFile, awayArg] = process.argv.slice(2);
+// `restart`: the runner is restarted while the hub is away (as a server reboot would): the cut turn is said, then taken up.
+const [configFile, awayArg, mode] = process.argv.slice(2);
+const restart = mode === 'restart';
 if (!configFile) throw new Error('usage: runner-e2e <config.json> [away seconds]');
 const r = parseRemote((JSON.parse(readFileSync(configFile, 'utf8')) as { remoteWorkers: unknown }).remoteWorkers);
 const cwd = Object.values(r.repos)[0];
@@ -26,7 +30,8 @@ const id = randomUUID();
 let seq = 0;
 const seqs: number[] = [];
 const reports: string[] = [];
-const texts = { queued: 'Saved for the master (hub offline).', offline: 'The hub is offline.', late: '[written while offline, at {time}]' };
+const texts = { queued: 'Saved for the master (hub offline).', offline: 'The hub is offline.', late: '[written while offline, at {time}]', full: 'Too many kept.' };
+const phone = { done: 'e2e: done', report: 'e2e: report', blocked: 'e2e: blocked', cut: 'e2e: cut', timeout: 'e2e: timeout', interrupted: 'e2e: interrupted' };
 
 function session(resume: boolean, prompt: string | null) {
   const input = (async function* (): AsyncGenerator<SDKUserMessage> {
@@ -56,6 +61,7 @@ function session(resume: boolean, prompt: string | null) {
       ...(resume ? { resume: id } : { sessionId: id }),
       spawnClaudeCodeProcess: remoteSpawner(r, cwd, {
         texts,
+        notify: notifyOf(r, phone),
         since: () => seq,
         onSeq: (n) => {
           seqs.push(n);
@@ -73,7 +79,9 @@ const kinds = (m: SDKMessage) => `${m.type}${'subtype' in m ? `/${m.subtype}` : 
 // 1. A turn that outlives the hub: a pause, then a report, then the end.
 const first = session(
   false,
-  'Run this Bash command in the foreground, not in the background: sleep 40. Then call the tool mcp__hub__message_master with the message "runner-e2e: report written while the hub was away". Then answer with one word: DONE.',
+  restart
+    ? 'Run this Bash command with run_in_background: sleep 120. Wait for its completion notification (this wait is the test), then call the tool mcp__hub__message_master with the message "runner-e2e: report written while the hub was away". Then answer with one word: DONE.'
+    : 'Run this Bash command in the foreground, not in the background: sleep 40. Then call the tool mcp__hub__message_master with the message "runner-e2e: report written while the hub was away". Then answer with one word: DONE.',
 );
 say(`started ${id.slice(0, 8)} in ${cwd}`);
 for await (const m of first) {
@@ -85,6 +93,11 @@ for await (const m of first) {
 first.close();
 const left = performance.now();
 say(`hub gone; away for ${awayMs / 1000}s`);
+if (restart) {
+  await new Promise((done) => setTimeout(done, 10_000));
+  say('restarting the runner (as a reboot of the server would)');
+  execFileSync('ssh', ['-i', join(process.env.USERPROFILE ?? '', '.ssh', 'aibox_admin'), '-o', 'BatchMode=yes', `${r.admin}@${r.host}`, 'sudo systemctl restart aibox-runner']);
+}
 await new Promise((done) => setTimeout(done, awayMs));
 const st = await remoteStatus(r);
 const mine = st?.runner?.sessions.find((x) => x.id === id);
@@ -92,7 +105,7 @@ say(`runner: ${JSON.stringify(mine)} rss=${st?.runner?.rssMb}MB live=${st?.runne
 
 // 2. Back: the same conversation, from the last line got.
 const before = seq;
-const second = session(true, null);
+const second = session(true, restart ? 'The server restarted during your turn, which was cut. Call the tool mcp__hub__message_master with the message "runner-e2e: taken up after the restart". Then answer with one word: DONE.' : null);
 const init = await second.initializationResult();
 say(`second initialize answered (${init.models.length} models), since=${before}`);
 const replayed: string[] = [];
@@ -113,6 +126,8 @@ const ordered = seqs.every((n, i) => i === 0 || n === seqs[i - 1] + 1);
 const after = (await remoteStatus(r))?.runner?.sessions.find((x) => x.id === id);
 second.close();
 await remoteStop(r, id);
-const ok = done && ordered && reports.length === 1 && reports[0].startsWith('[written while offline') && after?.outbox === 0;
+const ok = restart
+  ? done && mine?.interrupted === true && after?.interrupted === false && reports.length === 1 && reports[0].includes('taken up')
+  : done && ordered && reports.length === 1 && reports[0].startsWith('[written while offline') && after?.outbox === 0;
 say(`${ok ? 'OK' : 'FAILED'}: reports=${reports.length} ordered=${ordered} seqs=${seqs[0]}..${seqs.at(-1)} outbox after=${after?.outbox}`);
 process.exit(ok ? 0 : 1);

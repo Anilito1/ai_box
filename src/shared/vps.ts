@@ -167,6 +167,9 @@ export function personalSecrets(get: (name: RemoteSecret) => string): Record<str
 /** The scope of a repo: an organisation the user named, else theirs. */
 export const scopeOf = (slug: string, orgs: readonly string[]): SecretScope => (orgs.some((o) => o.toLowerCase() === slug.split('/')[0].toLowerCase()) ? 'org' : 'personal');
 
+/** The access a worker of this repo holds on the server: the user's own, or that organisation's (its App token). */
+export const accessOf = (slug: string, orgs: readonly string[]): string => (scopeOf(slug, orgs) === 'org' ? `org:${slug.split('/')[0].toLowerCase()}` : 'personal');
+
 /** The launcher's `status` answer: what the hub needs, nothing of the account. */
 export interface ServerStatus {
   version: number;
@@ -190,6 +193,8 @@ export interface RunnerSession {
   /** Messages to the master (or a lead, a peer) kept while the hub was away. */
   outbox: number;
   attached: boolean;
+  /** Its turn was cut by a stop or a restart of the server. */
+  interrupted: boolean;
 }
 
 export interface RunnerStatus {
@@ -202,6 +207,16 @@ export interface RunnerStatus {
 
 export const SESSION_ID = /^[0-9a-f-]{36}$/i;
 
+/**
+ * The id Claude Code gives a tool call (its MCP `_meta`), and whether a message with it was delivered already: the
+ * server hands a kept call again after a cut, under the same id. '' when the call carries none.
+ */
+export function callOf(extra: unknown, sent: readonly string[]): { id: string; again: boolean } {
+  const id = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.['claudecode/toolUseId'];
+  if (typeof id !== 'string' || !id || id.length > 128) return { id: '', again: false };
+  return { id, again: sent.includes(id) };
+}
+
 export function parseRunner(raw: unknown): RunnerStatus | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -212,7 +227,7 @@ export function parseRunner(raw: unknown): RunnerStatus | null {
     const e = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
     if (typeof e.id !== 'string' || !SESSION_ID.test(e.id)) continue;
     const state = e.state === 'running' || e.state === 'requires_action' ? e.state : 'idle';
-    sessions.push({ id: e.id, live: e.live === true, state, tasks: num(e.tasks), waiting: num(e.waiting), outbox: num(e.outbox), attached: e.attached === true });
+    sessions.push({ id: e.id, live: e.live === true, state, tasks: num(e.tasks), waiting: num(e.waiting), outbox: num(e.outbox), attached: e.attached === true, interrupted: e.interrupted === true });
   }
   return { version: num(o.version), max: num(o.max), live: num(o.live), rssMb: num(o.rssMb), sessions };
 }

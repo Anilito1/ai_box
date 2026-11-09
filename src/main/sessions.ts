@@ -133,7 +133,7 @@ import type {
 import { notifyOf, remoteCwdOf, remoteHead, remotePrepare, remoteRunner, remoteStop, remoteTree, RUNNER_DOWN, sendNtfy, SERVER_STOPPING, SSH_FAILED, type RemoteExit } from './remote';
 import { commitsSince, pullBack, pushedState } from './awayGit';
 import { awayBrief, backNote, resumeNote, saveRequest, type RepoReturn } from '../shared/away';
-import { allowedRepo, leaseConflict, scopeOf, type Lease } from '../shared/vps';
+import { accessOf, allowedRepo, callOf, leaseConflict, scopeOf, type Lease } from '../shared/vps';
 
 interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote'> {
   sessionId: string;
@@ -207,7 +207,7 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
    * there; `done`: it ended there (idle, stopped), and starts again at the next message. `seq`: the number of the last
    * line the hub got from conversation `conv`, where the next connection starts from.
    */
-  remoteRun: { state: 'live' | 'detached' | 'done'; conv: string; seq: number } | null;
+  remoteRun: { state: 'live' | 'detached' | 'done'; conv: string; seq: number; interrupted?: boolean } | null;
   /** Moved to the server while the user is away: what it left on this PC, and where it works there. */
   away: AwayState | null;
   /** Its turn was stopped while the user is away (a post of this PC): it goes on when they are back. */
@@ -222,6 +222,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   remoteExit: RemoteExit | null;
   /** Called once at the end of the turn in progress: its text, '' if it failed, null if the process ended. */
   turnWaiter: ((text: string | null) => void) | null;
+  /** The tool calls of its messages to others already delivered (the last ones): a call handed again is not sent twice. */
+  sentIds: string[];
   /** Tools of the conversation called and not answered yet, by id, oldest first. */
   tools: Map<string, NonNullable<SessionView['tool']>>;
   /** Shells started in the background, by tool call id: where a task's port is read from. */
@@ -334,6 +336,7 @@ type Persisted = {
   | 'away'
   | 'awayPaused'
   | 'awayOwes'
+  | 'sentIds'
 >;
 
 export interface ManagerOptions {
@@ -739,6 +742,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.inbox || this.ended(s) || this.orphan(s)) return;
     this.renewStale(s);
+    if (s.remoteRun?.interrupted) return this.continueInterrupted(s);
     void this.launch(s, s.started);
   }
 
@@ -1734,7 +1738,7 @@ export class SessionManager extends EventEmitter {
     s.query = q;
     s.usageSeen = null;
     s.remoteExit = null;
-    s.remoteRun = remote ? { state: 'live', conv: s.sessionId, seq: this.remoteSeq(s) } : null;
+    s.remoteRun = remote ? { state: 'live', conv: s.sessionId, seq: this.remoteSeq(s), ...(s.remoteRun?.interrupted ? { interrupted: true } : {}) } : null;
     // A resumed conversation's results carry the totals it saved: its turns count from there. A new one starts at zero.
     s.usageBase = resume ? this.usageTotals(q) : Promise.resolve(null);
     this.changed();
@@ -1797,13 +1801,14 @@ export class SessionManager extends EventEmitter {
     if (!cwd) return t('remote.why.repo');
     const others = [...this.sessions.values()].filter((o) => o !== s && o.remoteRun && (o.inbox || o.remoteRun.state === 'detached')).length;
     if (others >= workers.max) return t('remote.why.max', { max: workers.max });
+    if (this.scopeClash(s, this.scopeKeyOf(s))) return t('remote.why.scope');
     return {
       workers,
       cwd,
       onExit: (exit) => {
         s.remoteExit = exit;
       },
-      notify: notifyOf(workers, { done: t('phone.done'), report: t('phone.report'), blocked: t('phone.blocked'), cut: t('phone.cut'), timeout: t('phone.timeout') }),
+      notify: notifyOf(workers, { done: t('phone.done'), report: t('phone.report'), blocked: t('phone.blocked'), cut: t('phone.cut'), timeout: t('phone.timeout'), interrupted: t('phone.interrupted') }),
       texts: { queued: t('remote.queued'), offline: t('remote.offline'), late: t('remote.late'), full: t('remote.full') },
       since: () => this.remoteSeq(s),
       // Counted, not shown: nothing is emitted per line; the number is saved with the session.
@@ -1816,6 +1821,26 @@ export class SessionManager extends EventEmitter {
         void this.loadHistory(s).then(() => this.changed());
       },
     };
+  }
+
+  /**
+   * The GitHub access a worker holds on the server: the user's own, or one organisation's; '' when none. Its workers
+   * share one Unix user there, so each one could read the others' tokens: a server holds one access at a time.
+   */
+  private scopeKeyOf(s: Session): string {
+    const { allowed, denied, orgs } = this.opts.cfg.remoteWorkers;
+    const slug = s.away?.slug ?? allowedRepo(remoteOfRepo(repoOf(s.cwd)?.checkout ?? s.cwd), allowed, denied);
+    return slug ? accessOf(slug, orgs) : '';
+  }
+
+  /** Another worker on the server holds another access than `key`. */
+  private scopeClash(s: Session, key: string): boolean {
+    if (!key) return false;
+    return [...this.sessions.values()].some((o) => {
+      if (o === s || !(o.away || (o.remoteRun && (o.inbox || o.remoteRun.state === 'detached')))) return false;
+      const other = this.scopeKeyOf(o);
+      return !!other && other !== key;
+    });
   }
 
   /** Where a connection to the runner starts from: after the last line got from this conversation, else its start. */
@@ -1976,9 +2001,15 @@ export class SessionManager extends EventEmitter {
     // Workers on the server find this PC's skills, plugins and CLAUDE.md there: at most a minute, then they move without.
     if (movable.length > 0 && !down) await this.opts.remoteServer?.syncEnv?.(60_000);
     let slots = cfg.max - [...this.sessions.values()].filter((s) => s.remoteRun && (s.inbox || s.remoteRun.state === 'detached')).length;
+    // One GitHub access on the server: the one already there, else the first worker's. Decided here, before the moves
+    // run side by side (each of them looks only at the workers already gone).
+    let access = [...this.sessions.values()].filter((o) => o.away || (o.remoteRun && (o.inbox || o.remoteRun.state === 'detached'))).map((o) => this.scopeKeyOf(o)).find(Boolean) ?? '';
     const lines = await Promise.all(
       workers.map((s) => {
-        const why = this.awayClass(s) ?? down ?? (slots-- > 0 ? null : t('remote.why.max', { max: cfg.max }));
+        const key = this.awayClass(s) ? '' : this.scopeKeyOf(s);
+        const clash = !!key && !!access && key !== access;
+        if (key && !clash) access ||= key;
+        const why = this.awayClass(s) ?? down ?? (clash ? t('remote.why.scope') : null) ?? (slots-- > 0 ? null : t('remote.why.max', { max: cfg.max }));
         return why ? this.pauseForAway(s, why) : this.moveToServer(s);
       }),
     );
@@ -2030,6 +2061,7 @@ export class SessionManager extends EventEmitter {
       if (!slug) return this.pauseForAway(s, t('away.why.repo'));
       const held = leaseConflict(this.leases(), { slug, branch: g.branch, side: 'server', session: s.id });
       if (held) return this.pauseForAway(s, t('away.why.lease', { worker: held.worker, branch: g.branch }));
+      if (this.scopeClash(s, accessOf(slug, cfg.orgs))) return this.pauseForAway(s, t('remote.why.scope'));
       const secrets = await this.opts.remoteServer?.secretsFor(slug);
       if (typeof secrets === 'string') return this.pauseForAway(s, t(`remote.why.${secrets}`));
       const prep = await remotePrepare(cfg, slug, g.branch, secrets);
@@ -2098,6 +2130,9 @@ export class SessionManager extends EventEmitter {
     const away = s.away;
     if (!away) return '';
     if (!(await this.reattach(s))) return t('hub.back.unreachable', { name: displayName(s) });
+    // Let finish: a turn the server cut is taken up there at once.
+    const there = (await remoteRunner(this.opts.cfg.remoteWorkers))?.sessions.find((x) => x.id === s.sessionId);
+    if (s.remoteRun?.interrupted || there?.interrupted) this.continueInterrupted(s);
     const pull = await pullBack(s.cwd, away.branch);
     const commits = await commitsSince(s.cwd, away.base, away.branch);
     return t('hub.back.left', { name: displayName(s), repo: away.slug, branch: away.branch, commits: commits.length, state: t(`away.pull.${pull}`) });
@@ -2184,6 +2219,7 @@ export class SessionManager extends EventEmitter {
     const runner = await remoteRunner(cfg);
     for (const s of runner ? detached() : []) {
       const r = runner?.sessions.find((x) => x.id === s.sessionId);
+      if (r?.interrupted && s.remoteRun && !s.remoteRun.interrupted) this.remoteInterrupted(s);
       if (r && (r.live || r.outbox > 0)) {
         void this.reattach(s);
         continue;
@@ -2192,6 +2228,23 @@ export class SessionManager extends EventEmitter {
       this.changed();
     }
     if (detached().length > 0) this.watchDetached();
+  }
+
+  /** The server stopped or restarted during its turn: said, to the user and the master, with the way to take it up. */
+  private remoteInterrupted(s: Session): void {
+    if (s.remoteRun) s.remoteRun.interrupted = true;
+    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.remoteInterrupted'), tone: 'error', action: 'resume' });
+    if (s.role === 'worker') this.notifyMaster(t('hub.remoteInterrupted', { name: displayName(s) }), t('hub.remoteInterrupted.note'), s);
+    this.changed();
+  }
+
+  /** Takes a turn cut on the server up again: its mission, its last report, and what to check first. */
+  private continueInterrupted(s: Session): void {
+    if (s.remoteRun) s.remoteRun.interrupted = false;
+    s.owesReport = true;
+    const tag = `worker-output-${randomTag()}`;
+    const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
+    this.deliver(s, { text: t('remote.interrupted.prompt', { mission: s.mission || t('hub.noText'), last, tag }), images: [], from: 'hub', shown: t('remote.interrupted.shown') });
   }
 
   private async stopDetached(s: Session): Promise<void> {
@@ -2825,6 +2878,8 @@ export class SessionManager extends EventEmitter {
 
   /** Into the running session, or resumes a closed one with its conversation. */
   private deliver(s: Session, prompt: Prompt): void {
+    // A new turn takes up a turn the server cut, whoever asks for it (the runner forgets the cut on it too).
+    if (s.remoteRun?.interrupted) s.remoteRun.interrupted = false;
     // Away on another account: back on its own as soon as it is open again and the policy says so. Or its account is
     // limited at this very moment: it goes on elsewhere, with a summary.
     if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
@@ -3317,6 +3372,23 @@ export class SessionManager extends EventEmitter {
       }
     };
     const byName = z.string().describe(t('tool.byName'));
+    // A message to someone goes once, even when the server hands the same call again after a cut: Claude Code gives
+    // each tool call its own id, kept with the session once delivered.
+    const once = (extra: unknown, fn: () => string | Promise<string>) => {
+      const { id, again } = callOf(extra, s.sentIds);
+      if (!id) return run(fn);
+      if (again) return run(() => t('tool.alreadyDelivered'));
+      // Taken before it is sent: the same call handed again meanwhile finds it.
+      s.sentIds = [...s.sentIds.slice(-199), id];
+      return run(async () => {
+        try {
+          return await fn();
+        } catch (err) {
+          s.sentIds = s.sentIds.filter((x) => x !== id);
+          throw err;
+        }
+      });
+    };
     const listWorkers = tool('list_workers', t('tool.listWorkers'), {}, () => run(() => this.listWorkers()));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
@@ -3343,15 +3415,15 @@ export class SessionManager extends EventEmitter {
         return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
       }));
     if (role === 'worker') {
-      const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }) =>
-        run(() => this.messageMaster(s, message)),
+      const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }, extra) =>
+        once(extra, () => this.messageMaster(s, message)),
       );
       // A program without Claude Code's SendMessage gets the hub's own tool for the same job.
       const sendMessage = tool(
         'send_message',
         t('tool.sendMessage'),
         { to: z.string().describe(t('tool.sendMessage.to')), message: z.string().describe(t('tool.sendMessage.message')) },
-        ({ to, message }) => run(() => this.sendPeer(s, String(to), String(message))),
+        ({ to, message }, extra) => once(extra, () => this.sendPeer(s, String(to), String(message))),
       );
       // A group's lead drives its members with the master's tools, limited to them; a member reports to its lead.
       // Given at launch: a change of the groups puts the idle ones to sleep, the next message starts them with it.
@@ -3373,7 +3445,7 @@ export class SessionManager extends EventEmitter {
           ]
         : [listWorkers];
       const toLead = this.groupOf(s)
-        ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }) => run(() => this.messageLead(s, message)))]
+        ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }, extra) => once(extra, () => this.messageLead(s, message)))]
         : [];
       return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
@@ -4770,6 +4842,7 @@ export class SessionManager extends EventEmitter {
       lease: null,
       remoteExit: null,
       turnWaiter: null,
+      sentIds: [],
     };
     this.sessions.set(id, s);
     return s;
@@ -4888,6 +4961,7 @@ export class SessionManager extends EventEmitter {
       away: s.away,
       awayPaused: s.awayPaused,
       awayOwes: s.awayOwes,
+      sentIds: s.sentIds,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.remoteRun && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && !s.remoteRun && this.isWorking(s) ? { resume: 'work' as const } : {}),

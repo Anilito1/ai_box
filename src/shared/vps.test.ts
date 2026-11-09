@@ -12,7 +12,10 @@ import {
   monthCost,
   OVH_HOURLY,
   parseRepos,
+  parseRunner,
   parseStatus,
+  callOf,
+  accessOf,
   parseTarget,
   isPersonalGithubToken,
   isSecretValue,
@@ -111,7 +114,23 @@ test("the server's answers are read for what the hub needs only", () => {
   const st = parseStatus(
     JSON.stringify({ version: 5, runner: { version: 1, max: 8, live: 1, rssMb: 54.4, sessions: [{ id, live: true, state: 'running', tasks: 1, waiting: 0, outbox: 2, attached: false, text: 'secret' }, { id: '../x', live: true }] } }),
   );
-  assert.deepEqual(st?.runner, { version: 1, max: 8, live: 1, rssMb: 54, sessions: [{ id, live: true, state: 'running', tasks: 1, waiting: 0, outbox: 2, attached: false }] });
+  assert.deepEqual(st?.runner, { version: 1, max: 8, live: 1, rssMb: 54, sessions: [{ id, live: true, state: 'running', tasks: 1, waiting: 0, outbox: 2, attached: false, interrupted: false }] });
+  assert.equal(parseRunner({ version: 1, sessions: [{ id, interrupted: true }] })?.sessions[0].interrupted, true);
+});
+
+test('a message handed again after a cut is known by its tool call, and is not delivered twice', () => {
+  const extra = { _meta: { 'claudecode/toolUseId': 'toolu_01abc', progressToken: 2 } };
+  assert.deepEqual(callOf(extra, []), { id: 'toolu_01abc', again: false });
+  assert.deepEqual(callOf(extra, ['toolu_01abc']), { id: 'toolu_01abc', again: true });
+  // No id (another program, an older Claude Code): delivered as before.
+  assert.deepEqual(callOf({}, ['toolu_01abc']), { id: '', again: false });
+  assert.deepEqual(callOf({ _meta: { 'claudecode/toolUseId': 'x'.repeat(200) } }, []), { id: '', again: false });
+});
+
+test('one GitHub access per server: the user’s own, or one organisation’s', () => {
+  assert.equal(accessOf('octo/site', ['acme-corp']), 'personal');
+  assert.equal(accessOf('Acme-Corp/crm', ['acme-corp']), 'org:acme-corp');
+  assert.notEqual(accessOf('acme-corp/crm', ['acme-corp']), accessOf('octo/site', ['acme-corp']));
 });
 
 test('a branch is written from one side at a time, and by one worker on the server', () => {

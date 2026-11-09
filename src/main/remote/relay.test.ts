@@ -148,6 +148,23 @@ test('a worker that loops cannot fill the disk nor flood the master; a forged fi
   assert.deepEqual(forged.relay.outbox.map((i: { id: string }) => i.id), ['c']);
 });
 
+test('a kept message is handed with the id Claude Code gave its call: the hub delivers it once', () => {
+  const busy: boolean[] = [];
+  const r = setup();
+  (r.relay.o as { onBusy?: (b: boolean) => void }).onBusy = (b) => busy.push(b);
+  const call = hubCall('c1', 'message_master', { message: 'report' });
+  ((call.request.message as Line).params as Line)._meta = { 'claudecode/toolUseId': 'toolu_01xyz', progressToken: 3 };
+  r.fromCli({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+  r.fromCli(call);
+  r.fromCli({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+  assert.equal(busy[0], true);
+  assert.equal(busy.at(-1), false);
+  r.relay.initResponse = {};
+  r.attach(0);
+  const handed = r.hub.find((m) => m.type === 'control_request');
+  assert.deepEqual((((handed?.request as Line).message as Line).params as Line)._meta, { 'claudecode/toolUseId': 'toolu_01xyz' });
+});
+
 test('a report kept but not run by the hub before it left again is handed at the next attach', () => {
   const r = setup({ outbox: [{ id: 'q1', at: 0, afterSeq: 0, name: 'send_message', args: { to: 'x', message: 'm' } }] });
   r.relay.initResponse = {};

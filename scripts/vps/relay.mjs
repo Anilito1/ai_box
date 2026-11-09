@@ -41,7 +41,8 @@ const validItem = (i) =>
   !!i.args &&
   typeof i.args === 'object' &&
   !Array.isArray(i.args) &&
-  JSON.stringify(i.args).length <= ITEM_MAX;
+  JSON.stringify(i.args).length <= ITEM_MAX &&
+  (i.call === undefined || (typeof i.call === 'string' && i.call.length <= 128));
 
 /** A message line with its number: the SDK hands unknown fields through to the hub, which reads it back. */
 export const withSeq = (line, seq) => (line.endsWith('}') ? `${line.slice(0, -1)},"aibox_seq":${seq}}` : line);
@@ -61,6 +62,8 @@ export class Relay {
    *   texts(): { queued: string, offline: string, late: string, full: string },
    *   newId(): string,
    *   restart?(sameInit: boolean, sendInit: () => void): boolean,
+   *   onBusy?(busy: boolean): void,
+   *   onUser?(): void,
    *   now?: () => number,
    * }} o
    */
@@ -110,7 +113,13 @@ export class Relay {
 
   // ---------- Claude Code's side ----------
 
+  /** A line of Claude Code; whether the session is at work, told to the runner (which keeps it for a restart). */
   fromCli(line) {
+    this.handleCli(line);
+    this.o.onBusy?.(this.busy());
+  }
+
+  handleCli(line) {
     const m = parse(line);
     if (!m) return this.toHub(line);
     if (m.type === 'stream_event' || m.type === 'keep_alive') return this.toHub(line);
@@ -182,7 +191,9 @@ export class Relay {
       const name = msg.params?.name;
       if (r.server_name === HUB && msg.method === 'tools/call' && QUEUED_TOOLS.includes(name)) {
         const args = msg.params.arguments && typeof msg.params.arguments === 'object' ? msg.params.arguments : {};
-        const item = { id: this.o.newId(), at: this.now(), afterSeq: this.seq, name, args };
+        // Claude Code's id of this tool call: the hub knows a call it already delivered by it, even handed twice.
+        const call = msg.params._meta?.['claudecode/toolUseId'];
+        const item = { id: this.o.newId(), at: this.now(), afterSeq: this.seq, name, args, ...(typeof call === 'string' ? { call } : {}) };
         if (this.outbox.length >= OUTBOX_MAX || !validItem(item)) {
           return this.answerCli(id, { mcp_response: { jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: this.o.texts().full }], isError: true } } });
         }
@@ -232,6 +243,11 @@ export class Relay {
   }
 
   fromHub(line) {
+    this.handleHub(line);
+    this.o.onBusy?.(this.busy());
+  }
+
+  handleHub(line) {
     const m = parse(line);
     if (!m) return this.o.toCli(line);
     if (m.type === 'control_request' && m.request?.subtype === 'initialize') {
@@ -266,6 +282,7 @@ export class Relay {
       return this.o.toCli(line);
     }
     if (m.type === 'user') {
+      this.o.onUser?.();
       this.activeAt = this.now();
       if (!this.stateEvents) this.setState('running');
     }
@@ -285,7 +302,7 @@ export class Relay {
       this.handed.set(rid, item.id);
       const args = { ...item.args };
       if (typeof args.message === 'string') args.message = `${this.o.texts().late.replace('{time}', stamp(item.at))}\n${args.message}`;
-      c.send(json({ type: 'control_request', request_id: rid, request: { subtype: 'mcp_message', server_name: HUB, message: { jsonrpc: '2.0', id: rid, method: 'tools/call', params: { name: item.name, arguments: args } } } }));
+      c.send(json({ type: 'control_request', request_id: rid, request: { subtype: 'mcp_message', server_name: HUB, message: { jsonrpc: '2.0', id: rid, method: 'tools/call', params: { name: item.name, arguments: args, ...(item.call ? { _meta: { 'claudecode/toolUseId': item.call } } : {}) } } } }));
     };
     for (const { seq, line } of lines) {
       while (queue.length > 0 && queue[0].afterSeq < seq) hand(queue.shift());
