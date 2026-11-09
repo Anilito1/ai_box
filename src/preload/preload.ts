@@ -54,6 +54,7 @@ const api: HubApi = {
   moveTopic: (topic, group) => ipcRenderer.send('topic:move', topic, group ?? null),
   showCost: (id) => ipcRenderer.send('session:cost', id),
   costHistory: (from, to) => ipcRenderer.invoke('cost:history', from, to),
+  openLocalFile: (id, path, action) => ipcRenderer.invoke('session:open-file', id, path, action),
   openExternal: (url) => ipcRenderer.send('open-external', url),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
