@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { installationToken } from './githubApp';
 import { EnvSyncError, personalRepos, sshEnvExec, syncEnvironment } from './remote/envSync';
-import { isOwner, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
+import { isOwner, isPersonalGithubToken, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, personalSecrets, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
 import type { AwayView } from '../shared/types';
 
 // The remote server as the app runs it: its setup (Settings › Remote server), its power (switched on before a move,
@@ -72,7 +72,10 @@ export class RemoteServer implements RemoteServerControl {
       },
       mainRepos: () => this.o.cfg.mainRepos.map((p) => mainRepoPath(this.o.cfg, p)),
       originOf,
-      token: () => this.o.secrets.get('remote:personal:GH_TOKEN'),
+      token: () => {
+        const gh = this.o.secrets.get('remote:personal:GH_TOKEN');
+        return isPersonalGithubToken(gh) ? gh : '';
+      },
       status: remoteStatus,
       latency: remoteLatency,
       onChange: () => this.push(),
@@ -92,7 +95,8 @@ export class RemoteServer implements RemoteServerControl {
       server: this.state(),
       lists: { allowed: this.r.allowed, denied: this.r.denied, orgs: this.r.orgs },
       secrets: {
-        personal: REMOTE_SECRETS.filter((n) => this.o.secrets.has(`remote:personal:${n}`)),
+        // A GitHub token saved before only fine-grained ones were taken (classic): not shown as set, since none is used.
+        personal: REMOTE_SECRETS.filter((n) => (n === 'GH_TOKEN' ? isPersonalGithubToken(this.o.secrets.get('remote:personal:GH_TOKEN')) : this.o.secrets.has(`remote:personal:${n}`))),
         org: REMOTE_SECRETS.filter((n) => this.o.secrets.has(`remote:org:${n}`)),
       },
       app: { ...this.r.app, key: this.o.secrets.has('githubAppKey') },
@@ -179,6 +183,8 @@ export class RemoteServer implements RemoteServerControl {
     if (!scope || !isRemoteSecret(o.name) || (o.value !== null && !isSecretValue(o.value))) throw new Error('invalid');
     // An organisation's GitHub access is its App's token, made at each launch: never a token of the user's.
     if (scope === 'org' && o.name === 'GH_TOKEN') throw new Error('invalid');
+    // The user's: fine-grained only, limited to the repos they chose.
+    if (o.name === 'GH_TOKEN' && o.value !== null && !isPersonalGithubToken(o.value)) throw new Error('invalid');
     await this.o.secrets.set(`remote:${scope}:${o.name}`, o.value as string | null);
     return this.view();
   }
@@ -200,14 +206,15 @@ export class RemoteServer implements RemoteServerControl {
 
   private appToken: { org: string; token: string; expiresAt: number } | null = null;
 
-  async secretsFor(slug: string): Promise<Record<string, string> | string> {
+  async secretsFor(slug: string): Promise<Record<string, string> | 'org' | 'token'> {
     const scope: SecretScope = scopeOf(slug, this.r.orgs);
+    // The user's repo: their fine-grained token from the keychain, or no remote worker (never a token of this PC's).
+    if (scope === 'personal') return personalSecrets((name) => this.o.secrets.get(`remote:personal:${name}`));
     const out: Record<string, string> = {};
     for (const name of REMOTE_SECRETS) {
-      const v = this.o.secrets.get(`remote:${scope}:${name}`);
+      const v = this.o.secrets.get(`remote:org:${name}`);
       if (v) out[name] = v;
     }
-    if (scope === 'personal') return out;
     // An organisation's repo: its App's one-hour token, or no remote worker for it.
     const { id, org } = this.r.app;
     const key = this.o.secrets.get('githubAppKey');
@@ -238,7 +245,7 @@ export class RemoteServer implements RemoteServerControl {
         execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 20_000 }, (err, out) => done(err ? '' : String(out).trim()));
       });
     const gh = await read('gh-personal');
-    if (isSecretValue(gh)) {
+    if (isPersonalGithubToken(gh)) {
       await this.o.secrets.set('remote:personal:GH_TOKEN', gh);
       rmSync(join(dir, 'gh-personal.dpapi'), { force: true });
     }

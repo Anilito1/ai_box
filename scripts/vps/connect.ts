@@ -14,6 +14,7 @@ import { VPS_STEPS, type VpsState } from '../../src/shared/vps';
 import { parseRemote, remoteLatency, remoteStatus } from '../../src/main/remote';
 import { remoteOf as originOfRemote } from '../../src/main/repos';
 import { realExec, realTty, VpsWizard } from '../../src/main/vps';
+import { personalToken } from './token';
 
 const argv = process.argv.slice(2);
 const opt = (name: string) => {
@@ -45,8 +46,15 @@ const w = new VpsWizard({
   save: (r) => writeFileSync(file, JSON.stringify({ remoteWorkers: r }, null, 2)),
   mainRepos: () => (opt('repo') ? [resolve(opt('repo') as string)] : []),
   originOf: originOfRemote,
-  // Outside the app: the token comes from the environment of this terminal, never from a file of the repo.
-  token: () => process.env.AIBOX_GH_TOKEN ?? '',
+  // The user's fine-grained token, as the app takes it from its keychain (never this PC's GitHub CLI token).
+  // None: the repos step waits for one, as in the app.
+  token: () => {
+    try {
+      return personalToken();
+    } catch {
+      return '';
+    }
+  },
   status: remoteStatus,
   latency: remoteLatency,
   onChange: (s) => {

@@ -17,6 +17,7 @@ import { claudeExecutable } from '../../src/main/providers/claude/cli';
 import { parseRemote, remoteLatency, remoteStatus } from '../../src/main/remote';
 import { SessionManager } from '../../src/main/sessions';
 import type { TeamRole } from '../../src/shared/types';
+import { personalToken } from './token';
 
 const [configFile, checkout, branch] = process.argv.slice(2);
 if (!configFile || !checkout || !branch) throw new Error('usage: away-e2e <config.json> <checkout> <branch>');
@@ -24,6 +25,7 @@ const t0 = performance.now();
 const at = () => `${Math.round((performance.now() - t0) / 1000)}s`;
 const say = (what: string) => console.log(`[${at()}] ${what}`);
 
+const token = personalToken();
 const dir = mkdtempSync(join(tmpdir(), 'aibox-e2e-'));
 const cfg = loadConfig(dir, 'fr');
 cfg.onboarded = true;
@@ -43,8 +45,8 @@ const m = new SessionManager({
   persist: () => undefined,
   costLog: { today: () => 0, append: () => undefined } as unknown as CostLog,
   capabilities: async () => '',
-  // The user's token comes from this terminal's environment (never a file of the repo), as the app takes it from its keychain.
-  remoteServer: { wake: async () => null, idle: () => say('server may switch off'), state: () => '', secretsFor: async () => (process.env.AIBOX_GH_TOKEN ? { GH_TOKEN: process.env.AIBOX_GH_TOKEN } : {}) },
+  // The user's fine-grained token, as the app takes it from its keychain (never this PC's GitHub CLI token).
+  remoteServer: { wake: async () => null, idle: () => say('server may switch off'), state: () => '', secretsFor: async () => ({ GH_TOKEN: token }) },
 });
 
 interface Inner {

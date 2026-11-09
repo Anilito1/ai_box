@@ -363,7 +363,7 @@ export interface RemoteServerControl {
   idle(): void;
   state(): AwayView['server'];
   /** The tokens of a repo's scope for its worker (GH_TOKEN…), or why it may not run there. */
-  secretsFor(slug: string): Promise<Record<string, string> | string>;
+  secretsFor(slug: string): Promise<Record<string, string> | 'org' | 'token'>;
   /** This PC's Claude environment to the server, within limitMs; never throws. */
   syncEnv?(limitMs?: number): Promise<void>;
 }
@@ -1825,7 +1825,7 @@ export class SessionManager extends EventEmitter {
     const slug = s.away?.slug ?? allowedRepo(remoteOfRepo(repoOf(s.cwd)?.checkout ?? s.cwd), allowed, denied);
     if (!slug || !this.opts.remoteServer) return {};
     const got = await this.opts.remoteServer.secretsFor(slug);
-    return typeof got === 'string' ? t('remote.why.org') : got;
+    return typeof got === 'string' ? t(`remote.why.${got}`) : got;
   }
 
   /** Every branch written now, and from where. */
@@ -1985,7 +1985,7 @@ export class SessionManager extends EventEmitter {
       const held = leaseConflict(this.leases(), { slug, branch: g.branch, side: 'server', session: s.id });
       if (held) return this.pauseForAway(s, t('away.why.lease', { worker: held.worker, branch: g.branch }));
       const secrets = await this.opts.remoteServer?.secretsFor(slug);
-      if (typeof secrets === 'string') return this.pauseForAway(s, t('remote.why.org'));
+      if (typeof secrets === 'string') return this.pauseForAway(s, t(`remote.why.${secrets}`));
       const prep = await remotePrepare(cfg, slug, g.branch, secrets);
       if ('error' in prep) return this.pauseForAway(s, prep.error === 'unreachable' ? t('away.why.unreachable') : t('away.why.prepare', { why: prep.error }));
       if (!s.inbox) return this.pauseForAway(s, t('away.why.noSave'));

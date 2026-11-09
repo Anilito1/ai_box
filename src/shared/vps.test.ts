@@ -15,7 +15,9 @@ import {
   parseStatus,
   parseTarget,
   pendingReports,
+  isPersonalGithubToken,
   isSecretValue,
+  personalSecrets,
   remoteClone,
   scopeOf,
   serverList,
@@ -54,6 +56,19 @@ test('no list of repos in the code: the server reads root’s file, and the app 
 test('tokens a remote worker gets: known names, one printable line, nothing a shell would read', () => {
   assert.ok(isSecretValue('github_pat_' + 'a'.repeat(40)));
   for (const bad of ['short', 'with space'.repeat(2), "quote'xxxxxxxx", 'dollar$xxxxxxx', 'line\nbreakxxxx']) assert.equal(isSecretValue(bad), false, bad);
+});
+
+test("a personal repo's remote worker gets the user's fine-grained token from the keychain, or does not start", () => {
+  const fine = 'github_pat_' + 'A1_'.repeat(20);
+  const keychain = (v: Record<string, string>) => (name: string) => v[name] ?? '';
+  assert.deepEqual(personalSecrets(keychain({ GH_TOKEN: fine, NPM_TOKEN: 'npm_' + 'x'.repeat(30) })), { GH_TOKEN: fine, NPM_TOKEN: 'npm_' + 'x'.repeat(30) });
+  // Nothing in the keychain: refused, never a token found elsewhere on this PC.
+  assert.equal(personalSecrets(keychain({})), 'token');
+  // The PC's GitHub CLI token and a classic token reach every repo of the account, organisations included.
+  for (const broad of ['gho_' + 'a'.repeat(36), 'ghp_' + 'a'.repeat(36)]) {
+    assert.equal(isPersonalGithubToken(broad), false, broad);
+    assert.equal(personalSecrets(keychain({ GH_TOKEN: broad })), 'token', broad);
+  }
 });
 
 test('a server is an address, an administrator and a port; nothing that a shell would read', () => {

@@ -3,7 +3,7 @@
 // Code there and real GitHub pushes, in an isolated data folder.
 //
 //   npx esbuild scripts/vps/parity-e2e.ts --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.parity-e2e.mjs
-//   AIBOX_GH_TOKEN=… node node_modules/.parity-e2e.mjs <config.json from vps:connect> <local checkout of a listed repo> <branch> <page url>
+//   node node_modules/.parity-e2e.mjs <config.json from vps:connect> <local checkout of a listed repo> <branch> <page url>
 //
 // The worker reads the synced CLAUDE.md, uses the taste skill, captures the page with playwright-cli, commits a proof
 // file on <branch> and reports to the master. Prints one line per step: what happened, how long, the server's memory.
@@ -20,6 +20,7 @@ import { parseRemote, remoteStatus, sshOptions, sshProgram } from '../../src/mai
 import { personalRepos, sshEnvExec, syncEnvironment } from '../../src/main/remote/envSync';
 import { remoteOf as originOf } from '../../src/main/repos';
 import { SessionManager } from '../../src/main/sessions';
+import { personalToken } from './token';
 
 const [configFile, checkout, branch, page] = process.argv.slice(2);
 if (!configFile || !checkout || !branch || !page) throw new Error('usage: parity-e2e <config.json> <checkout> <branch> <page url>');
@@ -27,6 +28,7 @@ const t0 = performance.now();
 const at = () => `${Math.round((performance.now() - t0) / 1000)}s`;
 const say = (what: string) => console.log(`[${at()}] ${what}`);
 
+const token = personalToken();
 const dir = mkdtempSync(join(tmpdir(), 'aibox-parity-'));
 const cfg = loadConfig(dir, 'fr');
 cfg.onboarded = true;
@@ -55,8 +57,8 @@ const m = new SessionManager({
   persist: () => undefined,
   costLog: { today: () => 0, append: () => undefined } as unknown as CostLog,
   capabilities: async () => '',
-  // The user's token comes from this terminal's environment (never a file of the repo), as the app takes it from its keychain.
-  remoteServer: { wake: async () => null, idle: () => undefined, state: () => '', secretsFor: async (): Promise<Record<string, string>> => (process.env.AIBOX_GH_TOKEN ? { GH_TOKEN: process.env.AIBOX_GH_TOKEN } : {}) },
+  // The user's fine-grained token, as the app takes it from its keychain (never this PC's GitHub CLI token).
+  remoteServer: { wake: async () => null, idle: () => undefined, state: () => '', secretsFor: async () => ({ GH_TOKEN: token }) },
 });
 interface Inner {
   sessions: Map<string, { status: string; remoteRun: unknown; lastMessage: string }>;

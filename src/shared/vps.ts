@@ -143,6 +143,21 @@ export type SecretScope = 'personal' | 'org';
 export const isRemoteSecret = (v: unknown): v is RemoteSecret => REMOTE_SECRETS.includes(v as RemoteSecret);
 /** A token's text: printable, one line, no quote: it goes into an environment, never into a command. */
 export const isSecretValue = (v: unknown): v is string => typeof v === 'string' && /^[\x21-\x7e]{8,4096}$/.test(v) && !/["'\\`$]/.test(v);
+/**
+ * The user's GitHub token on the server: fine-grained (github_pat_), limited to the repos they chose. Never the GitHub
+ * CLI's of this PC (gho_) nor a classic one (ghp_): both reach every repo of the account, organisations included.
+ */
+export const isPersonalGithubToken = (v: unknown): v is string => typeof v === 'string' && /^github_pat_[A-Za-z0-9_]{20,255}$/.test(v);
+
+/** The tokens of a personal repo's remote worker, from the keychain; 'token' when its fine-grained GitHub token is missing. */
+export function personalSecrets(get: (name: RemoteSecret) => string): Record<string, string> | 'token' {
+  const out: Record<string, string> = {};
+  for (const name of REMOTE_SECRETS) {
+    const v = get(name);
+    if (v) out[name] = v;
+  }
+  return isPersonalGithubToken(out.GH_TOKEN) ? out : 'token';
+}
 
 /** The scope of a repo: an organisation the user named, else theirs. */
 export const scopeOf = (slug: string, orgs: readonly string[]): SecretScope => (orgs.some((o) => o.toLowerCase() === slug.split('/')[0].toLowerCase()) ? 'org' : 'personal');
