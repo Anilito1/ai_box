@@ -15,15 +15,23 @@ export const isSlug = (v: unknown): v is string => typeof v === 'string' && /^[\
 /** A GitHub account or organisation name. */
 export const isOwner = (v: unknown): v is string => typeof v === 'string' && /^[\w.-]{1,39}$/.test(v);
 
+/** An entry of the user's list: a repo, or "owner/*" for every repo of that owner. */
+export const isAllowEntry = (v: unknown): v is string => isSlug(v) || (typeof v === 'string' && /^[\w.-]{1,39}\/\*$/.test(v));
+
+const ownerOf = (slug: string) => slug.split('/')[0].toLowerCase();
+const refused = (slug: string, denied: readonly string[]) => denied.some((d) => d.toLowerCase() === ownerOf(slug));
+
 /**
- * The repo a remote ("github.com/Owner/name", "git@github.com:Owner/name.git"…) points at, as the user listed it, or
- * null: another host, an owner the user refused, anything not listed. The lists live in the user's settings only.
+ * The repo a remote ("github.com/Owner/name", "git@github.com:Owner/name.git"…) points at, as the user listed it (as
+ * the remote writes it, under "owner/*"), or null: another host, an owner the user refused (even for a repo listed by
+ * name), anything not listed. The lists live in the user's settings only.
  */
 export function allowedRepo(remote: string, allowed: readonly string[], denied: readonly string[] = []): string | null {
-  const slug = githubSlug(remote)?.toLowerCase();
-  if (!slug) return null;
-  if (denied.some((d) => d.toLowerCase() === slug.split('/')[0])) return null;
-  return allowed.find((r) => r.toLowerCase() === slug) ?? null;
+  const slug = githubSlug(remote);
+  if (!slug || refused(slug, denied)) return null;
+  const listed = allowed.find((r) => r.toLowerCase() === slug.toLowerCase());
+  if (listed) return listed;
+  return allowed.some((r) => r.endsWith('/*') && ownerOf(r) === ownerOf(slug)) ? slug : null;
 }
 
 /** "Owner/name" of a GitHub remote, as written there, or null for another host. */
@@ -32,16 +40,45 @@ export function githubSlug(remote: string): string | null {
   return m ? `${m[1]}/${m[2]}` : null;
 }
 
-/** The listed repos as the server's list holds them: valid, of no refused owner, one each. */
-export function serverList(allowed: readonly string[], denied: readonly string[]): string[] {
+/** The owners the user listed as "owner/*". */
+export const ownersOf = (allowed: readonly string[]): string[] => allowed.filter((r) => isAllowEntry(r) && r.endsWith('/*')).map((r) => r.slice(0, -2));
+
+/**
+ * The listed repos as the server's list holds them: valid, of no refused owner, one each. "owner/*" stands for the
+ * repos of `available` (what GitHub gives the user's token) of that owner.
+ */
+export function serverList(allowed: readonly string[], denied: readonly string[], available: readonly string[] = []): string[] {
+  const owners = new Set(ownersOf(allowed).map((o) => o.toLowerCase()));
   const names = new Set<string>();
   // One clone per name on the server (~/repos/<name>): a second repo of the same name under another owner is left out.
-  return allowed.filter((s) => {
+  return [...allowed, ...available.filter((s) => owners.has(ownerOf(s)))].filter((s) => {
     const name = s.split('/')[1]?.toLowerCase() ?? '';
-    if (!isSlug(s) || denied.some((d) => d.toLowerCase() === s.split('/')[0].toLowerCase()) || names.has(name)) return false;
+    if (!isSlug(s) || refused(s, denied) || names.has(name)) return false;
     names.add(name);
     return true;
   });
+}
+
+/**
+ * Whether the server holds an allowed repo: listed by name, or, under "owner/*", cloned there by the last setup run
+ * (its clone linked to a checkout of this PC, under the very name the server gave it). A repo made since, archived,
+ * or whose name another repo took there, is not.
+ */
+export const onServer = (slug: string, allowed: readonly string[], repos: Record<string, string>): boolean =>
+  allowed.some((r) => r.toLowerCase() === slug.toLowerCase()) || Object.values(repos).includes(remoteClone(slug));
+
+/**
+ * Each local checkout whose origin is a listed repo ready on the server → that repo's clone there. The server's
+ * spelling of the name wins: its clone is ~/repos/<name>, whatever case this PC's remote has.
+ */
+export function cloneMap(dirs: readonly string[], originOf: (dir: string) => string, allowed: readonly string[], denied: readonly string[], ready: readonly string[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const dir of dirs) {
+    const slug = allowedRepo(originOf(dir), allowed, denied)?.toLowerCase();
+    const there = ready.find((r) => r.toLowerCase() === slug);
+    if (there) map[dir] = remoteClone(there);
+  }
+  return map;
 }
 
 /** The server's clone of a listed repo. */

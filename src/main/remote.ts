@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { SessionStore, SessionStoreEntry, SpawnedProcess, SpawnOptions } from '@anthropic-ai/claude-agent-sdk';
 import type { RemoteWorkers } from '../shared/types';
-import { isBranch, isOwner, isSlug, isTopic, ntfyUrl, parseRunner, parseStatus, REMOTE_MAX_DEFAULT, REMOTE_REPOS, SESSION_ID, type RunnerStatus, type ServerStatus } from '../shared/vps';
+import { isAllowEntry, isBranch, isOwner, isTopic, ntfyUrl, parseRunner, parseStatus, REMOTE_MAX_DEFAULT, REMOTE_REPOS, SESSION_ID, type RunnerStatus, type ServerStatus } from '../shared/vps';
 
 /**
  * Workers on the remote server (experimental). The hub runs `ssh` instead of Claude Code: on the server, its key only
@@ -58,7 +58,7 @@ export function parseRemote(raw: unknown): RemoteWorkers {
     key: typeof o.key === 'string' ? o.key : '',
     knownHosts: typeof o.knownHosts === 'string' ? o.knownHosts : '',
     repos,
-    allowed: (Array.isArray(o.allowed) ? o.allowed : []).filter(isSlug).slice(0, 50),
+    allowed: (Array.isArray(o.allowed) ? o.allowed : []).filter(isAllowEntry).slice(0, 50),
     denied: (Array.isArray(o.denied) ? o.denied : []).filter(isOwner).slice(0, 50),
     orgs: (Array.isArray(o.orgs) ? o.orgs : []).filter(isOwner).slice(0, 20),
     app: (() => {

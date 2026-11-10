@@ -133,7 +133,7 @@ import type {
 import { notifyOf, remoteCwdOf, remoteHead, remotePrepare, remoteRunner, remoteStop, remoteTree, RUNNER_DOWN, sendNtfy, SERVER_STOPPING, SSH_FAILED, type RemoteExit } from './remote';
 import { commitsSince, pullBack, pushedState } from './awayGit';
 import { awayBrief, backNote, resumeNote, saveRequest, type RepoReturn } from '../shared/away';
-import { accessOf, allowedRepo, callOf, leaseConflict, scopeOf, type Lease } from '../shared/vps';
+import { accessOf, allowedRepo, callOf, leaseConflict, onServer, scopeOf, type Lease } from '../shared/vps';
 
 interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote'> {
   sessionId: string;
@@ -1977,9 +1977,9 @@ export class SessionManager extends EventEmitter {
     const account = s.runAccount || this.accountOf(s);
     if (harnessOf(this.kindOf(account)) !== 'claude' || this.kindOf(account) === 'openai') return t('remote.why.provider');
     const repo = repoOf(s.cwd);
-    const { allowed, denied, orgs, app } = this.opts.cfg.remoteWorkers;
+    const { allowed, denied, orgs, app, repos } = this.opts.cfg.remoteWorkers;
     const slug = repo ? allowedRepo(remoteOfRepo(repo.checkout), allowed, denied) : null;
-    if (!slug) return t('away.why.repo');
+    if (!slug || !onServer(slug, allowed, repos)) return t('away.why.repo');
     // An organisation's repo goes there only with its GitHub App set up.
     if (scopeOf(slug, orgs) === 'org' && app.org.toLowerCase() !== slug.split('/')[0].toLowerCase()) return t('remote.why.org');
     return null;

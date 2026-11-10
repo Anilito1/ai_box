@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   allowedRepo,
+  cloneMap,
+  isAllowEntry,
+  onServer,
+  ownersOf,
   cleanLoginCode,
   fingerprintOf,
   isBranch,
@@ -45,6 +49,54 @@ test('only the repos the user listed may go on the server, never one of an owner
   assert.equal(remoteClone('octo/site'), '/home/aibox/repos/site');
   assert.equal(scopeOf('ACME-corp/x', ['acme-corp']), 'org');
   assert.equal(scopeOf('octo/x', ['acme-corp']), 'personal');
+});
+
+
+test('"owner/*" lists every repo of that owner, and a refused owner stays refused, even listed by name or by joker', () => {
+  const allowed = ['octo/*', 'acme-corp/*', 'acme-corp/site', 'friend/lib'];
+  const denied = ['ACME-corp'];
+  assert.equal(allowedRepo('github.com/octo/site', allowed, denied), 'octo/site');
+  // As the remote writes it: the server's spelling is set by cloneMap.
+  assert.equal(allowedRepo('git@github.com:Octo/Shop.git', allowed, denied), 'Octo/Shop');
+  assert.equal(allowedRepo('github.com/acme-corp/site', allowed, denied), null);
+  assert.equal(allowedRepo('github.com/acme-corp/crm', allowed, denied), null);
+  assert.equal(allowedRepo('github.com/friend/lib', allowed, denied), 'friend/lib');
+  assert.equal(allowedRepo('github.com/friend/other', allowed, denied), null);
+  // "octo/*" is no owner "octo-x", nor a repo named "*".
+  assert.equal(allowedRepo('github.com/octo-x/site', allowed, denied), null);
+  assert.equal(allowedRepo('github.com/octo/*', allowed, denied), null);
+  assert.ok(isAllowEntry('octo/*') && isAllowEntry('octo/site'));
+  assert.ok(!isAllowEntry('*/*') && !isAllowEntry('octo/si*') && !isAllowEntry('octo/**') && !isAllowEntry('*'));
+  assert.deepEqual(ownersOf(allowed), ['octo', 'acme-corp']);
+  // The joker takes what GitHub gives the token, of its owners only; denied wins; one clone per name.
+  const available = ['octo/site', 'octo/shop', 'acme-corp/crm', 'friend/other', 'other/site', 'octo/lib'];
+  assert.deepEqual(serverList(allowed, denied, available), ['friend/lib', 'octo/site', 'octo/shop']);
+  assert.deepEqual(serverList(['octo/site'], [], available), ['octo/site']);
+  // A whole owner refused while listed by joker: nothing of it.
+  assert.deepEqual(serverList(['acme-corp/*'], ['acme-corp'], ['acme-corp/crm']), []);
+});
+
+test("each checkout of the PC goes to its repo's clone on the server, matched by its origin, not its folder", () => {
+  const origins: Record<string, string> = {
+    '/code/NFC': 'https://github.com/octo/NFC.git',
+    '/code/liz-site': 'git@github.com:octo/bleps-site.git',
+    '/code/bank': 'https://github.com/OCTO/compte-banque',
+    '/code/crm': 'https://github.com/acme-corp/crm.git',
+    '/code/notes': '',
+    '/code/new': 'https://github.com/octo/not-cloned.git',
+  };
+  const map = cloneMap(Object.keys(origins), (d) => origins[d], ['octo/*', 'acme-corp/crm'], ['acme-corp'], ['octo/NFC', 'octo/bleps-site', 'octo/compte-banque', 'acme-corp/crm']);
+  assert.deepEqual(map, {
+    '/code/NFC': '/home/aibox/repos/NFC',
+    '/code/liz-site': '/home/aibox/repos/bleps-site',
+    '/code/bank': '/home/aibox/repos/compte-banque',
+  });
+  // A worker steps away only to a repo the server holds: listed by name, or cloned there under "owner/*".
+  assert.ok(onServer('octo/NFC', ['octo/*'], map));
+  assert.ok(onServer('friend/lib', ['octo/*', 'friend/lib'], map));
+  assert.ok(!onServer('octo/not-cloned', ['octo/*'], map));
+  // Spelt otherwise on this PC than on the server: refused here, not by the server after the worker pushed.
+  assert.ok(!onServer('octo/nfc', ['octo/*'], map));
 });
 
 test('no list of repos in the code: the server reads root’s file, and the app and the launcher speak one version', () => {

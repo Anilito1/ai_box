@@ -21,7 +21,10 @@ dans le presse-papiers un message complet à coller à ton IA (le maître, ou Cl
 4. **GitHub** : « Créer le jeton sur GitHub » ouvre la page d'un jeton *fine-grained* déjà remplie (Contents, Pull
    requests, Workflows en écriture, Metadata en lecture, 90 jours) ; choisis tes repos (« Only select repositories »),
    colle le jeton, coche les repos que le serveur peut tenir. Le jeton reste dans le trousseau du PC ; le serveur ne le
-   reçoit qu'en mémoire, au lancement de chaque worker.
+   reçoit qu'en mémoire, au lancement de chaque worker. `propriétaire/*` dans « Repos que le serveur peut tenir » prend
+   tous les repos de ce propriétaire que GitHub donne au jeton (et ses repos publics), relus à chaque « Relancer » ; un
+   propriétaire refusé l'emporte toujours, même sur un repo nommé. Chaque dossier du PC est relié au clone du serveur par
+   l'URL de son `origin`, pas par son nom. Les clones neufs sont partiels (contenu des anciennes versions à la demande).
 5. **Réveil et veille** (facultatif) : identifiants du projet et de l'instance, puis « Créer la clé OVHcloud » ouvre
    la page `createToken` limitée à cette instance (lire, démarrer, arrêter, mettre en veille, réveiller). Ensuite
    « Le serveur s'éteint tout seul » : une **seconde** clé, qui ne sait que lire et mettre en veille cette instance,

@@ -1,18 +1,18 @@
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import type { HubConfig } from './config';
-import { remoteOf as originOf } from './repos';
+import { findRepos, remoteOf as originOf } from './repos';
 import { mainRepoPath } from './config';
 import type { Secrets } from './secrets';
 import type { RemoteServerControl, SessionManager } from './sessions';
 import { alwaysOn, askConsumerKey, ovhPower, switchOn, type PowerControl, type PowerState } from './power';
 import { parseRemote, remoteLatency, remoteStatus, sendNtfy } from './remote';
-import { newTopic, realExec, realTty, VpsWizard } from './vps';
+import { githubRepos, newTopic, realExec, realTty, VpsWizard } from './vps';
 import { execFile } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
 import { installationToken } from './githubApp';
 import { EnvSyncError, personalRepos, sshEnvExec, syncEnvironment } from './remote/envSync';
-import { githubSlug, isOwner, isPersonalGithubToken, isRemoteSecret, isSecretValue, isSlug, ntfyUrl, personalSecrets, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
+import { githubSlug, isAllowEntry, isOwner, isPersonalGithubToken, isRemoteSecret, isSecretValue, ntfyUrl, personalSecrets, REMOTE_SECRETS, scopeOf, type RemoteView, type SecretScope } from '../shared/vps';
 import type { AwayView } from '../shared/types';
 
 // The remote server as the app runs it: its setup (Settings › Remote server), its power (switched on before a move,
@@ -71,12 +71,13 @@ export class RemoteServer implements RemoteServerControl {
         this.o.save();
         this.start();
       },
-      mainRepos: () => this.o.cfg.mainRepos.map((p) => mainRepoPath(this.o.cfg, p)),
+      checkouts: () => [...new Set([...this.o.cfg.mainRepos.map((p) => mainRepoPath(this.o.cfg, p)), ...this.o.cfg.workspaces.flatMap((w) => findRepos(w).filter((r) => !r.worktreeOf).map((r) => r.path))])],
       originOf,
       token: () => {
         const gh = this.o.secrets.get('remote:personal:GH_TOKEN');
         return isPersonalGithubToken(gh) ? gh : '';
       },
+      githubRepos,
       status: remoteStatus,
       latency: remoteLatency,
       onChange: () => this.push(),
@@ -172,7 +173,7 @@ export class RemoteServer implements RemoteServerControl {
     }
     if (s.kind === 'repos') {
       const list = (v: unknown, ok: (x: unknown) => boolean) => (Array.isArray(v) ? [...new Set(v.filter(ok) as string[])].slice(0, 50) : []);
-      r.allowed = list(s.allowed, isSlug);
+      r.allowed = list(s.allowed, isAllowEntry);
       r.denied = list(s.denied, isOwner);
       r.orgs = list(s.orgs, isOwner);
     }

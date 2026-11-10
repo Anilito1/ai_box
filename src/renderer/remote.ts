@@ -1,4 +1,4 @@
-import { monthCost, OVH_HOURLY, REMOTE_SECRETS, VPS_STEPS, type RemoteView, type VpsStepId, type VpsStepState } from '../shared/vps';
+import { monthCost, ownersOf, OVH_HOURLY, REMOTE_SECRETS, VPS_STEPS, type RemoteView, type VpsStepId, type VpsStepState } from '../shared/vps';
 import type { AwayView, HubApi } from '../shared/types';
 import { copyButton, h, icon, ICONS, openMenu, techDetails } from './dom';
 import { t, type Key } from './i18n';
@@ -8,7 +8,7 @@ import { t, type Key } from './i18n';
 
 const DETAIL_KEYS = new Set([
   'target', 'no-ssh', 'keygen', 'acl', 'unreachable', 'fingerprint', 'hostChanged', 'pasteKey', 'noSudo', 'installed', 'done',
-  'workerKey', 'upload', 'setup', 'lockedOut', 'worker', 'launcherVersion', 'runner', 'noClaude', 'code', 'login', 'repos', 'noRepos', 'token', 'refused',
+  'workerKey', 'upload', 'setup', 'lockedOut', 'worker', 'launcherVersion', 'runner', 'noClaude', 'code', 'login', 'repos', 'noRepos', 'token', 'refused', 'githubList',
 ]);
 
 /** The fine-grained token page of GitHub, its name, lifetime and permissions filled in; the repos are the user's pick. */
@@ -284,12 +284,20 @@ export class RemoteSection {
     const f = this.field(t('remote.guide.github.repos'), t('remote.guide.github.repos.hint'));
     const picked = new Set(v.lists.allowed);
     const all = [...new Set([...v.lists.allowed, ...v.candidates])];
+    // Under an "owner/*" of the list: in already, unchecked only by changing the list.
+    const owners = new Set(ownersOf(v.lists.allowed).map((o) => o.toLowerCase()));
+    const denied = new Set(v.lists.denied.map((o) => o.toLowerCase()));
     if (all.length === 0) f.append(h('p', 'setup-hint', t('remote.guide.github.noRepo')));
     for (const slug of all) {
       const row = h('label', 'setup-toggle');
       const box = h('input');
       box.type = 'checkbox';
       box.checked = picked.has(slug);
+      const owner = slug.split('/')[0].toLowerCase();
+      if (!slug.endsWith('/*') && owners.has(owner) && !denied.has(owner)) {
+        box.checked = true;
+        box.disabled = true;
+      }
       box.addEventListener('change', () => {
         if (box.checked) picked.add(slug);
         else picked.delete(slug);

@@ -39,7 +39,8 @@ for slug in "$@"; do
   if [ -d "$dir/.git" ]; then
     git -C "$dir" remote set-url origin "$url"
     if out=$(GIT_TERMINAL_PROMPT=0 git -C "$dir" fetch --prune origin </dev/null 2>&1); then state=ready; else echo "fetch $slug: ${out##*$'\n'}"; fi
-  elif out=$(GIT_TERMINAL_PROMPT=0 git clone -q "$url" "$dir" </dev/null 2>&1); then
+  # Without the old files' contents (fetched when a checkout needs them): a large repo clones in seconds, history kept.
+  elif out=$(GIT_TERMINAL_PROMPT=0 git clone -q --filter=blob:none "$url" "$dir" </dev/null 2>&1); then
     state=ready
   else
     echo "clone $slug: ${out##*$'\n'}"

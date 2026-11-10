@@ -16,7 +16,7 @@ const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleEx
  * was "pasted" in GitHub.
  */
 function fakeServer() {
-  const srv = { keyPasted: false, installed: false, signedIn: false, tokenRepos: new Set<string>(), setups: 0, commands: [] as string[], inputs: [] as string[] };
+  const srv = { keyPasted: false, installed: false, signedIn: false, tokenRepos: new Set<string>(), setups: 0, commands: [] as string[], inputs: [] as string[], listed: [] as string[][] };
   const exec: Exec = async (cmd, args, o = {}) => {
     const tool = cmd.replace(/\\/g, '/').split('/').pop()?.replace(/\.exe$/, '');
     if (tool === 'ssh' && args[0] === '-V') return { code: 0, out: '', err: 'OpenSSH_9.5' };
@@ -92,13 +92,13 @@ function fakeServer() {
   return { srv, exec, status, tty };
 }
 
-function wizard() {
+function wizard(allowed = ['octo/site', 'octo/shop', 'acme-corp/crm']) {
   const home = mkdtempSync(join(tmpdir(), 'hub-vps-'));
   mkdirSync(join(home, '.ssh'));
   const scripts = mkdtempSync(join(tmpdir(), 'hub-vps-scripts-'));
   for (const f of ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh', 'runner.mjs', 'relay.mjs', 'power.mjs', 'power-key.sh']) writeFileSync(join(scripts, f), `# ${f}`);
   const fake = fakeServer();
-  let saved: RemoteWorkers = parseRemote({ allowed: ['octo/site', 'octo/shop', 'acme-corp/crm'], denied: ['acme-corp'] });
+  let saved: RemoteWorkers = parseRemote({ allowed, denied: ['acme-corp'] });
   let token = '';
   const states: VpsState[] = [];
   const w = new VpsWizard({
@@ -110,9 +110,13 @@ function wizard() {
     user: 'me',
     current: () => saved,
     save: (r) => (saved = parseRemote(r)),
-    mainRepos: () => ['C:\\code\\site', 'C:\\code\\other'],
+    checkouts: () => ['C:\\code\\site', 'C:\\code\\other'],
     originOf: (dir) => (dir.endsWith('site') ? 'github.com/octo/site' : 'github.com/acme-corp/crm'),
     token: () => token,
+    githubRepos: async (owners, t) => {
+      fake.srv.listed.push([owners.join(), t]);
+      return ['octo/site', 'octo/shop', 'acme-corp/crm'];
+    },
     status: fake.status,
     latency: async () => 31,
     onChange: (s) => states.push(s),
@@ -168,6 +172,27 @@ test('the setup goes from an address to a saved server, stopping where the user 
   assert.ok(r.key.endsWith('aibox_worker') && r.knownHosts.endsWith('aibox_known_hosts'));
   assert.deepEqual(Object.values(r.repos), ['/home/aibox/repos/site']);
   assert.match(r.ntfy, /^aibox-[a-z0-9]{24}$/);
+  assert.deepEqual(fake.srv.listed, []);
+});
+
+test('"owner/*": the server holds what GitHub gives the token of that owner, never a refused one', async () => {
+  const { w, fake, saved, setToken } = wizard(['octo/*', 'acme-corp/crm']);
+  let s = await w.run(target);
+  s = await w.trust(s.fingerprint);
+  fake.srv.keyPasted = true;
+  fake.srv.signedIn = true;
+  s = await w.run();
+  // No token: GitHub is not even asked.
+  assert.deepEqual([s.steps.repos.state, s.steps.repos.detail], ['wait', 'token']);
+  assert.deepEqual(fake.srv.listed, []);
+  setToken('github_pat_example_0123456789');
+  fake.srv.tokenRepos.add('octo/site').add('octo/shop');
+  s = await w.run();
+  assert.equal(s.steps.save.state, 'ok');
+  assert.deepEqual(fake.srv.listed, [['octo', 'github_pat_example_0123456789']]);
+  assert.deepEqual(s.repos.map((k) => k.slug), ['octo/site', 'octo/shop']);
+  assert.deepEqual(saved().allowed, ['octo/*', 'acme-corp/crm']);
+  assert.deepEqual(saved().repos, { 'C:\\code\\site': '/home/aibox/repos/site' });
 });
 
 test('a refused address never reaches ssh', async () => {

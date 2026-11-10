@@ -5,15 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RemoteWorkers } from '../shared/types';
 import {
-  allowedRepo,
   cleanLoginCode,
+  cloneMap,
   emptyState,
   fingerprintOf,
   LAUNCHER_VERSION,
   loginUrlOf,
+  ownersOf,
   parseRepos,
   parseTarget,
-  remoteClone,
   scopeOf,
   serverList,
   VPS_STEPS,
@@ -50,11 +50,13 @@ export interface WizardDeps {
   user: string;
   current(): RemoteWorkers;
   save(r: RemoteWorkers): void;
-  /** Main repos of the settings: the checkouts that may get a clone on the server. */
-  mainRepos(): string[];
+  /** The checkouts of this PC (main repos, and the repos found in the workspaces; no worktree): each may get a clone on the server. */
+  checkouts(): string[];
   originOf(dir: string): string;
   /** The user's own GitHub token for the server's clones (keychain), or ''. */
   token(): string;
+  /** The repos of these owners GitHub gives the token ("owner/name"), or null when it does not answer. */
+  githubRepos(owners: string[], token: string): Promise<string[] | null>;
   status(r: RemoteWorkers): Promise<ServerStatus | null>;
   latency(r: RemoteWorkers): Promise<number | null>;
   onChange(s: VpsState): void;
@@ -99,6 +101,8 @@ export function realTty(cmd: string, args: string[]): Tty {
 const WORKER_PUB = /^ssh-ed25519 [A-Za-z0-9+/=]+( [\w@.-]+)?$/;
 const SCRIPTS = ['setup.sh', 'launch.mjs', 'repos.sh', 'envsync.mjs', 'tools.sh', 'runner.mjs', 'relay.mjs', 'power.mjs', 'power-key.sh'] as const;
 const LOG_MAX = 300;
+/** Repos the server holds at most: repos.sh clones them one after the other, within the step's 30 minutes. */
+const REPOS_MAX = 100;
 
 export class VpsWizard {
   private s: VpsState = emptyState();
@@ -390,15 +394,20 @@ export class VpsWizard {
     const email = (await this.d.exec('git', ['config', '--global', 'user.email'])).out.trim();
     const q = (v: string, re: RegExp) => (re.test(v) ? v : '-');
     const { allowed, denied, orgs } = this.d.current();
-    const slugs = serverList(allowed, denied);
+    const owners = ownersOf(allowed);
+    const token = this.d.token();
+    if (!token && owners.some((o) => scopeOf(`${o}/*`, orgs) === 'personal')) return ['wait', 'token'];
+    // "owner/*": the repos GitHub gives the token now; one made later comes at the next run.
+    const available = owners.length > 0 ? await this.d.githubRepos(owners, token) : [];
+    if (!available) return ['fail', 'githubList'];
+    const slugs = serverList(allowed, denied, available).slice(0, REPOS_MAX);
     if (slugs.length === 0) return ['wait', 'noRepos'];
     const own = slugs.filter((s) => scopeOf(s, orgs) === 'personal');
-    const token = this.d.token();
     if (own.length > 0 && !token) return ['wait', 'token'];
     // The server's own list (root's file, read by the launcher and repos.sh): what the workers' key may touch.
     const list = `printf '%s\\n' ${slugs.join(' ')} | sudo tee /etc/aibox/repos >/dev/null`;
     const [cmd, args] = this.sshAs(this.adminKey, t.admin, t, `${list} && sudo -u aibox -H bash /opt/aibox/repos.sh '${q(name, /^[A-Za-z0-9 ._-]{1,80}$/)}' '${q(email, /^[A-Za-z0-9.+_-]+@[A-Za-z0-9.-]+$/)}' ${own.join(' ')}`);
-    const r = await this.d.exec(cmd, args, { input: `${token}\n`, timeoutMs: 10 * 60_000, onLine: (l) => this.log(l) });
+    const r = await this.d.exec(cmd, args, { input: `${token}\n`, timeoutMs: 30 * 60_000, onLine: (l) => this.log(l) });
     if (r.code !== 0) return ['fail', 'repos'];
     this.s.repos = parseRepos(r.out, own);
     return this.s.repos.every((k) => k.ready) ? ['ok', ''] : ['wait', 'refused'];
@@ -406,13 +415,9 @@ export class VpsWizard {
 
   /** Recorded in config.json: the server, its key, the clones of this PC's checkouts; turned on. */
   private async save(t: VpsTarget): Promise<[VpsState['steps']['save']['state'], string]> {
-    const ready = new Set(this.s.repos.filter((k) => k.ready).map((k) => k.slug));
+    const ready = this.s.repos.filter((k) => k.ready).map((k) => k.slug);
     const now = this.d.current();
-    const repos: Record<string, string> = {};
-    for (const dir of this.d.mainRepos()) {
-      const slug = allowedRepo(this.d.originOf(dir), now.allowed, now.denied);
-      if (slug && ready.has(slug)) repos[dir] = remoteClone(slug);
-    }
+    const repos = cloneMap(this.d.checkouts(), this.d.originOf, now.allowed, now.denied, ready);
     this.d.save({ ...this.workerConfig(t), enabled: true, repos, ntfy: now.ntfy || newTopic() });
     return ['ok', String(Object.keys(repos).length)];
   }
@@ -439,6 +444,31 @@ export class VpsWizard {
       this.d.onChange(this.state());
     }, 150);
   }
+}
+
+/**
+ * The repos of `owners` the user's token reaches (its own, those shared with it), and their public ones, which any
+ * token reads. Archived ones are left out: a worker could not push there.
+ */
+export async function githubRepos(owners: string[], token: string): Promise<string[] | null> {
+  const want = new Set(owners.map((o) => o.toLowerCase()));
+  const headers = { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: 'application/vnd.github+json', 'User-Agent': 'claude-hub' };
+  const urls = [...(token ? ['https://api.github.com/user/repos?affiliation=owner,collaborator'] : []), ...owners.map((o) => `https://api.github.com/users/${encodeURIComponent(o)}/repos?type=owner`)];
+  const out = new Set<string>();
+  try {
+    for (const url of urls) {
+      for (let page = 1; page <= 10; page++) {
+        const res = await fetch(`${url}&per_page=100&page=${page}`, { headers, signal: AbortSignal.timeout(20_000) });
+        if (!res.ok) return null;
+        const batch = (await res.json()) as { full_name?: unknown; archived?: unknown }[];
+        for (const r of batch) if (typeof r.full_name === 'string' && r.archived !== true && want.has(r.full_name.split('/')[0].toLowerCase())) out.add(r.full_name);
+        if (batch.length < 100) break;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return [...out];
 }
 
 /** A private, random ntfy topic: whoever knows it can read and post, so it is long and never shown elsewhere. */
