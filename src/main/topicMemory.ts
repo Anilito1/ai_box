@@ -9,7 +9,7 @@ export interface Decision { id: string; text: string; provenance: Provenance; at
 export interface TopicState {
   topic: string; objective: string; summary: string; decisions: Decision[]; constraints: string[];
   tasks: string[]; blockers: string[]; artifacts: string[]; nextStep: string;
-  version: number; summaryVersion: number; createdAt: number; updatedAt: number; provenance: Provenance;
+  version: number; summaryVersion: number; lastEvent: number; summaryEvent: number; createdAt: number; updatedAt: number; provenance: Provenance;
 }
 export interface MemoryLimits { warning: number; compact: number; hard: number; summaryTokens: number; packetTokens: number; recentMessages: number }
 const DEFAULTS: MemoryLimits = { warning: 8000, compact: 12000, hard: 16000, summaryTokens: 1600, packetTokens: 4000, recentMessages: 4 };
@@ -36,13 +36,14 @@ export class TopicMemory {
       this.db = new (load().DatabaseSync)(path);
       this.db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=2000;');
       const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
-      if (version > 1) throw new Error('Unsupported memory schema');
+      if (version > 2) throw new Error('Unsupported memory schema');
       this.db.exec(`BEGIN;
         CREATE TABLE IF NOT EXISTS states(topic TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(topic,version));
         CREATE TABLE IF NOT EXISTS messages(seq INTEGER PRIMARY KEY, topic TEXT NOT NULL, body TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS messages_topic ON messages(topic,seq);
         CREATE TABLE IF NOT EXISTS handoffs(topic TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(topic,version));
-        PRAGMA user_version=1; COMMIT;`);
+        CREATE TABLE IF NOT EXISTS events(topic TEXT PRIMARY KEY, seq INTEGER NOT NULL);
+        PRAGMA user_version=2; COMMIT;`);
       this.status = { mode: 'sqlite' };
     } catch {
       try { this.db?.close(); } catch { /* preserve original database */ }
@@ -60,6 +61,18 @@ export class TopicMemory {
     const row = this.database().prepare('SELECT body FROM states WHERE topic=? ORDER BY version DESC LIMIT 1').get(cleanId(topic));
     return row ? JSON.parse(String(row.body)) : null;
   }
+  /** A monotonic watermark, without storing the event's contents. */
+  lastEvent(topic: string): number {
+    return Number(this.database().prepare('SELECT seq FROM events WHERE topic=?').get(cleanId(topic))?.seq ?? 0);
+  }
+  trackEvent(topic: string): number {
+    this.database().prepare('INSERT INTO events(topic,seq) VALUES(?,1) ON CONFLICT(topic) DO UPDATE SET seq=seq+1').run(cleanId(topic));
+    return this.lastEvent(topic);
+  }
+  hasFreshSummary(topic: string): boolean {
+    const state = this.get(topic);
+    return !!state?.summary.trim() && state.summaryEvent !== undefined && state.summaryEvent === this.lastEvent(topic);
+  }
   history(topic: string, limit = 10): TopicState[] {
     return this.database().prepare('SELECT body FROM states WHERE topic=? ORDER BY version DESC LIMIT ?').all(cleanId(topic), Math.min(50, Math.max(1, limit))).map(r => JSON.parse(String(r.body)));
   }
@@ -76,7 +89,10 @@ export class TopicMemory {
   private writeState(topic: string, patch: Partial<TopicState>, provenance: Provenance, expectedVersion: number): TopicState {
     const old = this.get(topic), now = Date.now();
     if ((old?.version ?? 0) !== expectedVersion) throw new Error('Memory version conflict; retrieve latest state');
-    const state: TopicState = { objective: '', summary: '', decisions: [], constraints: [], tasks: [], blockers: [], artifacts: [], nextStep: '', summaryVersion: 0, createdAt: now, ...old, ...patch, topic, version: expectedVersion + 1, updatedAt: now, provenance };
+    // Writing a handoff covers the existing events; it is not itself new work to summarize.
+    const substantive = Object.keys(patch).some(key => key !== 'summary' && key !== 'summaryVersion');
+    const lastEvent = !old || substantive ? this.trackEvent(topic) : this.lastEvent(topic);
+    const state: TopicState = { summaryEvent: -1, objective: '', summary: '', decisions: [], constraints: [], tasks: [], blockers: [], artifacts: [], nextStep: '', summaryVersion: 0, createdAt: now, ...old, ...patch, topic, lastEvent, ...(patch.summary !== undefined ? { summaryEvent: lastEvent } : {}), version: expectedVersion + 1, updatedAt: now, provenance };
     if (estimateTokens(state.summary) > this.limits.summaryTokens) throw new Error('Summary exceeds budget; shorten explicitly');
     if (estimateTokens(state) > Math.min(this.limits.packetTokens, this.limits.compact) - 256) throw new Error('Structured state exceeds packet budget; resolve tasks or compact constraints (decisions retained)');
     this.database().prepare('INSERT INTO states VALUES(?,?,?)').run(topic, state.version, JSON.stringify(state));
@@ -105,14 +121,16 @@ export class TopicMemory {
       const body = JSON.stringify({ text, provenance, at: Date.now() });
       if (this.pressure(topic).tokens + estimateTokens(body) >= this.limits.hard) throw new Error('Context hard limit: compact before adding more memory');
       this.database().prepare('INSERT INTO messages(topic,body) VALUES(?,?)').run(topic, body);
+      this.trackEvent(topic);
       return this.pressure(topic);
     });
   }
-  compact(topic: string, summary: string, provenance: Provenance, expectedVersion: number): { state: TopicState; beforeTokens: number; afterTokens: number } {
+  compact(topic: string, summary: string, provenance: Provenance, expectedVersion: number, coveredEvent = this.lastEvent(topic)): { state: TopicState; beforeTokens: number; afterTokens: number } {
     check(summary, provenance); if (!summary.trim()) throw new Error('A useful handoff summary is required');
     return this.transaction(() => {
       const beforeTokens = this.pressure(topic).tokens, old = this.get(topic);
       if (!old) throw new Error('Unknown topic');
+      if (coveredEvent !== this.lastEvent(topic)) throw new Error('Memory event conflict; retrieve latest packet before summarizing');
       const state = this.writeState(topic, { summary, summaryVersion: old.summaryVersion + 1 }, provenance, expectedVersion);
       const db = this.database();
       db.prepare('INSERT INTO handoffs VALUES(?,?,?)').run(topic, state.summaryVersion, JSON.stringify({ state, beforeTokens, at: Date.now() }));
@@ -122,10 +140,14 @@ export class TopicMemory {
       return { state, beforeTokens, afterTokens: this.pressure(topic).tokens };
     });
   }
-  packet(topic: string): { state: TopicState; recent: unknown[]; estimatedTokens: number; truncated: boolean } {
-    const state = this.get(topic); if (!state) throw new Error('Unknown topic');
+  packet(topic: string): { state: TopicState; lastEvent: number; summary_stale: boolean; compaction_required: boolean; recent: unknown[]; estimatedTokens: number; truncated: boolean } {
+    const stored = this.get(topic); if (!stored) throw new Error('Unknown topic');
+    const lastEvent = this.lastEvent(topic);
+    const summaryStale = stored.summaryEvent === undefined || stored.summaryEvent !== lastEvent;
+    // Keep historical summaries on disk, but never present an outdated one as retrieved context.
+    const state = summaryStale ? { ...stored, summary: '' } : stored;
     const recent = this.database().prepare('SELECT body FROM messages WHERE topic=? ORDER BY seq DESC LIMIT ?').all(topic, this.limits.recentMessages).reverse().map(r => JSON.parse(String(r.body)));
-    const result = { state, recent, estimatedTokens: 0, truncated: false };
+    const result = { state, lastEvent, summary_stale: summaryStale, compaction_required: summaryStale, recent, estimatedTokens: 0, truncated: false };
     while (estimateTokens(result) > this.limits.packetTokens) {
       result.truncated = true;
       if (recent.length) recent.shift();

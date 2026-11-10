@@ -110,8 +110,10 @@ test('a replayed conversation: user and agent chunks join into messages, tools c
 });
 
 test('modes, the sign-in method, the prompt and the permission answer', () => {
-  assert.deepEqual(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk', 'bypassPermissions'].map((m) => acpMode(m as never, false)), ['default', 'autoEdit', 'plan', 'autoEdit', 'yolo', 'yolo']);
-  assert.equal(acpMode('bypassPermissions', true), 'plan', 'a read-only session never writes');
+  assert.deepEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].map((m) => acpMode(m as never, false)), ['default', 'autoEdit', 'plan', 'autoEdit', 'yolo']);
+  assert.throws(() => acpMode('dontAsk', false), /does not support.*dontAsk/);
+  assert.throws(() => acpMode('dontAsk', true), /does not support.*dontAsk/);
+  assert.equal(acpMode('bypassPermissions', true), 'plan', 'read-only requests use the provider plan mode');
   assert.equal(acpMode(null, false), 'default');
   assert.equal(authMethodOf({ GEMINI_API_KEY: 'k' }), 'gemini-api-key');
   assert.equal(authMethodOf({}), 'oauth-personal');

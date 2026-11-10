@@ -112,6 +112,32 @@ export async function makeTree(folder: string, post: string, topic: string): Pro
   };
 }
 
+/** Isolate every writable folder, reusing a worktree for folders from the same checkout. */
+export async function makeTrees(folders: string[], post: string, topic: string): Promise<{ primary: NewTree; extraDirs: string[]; trees: WorkTree[] }> {
+  const made = new Map<string, NewTree>(), dirs: string[] = [];
+  try {
+    for (const folder of folders) {
+      const where = repoOf(folder);
+      if (!where) throw new Error('Cannot isolate a writable folder outside a Git checkout');
+      const key = realPath(where.checkout).toLowerCase();
+      let tree = made.get(key);
+      if (!tree) {
+        tree = await makeTree(folder, post, topic);
+        made.set(key, tree);
+      }
+      const sub = relative(where.checkout, realPath(folder));
+      if (sub.startsWith('..')) throw new Error('Writable folder escapes its checkout');
+      dirs.push(sub ? join(tree.tree.path, sub) : tree.tree.path);
+    }
+    const primary = made.values().next().value;
+    if (!primary) throw new Error('No writable folder');
+    return { primary: { ...primary, cwd: dirs[0] }, extraDirs: dirs.slice(1), trees: [...made.values()].map(entry => entry.tree) };
+  } catch (error) {
+    for (const entry of made.values()) await retireTree(entry.tree, () => true);
+    throw error;
+  }
+}
+
 /** `git worktree list --porcelain -z`: each worktree's folder, branch and lock. */
 async function listTrees(repo: string): Promise<{ path: string; branch: string; locked: boolean; prunable: boolean }[]> {
   const out: { path: string; branch: string; locked: boolean; prunable: boolean }[] = [];

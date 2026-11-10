@@ -17,6 +17,7 @@ import type { Effort, Mode, RateLimits } from '../../../shared/types';
 import { limitsOfUsage } from '../../../shared/usage';
 import { remoteSpawner, remoteStore, remoteTranscript } from '../../remote';
 import { blocksOf } from '../blocks';
+import { policyOf, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy, type PolicySpec } from '../capabilities';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
 
@@ -25,8 +26,9 @@ const FULL_WINDOW = 1_000_000;
 
 
 /**
- * The tools a session may not use: the master edits nothing; a worker has no Workflow, except in Ultracode. A worker on
+ * The tools a session may not use: the master has no direct edit tools; a worker has no Workflow, except in Ultracode. A worker on
  * the remote server has no SendMessage (the peers are on this PC): the hub's send_message carries it, kept while away.
+ * This is a tool filter, not a read-only sandbox: Bash and MCP can still have side effects.
  */
 export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode'> & { remote?: unknown }): string[] {
   if (spec.role === 'master') return ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'];
@@ -46,16 +48,22 @@ export function launchSettings(spec: Pick<LaunchSpec, 'role' | 'ultracode'>): Se
 /** Claude Code, driven through the Agent SDK: streaming input, in-process MCP server for the hub's tools. */
 export class ClaudeProcess implements AgentProcess {
   readonly events: AsyncIterable<AgentEvent>;
+  readonly capabilities = PROVIDER_CAPABILITIES.claude;
+  private policyState: EffectivePolicy;
   private conversationId: string;
 
   constructor(
     private readonly q: Query,
     conversationId: string,
     private readonly onSignal: () => void,
+    private readonly policySpec: PolicySpec = { mode: null, readOnly: false, cwd: '', extraDirs: [], readDirs: [] },
   ) {
     this.conversationId = conversationId;
+    this.policyState = policyOf('claude', policySpec);
     this.events = this.stream();
   }
+
+  get policy(): EffectivePolicy { return this.policyState; }
 
   /** The id prompts are sent under: the one the process reported, else the one it was started with. */
   id(): string {
@@ -66,13 +74,18 @@ export class ClaudeProcess implements AgentProcess {
     for await (const msg of this.q) {
       // The CLI's heartbeat ticks every 30 s whatever the tool is doing: it says nothing about the work.
       if (msg.type !== 'tool_progress' || !msg.heartbeat) this.onSignal();
-      if (msg.type === 'system' && msg.subtype === 'init') this.conversationId = msg.session_id;
+      if (msg.type === 'system' && msg.subtype === 'init') {
+        this.conversationId = msg.session_id;
+        this.policyState = policyOf('claude', this.policySpec, msg.permissionMode);
+      }
       yield* translate(msg);
     }
   }
 
   async ready() {
     const init = await this.q.initializationResult();
+    // system/init is emitted at the start of a turn. Use a control acknowledgment before releasing the first prompt.
+    if (this.policyState.status === 'pending') await this.setMode(this.policySpec.mode ?? 'default');
     const models: AgentModel[] = init.models.map((m) => ({
       value: m.value,
       displayName: m.displayName,
@@ -89,7 +102,19 @@ export class ClaudeProcess implements AgentProcess {
   // An effortLevel sent alone to a session in Ultracode turns it off: both keys go together.
   setEffort = (effort: Effort, ultracode = false) => this.q.applyFlagSettings({ effortLevel: effort, ...(ultracode ? { ultracode: true } : {}) });
   setUltracode = (on: boolean) => this.q.applyFlagSettings({ ultracode: on });
-  setMode = (mode: Mode) => this.q.setPermissionMode(mode);
+  async setMode(mode: Mode): Promise<void> {
+    const previous = this.policyState;
+    const requested = policyOf('claude', { ...this.policySpec, mode });
+    this.policyState = { ...requested, effective: previous.effective };
+    try {
+      await this.q.setPermissionMode(mode);
+      this.policySpec.mode = mode;
+      this.policyState = policyOf('claude', this.policySpec, mode);
+    } catch (err) {
+      this.policyState = refusedPolicy(previous, requested.requested, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  }
 
   async context() {
     const usage = await this.q.getContextUsage({ detail: 'summary' });
@@ -189,7 +214,9 @@ export const claudeAdapter: ProviderAdapter = {
     };
     // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.
     if (spec.onSpawn) Object.assign(options, { onProcessSpawned: spec.onSpawn });
-    proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id, spec.onSignal);
+    proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id, spec.onSignal, {
+      mode: spec.mode, readOnly: spec.readOnly, cwd: spec.remote?.cwd ?? spec.cwd, extraDirs: spec.extraDirs, readDirs: spec.readDirs,
+    });
     return proc;
   },
 

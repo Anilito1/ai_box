@@ -190,16 +190,22 @@ export class CodexStream {
   private outputBase: number | null = null;
   private outputTotal: number | null = null;
   private readonly started = new Set<string>();
+  private readonly completed = new Set<string>();
   /** The file changes of the items in progress: an approval shows them. */
   readonly changes = new Map<string, Json>();
 
   constructor(private model: () => string) {}
 
+  /** Reset at dispatch as well: a terminal can arrive before turn/started. */
+  beginTurn(): void {
+    this.lastAnswer = '';
+    this.outputBase = this.outputTotal;
+  }
+
   handle(method: string, p: Json): AgentEvent[] {
     switch (method) {
       case 'turn/started':
-        this.lastAnswer = '';
-        this.outputBase = this.outputTotal;
+        this.beginTurn();
         return [{ type: 'stream', textStart: false, delta: '' }];
       case 'item/started':
         return this.itemStarted(obj(p.item));
@@ -262,7 +268,7 @@ export class CodexStream {
           {
             type: 'turn',
             subtype: status === 'completed' ? 'success' : status === 'interrupted' ? 'interrupted' : 'error_during_execution',
-            isError: failed,
+            isError: failed || (status !== 'completed' && status !== 'interrupted'),
             result: status === 'completed' ? this.lastAnswer : '',
             queued: null,
             contextWindows: this.contextSize > 0 ? [this.contextSize] : [],
@@ -289,6 +295,8 @@ export class CodexStream {
 
   private itemCompleted(item: Json): AgentEvent[] {
     const id = str(item.id);
+    if (id && this.completed.has(id)) return [];
+    if (id) this.completed.add(id);
     switch (item.type) {
       case 'agentMessage': {
         const text = str(item.text);

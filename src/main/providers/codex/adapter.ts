@@ -1,6 +1,8 @@
 import type { Totals } from '../../../shared/costs';
 import { EFFORTS, type Effort, type Mode, type RateLimits } from '../../../shared/types';
 import type { Block } from '../blocks';
+import { policyOf as requestedPolicy, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy } from '../capabilities';
+import { OperationLifecycle, type Operation, type OperationTerminal } from '../lifecycle';
 import { EventQueue } from '../queue';
 import type { AdapterContext, AgentEvent, AgentInput, AgentModel, AgentProcess, LaunchSpec, ProviderAdapter } from '../types';
 import { CodexClient, RpcError, type ServerRequest } from './client';
@@ -104,7 +106,9 @@ const textOfContent = (content: string | Block[]): string =>
 
 const tail = (text: string) => text.trim().split('\n').slice(-3).join(' ').slice(0, 400);
 
-class CodexProcess implements AgentProcess {
+export class CodexProcess implements AgentProcess {
+  readonly capabilities = PROVIDER_CAPABILITIES.codex;
+  private policyState: EffectivePolicy;
   private readonly queue = new EventQueue<AgentEvent>();
   readonly events: AsyncIterable<AgentEvent> = this.queue;
   private readonly client: CodexClient;
@@ -115,41 +119,78 @@ class CodexProcess implements AgentProcess {
   private model = '';
   private effort: Effort | null;
   private mode: Mode | null;
-  private turnId: string | null = null;
-  private starting = false;
+  private readonly lifecycle = new OperationLifecycle();
+  private readonly started = new WeakSet<Operation>();
+  private readonly interruptSent = new WeakSet<Operation>();
+  private readonly abort = new AbortController();
+  private compactTimer: ReturnType<typeof setTimeout> | null = null;
   private pending: AgentInput[] = [];
   private closed = false;
   private readonly asks = new Map<string | number, AbortController>();
   /** The folders a session may write: its own, and the ones its post adds. */
   private readonly roots: string[];
 
-  constructor(private readonly spec: LaunchSpec) {
+  constructor(private readonly spec: LaunchSpec, client?: CodexClient, private readonly compactTimeoutMs = 120_000) {
+    this.policyState = requestedPolicy('codex', spec);
     this.effort = spec.effort;
     this.mode = spec.mode;
     this.model = spec.model;
     this.roots = [spec.cwd, ...spec.extraDirs];
     this.stream = new CodexStream(() => this.model);
-    this.client = new CodexClient({ executable: spec.executable || 'codex', env: { ...spec.env, ...(spec.mcp ? { HUB_MCP_TOKEN: spec.mcp.token } : {}) }, cwd: spec.cwd, version: HUB_VERSION, onSpawn: spec.onSpawn });
+    this.client = client ?? new CodexClient({ executable: spec.executable || 'codex', env: { ...spec.env, ...(spec.mcp ? { HUB_MCP_TOKEN: spec.mcp.token } : {}) }, cwd: spec.cwd, version: HUB_VERSION, onSpawn: spec.onSpawn });
     this.readyP = this.run();
     // The failure reaches the manager through the event stream; nobody awaiting ready() must see it unhandled.
     this.readyP.catch(() => undefined);
   }
 
   ready = () => this.readyP;
+  get policy(): EffectivePolicy { return this.policyState; }
+
+  private acknowledgePolicy(response: Json): void {
+    const expected = policyOf(this.mode, this.spec.readOnly);
+    const sandbox = obj(response.sandbox);
+    const wanted = sandboxPolicy(expected.sandbox, this.roots);
+    const roots = Array.isArray(sandbox.writableRoots) && sandbox.writableRoots.every(root => typeof root === 'string') ? sandbox.writableRoots as string[] : [];
+    // The cwd is implicit in Codex's workspace sandbox; explicit roots may not broaden that workspace.
+    const sameRoots = expected.sandbox !== 'workspace-write' ||
+      (roots.every(root => this.roots.includes(root)) && this.spec.extraDirs.every(root => roots.includes(root)));
+    if (response.approvalPolicy !== expected.approvalPolicy || response.approvalsReviewer !== expected.reviewer ||
+        sandbox.type !== wanted.type || (expected.sandbox !== 'danger-full-access' && sandbox.networkAccess === true) || !sameRoots) {
+      throw new Error('Codex did not acknowledge the requested approval and sandbox policy.');
+    }
+    this.policyState = {
+      requested: requestedPolicy('codex', { ...this.spec, mode: this.mode }).requested,
+      effective: {
+        mode: this.mode ?? 'default', write: expected.sandbox === 'danger-full-access' ? 'unrestricted' : 'provider-sandbox',
+        network: expected.sandbox === 'danger-full-access' ? 'unrestricted' : 'restricted',
+        roots: expected.sandbox === 'workspace-write' ? [...new Set([this.spec.cwd, ...roots])] : null,
+        approvals: 'provider-controlled', sandbox: expected.sandbox, approvalPolicy: expected.approvalPolicy, reviewer: expected.reviewer,
+      },
+      status: 'applied',
+      limitations: ['Sandbox controls apply to Codex tools; external MCP servers are not isolated by this adapter.',
+        ...(expected.sandbox === 'workspace-write' ? ['Codex may also write temporary directories allowed by its sandbox.'] : [])],
+    };
+  }
 
   private async run(): Promise<{ models: AgentModel[]; commands: [] }> {
     const { client } = this;
     client.onNotification = (method, params) => this.onNotification(method, params);
     client.onRequest = (req) => this.onRequest(req);
     client.onExit = (info) => {
-      if (info.closed) this.queue.close();
-      else this.queue.fail(new Error(`codex exited${info.code !== null ? ` (${info.code})` : ''}: ${tail(info.stderr)}`));
+      if (this.closed) return;
+      const message = `codex exited${info.code !== null ? ` (${info.code})` : ''}: ${tail(info.stderr)}`;
+      if (this.lifecycle.active) this.failActive(message, true);
+      else this.queue.fail(new Error(message));
+      this.close();
     };
     try {
       await client.start();
+      if (this.closed) throw new Error('codex process closed');
       const listed = await client.request('model/list', {}).catch(() => ({}));
       this.models = modelsOf(obj(listed));
       const opened = obj(await this.openThread());
+      if (this.closed) throw new Error('codex process closed');
+      this.acknowledgePolicy(opened);
       this.threadId = str(obj(opened.thread).id);
       this.model = str(opened.model) || this.model;
       const effort = str(opened.reasoningEffort);
@@ -163,8 +204,9 @@ class CodexProcess implements AgentProcess {
       void this.pump();
       return { models: this.models, commands: [] };
     } catch (err) {
-      this.queue.fail(err);
-      client.close();
+      this.policyState = refusedPolicy(this.policyState, this.policyState.requested, err instanceof Error ? err.message : String(err));
+      if (!this.closed) this.queue.fail(err);
+      this.close();
       throw err;
     }
   }
@@ -183,10 +225,11 @@ class CodexProcess implements AgentProcess {
           }
         : {}),
       ...(extraDirs.length > 0 ? { 'sandbox_workspace_write.writable_roots': extraDirs } : {}),
+      'sandbox_workspace_write.network_access': false,
     };
   }
 
-  private openThread(): Promise<unknown> {
+  private openThread(resume = this.spec.conversation.resume): Promise<unknown> {
     const { spec } = this;
     const policy = policyOf(this.mode, spec.readOnly);
     const params: Json = {
@@ -198,8 +241,8 @@ class CodexProcess implements AgentProcess {
       developerInstructions: spec.instructions,
       config: this.threadConfig(),
     };
-    return spec.conversation.resume
-      ? this.client.request('thread/resume', { threadId: spec.conversation.id, ...params })
+    return resume
+      ? this.client.request('thread/resume', { threadId: this.threadId || spec.conversation.id, ...params })
       : this.client.request('thread/start', { ...params, serviceName: 'claude_hub' });
   }
 
@@ -208,26 +251,23 @@ class CodexProcess implements AgentProcess {
     try {
       for await (const input of this.spec.input) await this.deliver(input);
     } catch (err) {
-      this.queue.fail(err);
+      if (this.lifecycle.active) this.failActive(err instanceof Error ? err.message : String(err), true);
+      else this.queue.fail(err);
     }
     this.close();
   }
 
   private async deliver(input: AgentInput): Promise<void> {
+    if (this.closed) return;
+    const op = this.lifecycle.active;
     const text = textOfContent(input.content);
-    if (/^\/compact\b/.test(text.trim()) && !this.turnId) {
-      this.queue.push({ type: 'promptTaken', text });
-      this.queue.push({ type: 'compacting', on: true });
-      await this.client.request('thread/compact/start', { threadId: this.threadId }).catch(() => undefined);
-      return;
-    }
-    if (this.turnId) {
+    if (op?.kind === 'turn' && op.turnId && !op.interrupted && !/^\/compact\b/.test(text.trim())) {
       try {
-        await this.client.request('turn/steer', { threadId: this.threadId, expectedTurnId: this.turnId, input: userInputOf(input.content) });
-        this.queue.push({ type: 'promptTaken', text });
+        await this.client.request('turn/steer', { threadId: this.threadId, expectedTurnId: op.turnId, input: userInputOf(input.content) }, { signal: this.abort.signal });
+        if (!this.closed) this.queue.push({ type: 'promptTaken', text });
         return;
       } catch (err) {
-        // The turn is not open to new input (or just ended): this one waits for the next.
+        // A provider refusal means this input can wait for the next turn. Transport failure is not a refusal.
         if (!(err instanceof RpcError)) throw err;
       }
     }
@@ -236,31 +276,59 @@ class CodexProcess implements AgentProcess {
   }
 
   private async startNext(): Promise<void> {
-    if (this.starting || this.turnId || this.pending.length === 0) return;
-    this.starting = true;
+    if (this.closed || this.lifecycle.active || this.pending.length === 0) return;
     const input = this.pending.shift() as AgentInput;
-    try {
-      const res = obj(
-        await this.client.request(
-          'turn/start',
-          turnStartParams({
-            threadId: this.threadId,
-            input: input.content,
-            cwd: this.spec.cwd,
-            model: this.model,
-            effort: this.effort,
-            efforts: this.effortsOf(this.model),
-            mode: this.mode,
-            readOnly: this.spec.readOnly,
-            roots: this.roots,
-          }),
-        ),
-      );
-      this.turnId = str(obj(res.turn).id) || 'turn';
-      this.queue.push({ type: 'promptTaken', text: textOfContent(input.content) });
-    } finally {
-      this.starting = false;
+    const text = textOfContent(input.content);
+    const op = this.lifecycle.begin(/^\/compact\b/.test(text.trim()) ? 'compact' : 'turn');
+    this.stream.beginTurn();
+    // Acceptance precedes the first possible server notification, including a terminal one.
+    this.queue.push({ type: 'promptTaken', text });
+    if (op.kind === 'compact') {
+      this.queue.push({ type: 'compacting', on: true });
+      this.compactTimer = setTimeout(() => {
+        if (this.lifecycle.owns(op)) this.failActive('codex compaction timed out', true);
+      }, this.compactTimeoutMs);
     }
+    try {
+      const res = obj(await this.client.request(
+        op.kind === 'compact' ? 'thread/compact/start' : 'turn/start',
+        op.kind === 'compact' ? { threadId: this.threadId } : turnStartParams({
+          threadId: this.threadId, input: input.content, cwd: this.spec.cwd, model: this.model,
+          effort: this.effort, efforts: this.effortsOf(this.model), mode: this.mode,
+          readOnly: this.spec.readOnly, roots: this.roots,
+        }),
+        { signal: this.abort.signal },
+      ));
+      // A turn can complete before turn/start replies. Never resurrect it from that late response.
+      if (!this.lifecycle.owns(op)) return;
+      const id = str(obj(res.turn).id);
+      if (id) this.lifecycle.bind(op, id);
+      if (op.interrupted && op.turnId) await this.interruptOperation(op);
+    } catch (err) {
+      if (this.lifecycle.owns(op)) this.failActive(err instanceof Error ? err.message : String(err), !(err instanceof RpcError));
+    }
+  }
+
+  private terminal(op: Operation, terminal: OperationTerminal, event?: AgentEvent, advance = true): void {
+    if (!this.lifecycle.finish(op, terminal)) return;
+    if (this.compactTimer) clearTimeout(this.compactTimer);
+    this.compactTimer = null;
+    if (op.kind === 'compact') this.queue.push({ type: 'compacting', on: false });
+    for (const a of this.asks.values()) a.abort();
+    this.queue.push(event ?? {
+      type: 'turn', subtype: terminal === 'failed' ? 'error_during_execution' : terminal, isError: terminal === 'failed',
+      result: '', queued: this.pending.length, contextWindows: this.stream.contextSize ? [this.stream.contextSize] : [], usage: this.stream.usage,
+    });
+    // Keep the old operation's terminal ahead of the next prompt's acceptance.
+    if (advance) void this.startNext().catch((err) => this.queue.fail(err));
+  }
+
+  private failActive(message: string, stop = false): void {
+    const op = this.lifecycle.active;
+    if (!op) return;
+    this.queue.push({ type: 'assistant', id: `codex-error-${op.generation}-${op.opId}`, blocks: [{ type: 'text', text: message }], error: 'server_error', contextTokens: 0 });
+    this.terminal(op, 'failed', undefined, !stop);
+    if (stop) this.close();
   }
 
   private effortsOf(model: string): string[] {
@@ -268,27 +336,49 @@ class CodexProcess implements AgentProcess {
   }
 
   private onNotification(method: string, params: Json): void {
+    if (this.closed) return;
+    const threadId = str(params.threadId);
+    if (threadId && this.threadId && threadId !== this.threadId) return;
+    const op = this.lifecycle.active;
+    const turnId = str(params.turnId) || str(obj(params.turn).id);
+    // Ignore replayed/stale turns before touching the stream's answer or usage state.
+    if (turnId && !this.lifecycle.matches(turnId)) return;
+    if ((method.startsWith('turn/') || method.startsWith('item/') || method === 'thread/compacted') && !op) return;
+    if (method === 'turn/completed' && !turnId) return;
+    if (method === 'turn/started' && op) {
+      if (this.started.has(op)) return;
+      this.started.add(op);
+      if (op.interrupted) void this.interruptOperation(op);
+    }
     this.spec.onSignal();
     if (method === 'serverRequest/resolved') {
       this.asks.get(params.requestId as string | number)?.abort();
       return;
     }
     const events = this.stream.handle(method, params);
-    if (method === 'turn/completed') {
-      this.turnId = null;
-      for (const a of this.asks.values()) a.abort();
-      for (const e of events) {
-        if (e.type === 'turn') e.queued = this.pending.length;
-      }
+    if (method === 'turn/completed' && op) {
+      const turn = events.find((e) => e.type === 'turn');
+      if (turn?.type !== 'turn') return;
+      turn.queued = this.pending.length;
+      const status = str(obj(params.turn).status);
+      this.terminal(op, status === 'completed' ? 'success' : status === 'interrupted' ? 'interrupted' : 'failed', turn);
+      return;
     }
     for (const e of events) this.queue.push(e);
-    if (method === 'turn/completed') void this.startNext().catch((err) => this.queue.fail(err));
+    if (op?.kind === 'compact' && (method === 'thread/compacted' || (method === 'item/completed' && obj(params.item).type === 'contextCompaction'))) {
+      this.terminal(op, 'success');
+    } else if (op && method === 'error' && params.willRetry !== true) {
+      this.terminal(op, 'failed');
+    }
   }
 
   // ---------- requests of the server: approvals ----------
 
   private async onRequest(req: ServerRequest): Promise<unknown> {
+    if (this.closed) throw new RpcError('codex process is closed', -32600);
     const p = req.params;
+    const turnId = str(p.turnId);
+    if (turnId && !this.lifecycle.matches(turnId)) throw new RpcError('stale turn request', -32600);
     switch (req.method) {
       case 'item/commandExecution/requestApproval': {
         const available = Array.isArray(p.availableDecisions) ? (p.availableDecisions as unknown[]) : [];
@@ -351,14 +441,37 @@ class CodexProcess implements AgentProcess {
   // ---------- control ----------
 
   async interrupt(): Promise<void> {
-    if (!this.turnId || !this.threadId) return;
-    await this.client.request('turn/interrupt', { threadId: this.threadId, turnId: this.turnId });
+    const op = this.lifecycle.active;
+    if (!op || this.closed) return;
+    op.interrupted = true;
+    // Compaction has no cancellable turn id on some server versions; ending this process cancels it.
+    if (op.kind === 'compact' && !op.turnId) { this.close(); return; }
+    // turn/started or the start response will carry the id if start is still in flight.
+    if (op.turnId) await this.interruptOperation(op);
+  }
+
+  private async interruptOperation(op: Operation): Promise<void> {
+    if (!this.lifecycle.owns(op) || !op.turnId || this.interruptSent.has(op)) return;
+    this.interruptSent.add(op);
+    try {
+      await this.client.request('turn/interrupt', { threadId: this.threadId, turnId: op.turnId }, { signal: this.abort.signal });
+      // The acknowledgement is not the terminal: turn/completed decides success versus interruption.
+    } catch (err) {
+      if (this.lifecycle.owns(op)) this.failActive(err instanceof Error ? err.message : String(err), true);
+    }
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    const op = this.lifecycle.active;
+    if (op) this.terminal(op, 'interrupted');
+    this.lifecycle.invalidate();
+    if (this.compactTimer) clearTimeout(this.compactTimer);
+    this.compactTimer = null;
+    this.pending = [];
     for (const a of this.asks.values()) a.abort();
+    this.abort.abort();
     this.client.close();
     this.queue.close();
   }
@@ -377,7 +490,20 @@ class CodexProcess implements AgentProcess {
   }
 
   async setMode(mode: Mode): Promise<void> {
-    this.mode = mode;
+    await this.readyP;
+    const previous = this.policyState;
+    const oldMode = this.mode;
+    const requested = requestedPolicy('codex', { ...this.spec, mode });
+    this.policyState = { ...requested, effective: previous.effective };
+    try {
+      if (this.lifecycle.active) throw new Error('Codex permission mode can only change between turns.');
+      this.mode = mode;
+      this.acknowledgePolicy(obj(await this.openThread(true)));
+    } catch (err) {
+      this.mode = oldMode;
+      this.policyState = refusedPolicy(previous, requested.requested, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   async context() {
@@ -407,6 +533,11 @@ async function withServer<T>(ctx: AdapterContext, fn: (client: CodexClient) => P
   }
 }
 
+/** Generic invalid-request/auth/transport failures must preserve the stored conversation link. */
+export function isMissingThread(error: unknown): boolean {
+  return error instanceof RpcError && /\b(?:thread|conversation)(?:\s+(?:with\s+)?id)?(?:\s+["']?[\w-]+["']?)?\s+(?:not found|does not exist|was not found)\b|\bno rollout found for thread\b|\bthread_not_found\b/i.test(error.message);
+}
+
 export const codexAdapter: ProviderAdapter = {
   harness: 'codex',
 
@@ -417,8 +548,8 @@ export const codexAdapter: ProviderAdapter = {
       await withServer(ctx, (c) => c.request('thread/read', { threadId: id }));
       return true;
     } catch (err) {
-      // Refused for this thread: it is gone. Any other failure (the program, the network) keeps the link.
-      return !(err instanceof RpcError);
+      // Only explicit absence means it is gone. Permission, protocol and transport errors keep the link.
+      return !isMissingThread(err);
     }
   },
 

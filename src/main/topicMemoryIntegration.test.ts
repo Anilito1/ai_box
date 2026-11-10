@@ -74,3 +74,35 @@ test('SQLite unavailable leaves ordinary prompts unchanged', () => {
     assert.equal(manager.withTopicMemory(session, prompt), prompt);
   } finally { memory.close(); absent.close(); }
 });
+
+test('new activity after the last handoff prevents master renewal', () => {
+  const { memory, manager, session } = fixture();
+  try {
+    memory.trackEvent('a');
+    manager.withTopicMemory(session, { text: 'Next', topic: 'b' });
+    assert.equal(session.sessionId, 'old');
+    memory.compact('a', 'Covers the latest event', provenance, 1, memory.lastEvent('a'));
+    manager.memoryTopic = 'a';
+    manager.withTopicMemory(session, { text: 'Next', topic: 'b' });
+    assert.equal(session.sessionId, 'fresh');
+  } finally { memory.close(); }
+});
+
+test('a stale summary never reaches the prompt; structured state and recent messages remain available', () => {
+  const { memory, manager, session } = fixture();
+  try {
+    memory.update('a', { objective: 'CURRENT_OBJECTIVE' }, provenance, 1);
+    memory.remember('a', 'CURRENT_MESSAGE', provenance);
+    const prompt = manager.withTopicMemory(session, { text: 'Continue', images: [], topic: 'a' });
+    assert.doesNotMatch(prompt.text, /ANONYMIZED_A/);
+    assert.match(prompt.text, /CURRENT_OBJECTIVE/);
+    assert.match(prompt.text, /CURRENT_MESSAGE/);
+    assert.match(prompt.text, /"summary_stale":true/);
+    assert.match(prompt.text, /"compaction_required":true/);
+    assert.equal(memory.get('a')?.summary, 'ANONYMIZED_A', 'historical state is preserved');
+    memory.compact('a', 'CURRENT_SUMMARY', provenance, 2, memory.lastEvent('a'));
+    const fresh = manager.withTopicMemory(session, { text: 'Continue', images: [], topic: 'a' });
+    assert.match(fresh.text, /CURRENT_SUMMARY/);
+    assert.match(fresh.text, /"summary_stale":false/);
+  } finally { memory.close(); }
+});

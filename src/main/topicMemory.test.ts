@@ -66,3 +66,23 @@ test('missing database initialized, corrupt file preserved, missing SQLite expli
   const missing = new TopicMemory(':memory:', {}, () => { throw new Error('No SQLite'); });
   assert.equal(missing.status.mode, 'unavailable'); assert.throws(() => missing.update('a', {}, p, 0), /unavailable/);
 }));
+
+test('a handoff carries its covered event watermark and rejects compaction from a stale packet', () => fixture(path => {
+  let memory = new TopicMemory(path);
+  memory.update('a', { summary: 'Saved initial state' }, p, 0);
+  assert.equal(memory.hasFreshSummary('a'), true);
+  const packet = memory.packet('a');
+  memory.remember('a', 'NEW_EVENT_001', p);
+  assert.equal(memory.hasFreshSummary('a'), false);
+  assert.throws(() => memory.compact('a', 'Stale summary', p, 1, packet.lastEvent), /event conflict/);
+  const latest = memory.packet('a');
+  const result = memory.compact('a', 'Covers NEW_EVENT_001', p, 1, latest.lastEvent);
+  assert.equal(result.state.summaryEvent, latest.lastEvent);
+  assert.equal(result.state.summaryEvent, memory.lastEvent('a'));
+  assert.equal(memory.hasFreshSummary('a'), true);
+  memory.close(); memory = new TopicMemory(path);
+  assert.equal(memory.hasFreshSummary('a'), true);
+  memory.trackEvent('a');
+  assert.equal(memory.hasFreshSummary('a'), false);
+  memory.close();
+}));
