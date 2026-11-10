@@ -860,6 +860,7 @@ export interface GithubRepo {
 }
 
 export interface HubApi {
+  newsBot(action: import('./newsBot').NewsBotAction, config?: import('./newsBot').NewsBotConfig): Promise<import('./newsBot').NewsBotStatus>;
   onSnapshot(cb: (snapshot: HubSnapshot) => void): void;
   onItems(cb: (sessionId: string, items: ChatItem[], reset: boolean) => void): void;
   onPulse(cb: (pulses: [string, SessionPulse][]) => void): void;

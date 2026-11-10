@@ -1,5 +1,6 @@
 import type { ChatItem, HubApi, HubSnapshot, SessionView, UsageState } from '../shared/types';
 import './background';
+import { openNewsBot } from './newsBot';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
@@ -70,7 +71,10 @@ const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
 // "I'm stepping away": only once remote workers are on (the snapshot says so).
 const awayButton = new AwayButton(hub);
-headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, settingsButton);
+const newsBotButton = h('button', 'ph-settings', 'Gaming');
+newsBotButton.id = 'open-newsbot';
+newsBotButton.onclick = () => openNewsBot(hub);
+headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, newsBotButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 // The master's header is the window's top bar: it spans the open worker too, which opens under it.

@@ -1,5 +1,6 @@
 import { openLocalFile } from './localFiles';
 import './shellPath';
+import { NewsBotRuntime, registerNewsBotIpc } from './newsBot/runtime';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -277,6 +278,7 @@ const systemLang = (): Lang => ((app.getPreferredSystemLanguages()[0] ?? app.get
 
 class Hub {
   readonly dataDir = app.getPath('userData');
+  readonly newsBot = new NewsBotRuntime(join(this.dataDir, 'news-bot'));
   readonly cfg: HubConfig;
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
@@ -1071,6 +1073,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
     });
 
+    registerNewsBotIpc(handle, this.newsBot);
     handle('settings:get', () => this.view());
     handle('settings:save', (patch) => {
       const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
@@ -1358,6 +1361,7 @@ async function start(): Promise<void> {
     return;
   }
   const hub = new Hub();
+  app.once('will-quit', () => hub.newsBot.dispose());
   dictation = hub.dictation;
   await hub.init();
   hub.warmProviders();

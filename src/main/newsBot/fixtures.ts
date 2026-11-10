@@ -1,0 +1,6 @@
+export const fixtureFeeds: Record<string, string> = {
+  "nintendo": "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Fixture nintendo</title><item><guid>nintendo-001</guid><title>Jeu exemple : patch annoncé</title><link>https://nintendo.example.invalid/news/patch?utm_source=fixture</link><pubDate>Sun, 08 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>",
+  "steam": "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Fixture steam</title><entry><id>steam-001</id><title>Jeu exemple : patch annoncé</title><link rel=\"alternate\" href=\"https://steam.example.invalid/news/patch\"/><published>2026-11-08T10:00:00Z</published></entry></feed>",
+  "xbox": "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><title>Fixture xbox</title><entry><id>xbox-001</id><title>Jeu exemple : patch annoncé</title><link rel=\"alternate\" href=\"https://xbox.example.invalid/news/patch\"/><published>2026-11-08T10:00:00Z</published></entry></feed>",
+  "playstation": "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Fixture playstation</title><item><guid>playstation-001</guid><title>Jeu exemple : patch annoncé</title><link>https://playstation.example.invalid/news/patch?utm_source=fixture</link><pubDate>Sun, 08 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"
+};

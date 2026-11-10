@@ -7531,3 +7531,13 @@ input[type='radio']:focus-visible {
 .ph-away[hidden] {
   display: none;
 }
+
+.newsbot-dialog { width: min(760px, 90vw); max-height: 85vh; overflow: auto; background: #0B1426; color: #F3EFDF; padding: 24px; border: 1px solid #A5B3C7; border-radius: 12px; }
+.newsbot-dialog::backdrop { background: #0009; }
+.newsbot-dialog[open] { display: flex; flex-direction: column; }
+.newsbot-dialog pre { min-height: 0; max-height: 45vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.newsbot-dialog button { margin: 4px; padding: 8px; }
+
+
+.newsbot-schedule { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.newsbot-schedule input[type=number] { width: 90px; }

@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Une console Gaming permet de préparer et suivre des essais locaux d’actualité fictive, sans réseau ni publication.
 - Serveur distant : « propriétaire/* » dans la liste des repos y met tous tes repos d’un compte, et chaque dossier du PC retrouve son repo sur le serveur, même sous un autre nom.
 - Serveur distant (expérimental, désactivé par défaut) : un serveur à toi, loué chez un hébergeur, où tes workers continuent leur mission pendant que ton PC est éteint. Il est fait pour tes repos personnels.
 - Serveur distant : il s’installe depuis Réglages › Serveur distant › Installer, étape par étape (louer le serveur, coller la clé, se connecter, connecter Claude, donner accès à GitHub), chaque étape cochée ou avec son erreur en clair ; « Copier le prompt d’installation » permet de le faire avec ton IA.

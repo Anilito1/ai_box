@@ -6,6 +6,11 @@ import type { CliRun } from '../shared/cliUpdate';
 import type { UpdateState } from '../shared/update';
 
 const api: HubApi = {
+  newsBot: (action, config) => {
+    const channels = { state: 'newsbot:state', configure: 'newsbot:configure', start: 'newsbot:start', stop: 'newsbot:stop', 'dry-run': 'newsbot:dry-run' } as const;
+    if (!Object.hasOwn(channels, action)) return Promise.reject(new Error('Invalid news bot action'));
+    return ipcRenderer.invoke(channels[action], config);
+  },
   onSnapshot: (cb) => {
     ipcRenderer.on('hub:snapshot', (_e, snapshot: HubSnapshot) => cb(snapshot));
   },
