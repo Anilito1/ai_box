@@ -59,3 +59,53 @@ test('a new effort carries Ultracode along: alone, Claude Code would turn it off
   await proc.setEffort('high');
   assert.deepEqual(applied, [{ effortLevel: 'xhigh', ultracode: true }, { effortLevel: 'high' }]);
 });
+
+test('Claude reports the acknowledged mode and the limits of its read-only tool filter', async () => {
+  const q = (async function* () {
+    yield { type: 'system', subtype: 'init', session_id: 'conv', permissionMode: 'default', tools: [], mcp_servers: [], slash_commands: [], model: 'fixture' };
+  })() as unknown as Query;
+  const process = new ClaudeProcess(q, 'conv', () => {}, { mode: 'default', readOnly: true, cwd: '/tmp', extraDirs: [], readDirs: [] });
+  assert.equal(process.policy.status, 'pending');
+  for await (const _ of process.events);
+  assert.equal(process.policy.effective.mode, 'default');
+  assert.equal(process.policy.status, 'partial');
+  assert.equal(process.policy.effective.write, 'tool-filtered');
+  assert.equal(process.policy.effective.roots, null);
+  assert.match(process.policy.limitations.join(' '), /Bash, MCP/);
+  const denied = disallowedTools({ role: 'worker', readOnly: true, ultracode: false });
+  assert.ok(!denied.includes('Bash'), 'a tool filter must not be advertised as a Bash sandbox');
+});
+
+test('Claude keeps the old effective mode until acknowledgment and after a refusal', async () => {
+  let accept!: () => void;
+  const q = { setPermissionMode: () => new Promise<void>((resolve) => { accept = resolve; }) } as unknown as Query;
+  const process = new ClaudeProcess(q, 'conv', () => {});
+  const change = process.setMode('plan');
+  assert.equal(process.policy.status, 'pending');
+  assert.equal(process.policy.requested.mode, 'plan');
+  assert.equal(process.policy.effective.mode, null);
+  accept();
+  await change;
+  assert.equal(process.policy.effective.mode, 'plan');
+  q.setPermissionMode = async () => { throw new Error('mode refused'); };
+  await assert.rejects(process.setMode('bypassPermissions'), /mode refused/);
+  assert.equal(process.policy.status, 'refused');
+  assert.equal(process.policy.requested.mode, 'bypassPermissions');
+  assert.equal(process.policy.effective.mode, 'plan');
+});
+
+test('Claude readiness acknowledges the requested mode before the first user turn', async () => {
+  const applied: string[] = [];
+  const q = {
+    initializationResult: async () => ({ models: [], commands: [] }),
+    setPermissionMode: async (mode: string) => { applied.push(mode); },
+  } as unknown as Query;
+  const proc = new ClaudeProcess(q, 'conv', () => {}, { mode: 'plan', readOnly: false, cwd: '/tmp', extraDirs: [], readDirs: [] });
+  await proc.ready();
+  assert.deepEqual(applied, ['plan']);
+  assert.equal(proc.policy.status, 'applied');
+  q.setPermissionMode = async () => { throw new Error('not allowed'); };
+  const refused = new ClaudeProcess(q, 'conv', () => {});
+  await assert.rejects(refused.ready(), /not allowed/);
+  assert.equal(refused.policy.status, 'refused');
+});

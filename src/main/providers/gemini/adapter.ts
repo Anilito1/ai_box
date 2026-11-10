@@ -1,6 +1,8 @@
 import type { Totals } from '../../../shared/costs';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
 import type { Block } from '../blocks';
+import { policyOf, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy } from '../capabilities';
+import { OperationLifecycle } from '../lifecycle';
 import { EventQueue } from '../queue';
 import type { AgentEvent, AgentInput, AgentModel, AgentProcess, LaunchSpec, ProviderAdapter } from '../types';
 import { AcpClient, AcpError, type AcpRequest } from './acp';
@@ -17,6 +19,8 @@ const tail = (text: string) => text.trim().split('\n').slice(-3).join(' ').slice
 
 /** The hub's permission modes as the Gemini CLI's: what it asks about, and what it lets through. */
 export function acpMode(mode: Mode | null, readOnly: boolean): string {
+  // "Don't ask" denies unapproved actions. YOLO allows them: there is no equivalent ACP mode.
+  if (mode === 'dontAsk') throw new Error('Gemini ACP does not support the dontAsk permission policy; choose a supported mode.');
   if (readOnly) return 'plan';
   switch (mode ?? 'default') {
     case 'plan':
@@ -24,7 +28,6 @@ export function acpMode(mode: Mode | null, readOnly: boolean): string {
     case 'acceptEdits':
     case 'auto':
       return 'autoEdit';
-    case 'dontAsk':
     case 'bypassPermissions':
       return 'yolo';
     default:
@@ -74,7 +77,9 @@ export function pickOption(options: Json[], allow: boolean, always: boolean): st
   return chosen ? str(chosen.optionId) : null;
 }
 
-class GeminiProcess implements AgentProcess {
+export class GeminiProcess implements AgentProcess {
+  readonly capabilities = PROVIDER_CAPABILITIES.gemini;
+  private policyState: EffectivePolicy;
   private readonly queue = new EventQueue<AgentEvent>();
   readonly events: AsyncIterable<AgentEvent> = this.queue;
   private readonly client: AcpClient;
@@ -86,6 +91,7 @@ class GeminiProcess implements AgentProcess {
   private modelsList: AgentModel[] = [];
   private pending: AgentInput[] = [];
   private prompting = false;
+  private readonly lifecycle = new OperationLifecycle();
   private replaying = false;
   private fresh = true;
   private closed = false;
@@ -93,6 +99,7 @@ class GeminiProcess implements AgentProcess {
 
   constructor(private readonly spec: LaunchSpec) {
     this.mode = spec.mode;
+    this.policyState = policyOf('gemini', spec);
     this.model = spec.model;
     this.stream = new GeminiStream(() => this.model, spec.conversation.resume ? spec.initialUsage : undefined);
     this.client = new AcpClient({
@@ -108,6 +115,7 @@ class GeminiProcess implements AgentProcess {
   }
 
   ready = () => this.readyP;
+  get policy(): EffectivePolicy { return this.policyState; }
 
   private mcpServers(): Json[] {
     const { mcp } = this.spec;
@@ -119,11 +127,16 @@ class GeminiProcess implements AgentProcess {
     client.onNotification = (method, params) => this.onNotification(method, params);
     client.onRequest = (req) => this.onRequest(req);
     client.onExit = (info) => {
-      if (info.closed) this.queue.close();
-      else this.queue.fail(new Error(`gemini exited${info.code !== null ? ` (${info.code})` : ''}: ${tail(info.stderr)}`));
+      if (this.closed) return;
+      this.finishActive(info.closed ? 'interrupted' : 'failed');
+      if (!info.closed) this.queue.fail(new Error(`gemini exited${info.code !== null ? ` (${info.code})` : ''}: ${tail(info.stderr)}`));
+      this.close();
     };
     try {
+      // Validate before starting a process, authenticating, or delivering any user input.
+      const wanted = acpMode(this.mode, spec.readOnly);
       await client.start();
+      if (this.closed) throw new Error('gemini process closed');
       const method = authMethodOf(spec.env);
       // A Google sign-in that is not there would open a browser from a session nobody is watching: refused here.
       if (method === 'oauth-personal' && !googleSignIn(spec.env.GEMINI_CLI_HOME ?? '').signedIn) {
@@ -162,14 +175,20 @@ class GeminiProcess implements AgentProcess {
       }
       this.modelsList = modelsOfSession(session);
       const current = str(obj(session.models).currentModelId);
-      if (spec.model && this.modelsList.some((m) => m.value === spec.model)) await client.request('session/set_model', { sessionId: this.sessionId, modelId: spec.model }).catch(() => undefined);
-      this.model = spec.model && this.modelsList.some((m) => m.value === spec.model) ? spec.model : current || this.model;
-      const wanted = acpMode(this.mode, spec.readOnly);
-      if (wanted !== 'default') await client.request('session/set_mode', { sessionId: this.sessionId, modeId: wanted }).catch(() => undefined);
-      this.queue.push({ type: 'conversation', id: this.sessionId, mode: this.mode ?? 'default', effort: null, model: this.model });
+      if (spec.model) {
+        if (!this.modelsList.some((m) => m.value === spec.model) && current !== spec.model) throw new Error(`Gemini does not offer the requested model: ${spec.model}`);
+        await client.request('session/set_model', { sessionId: this.sessionId, modelId: spec.model });
+      }
+      this.model = spec.model || current;
+      // Also reset default on resume: the saved session may have been in YOLO mode.
+      await client.request('session/set_mode', { sessionId: this.sessionId, modeId: wanted });
+      if (this.closed) throw new Error('gemini process closed');
+      this.policyState = policyOf('gemini', spec, wanted);
+      this.queue.push({ type: 'conversation', id: this.sessionId, mode: spec.readOnly ? 'plan' : this.mode ?? 'default', effort: null, model: this.model });
       void this.pump();
       return { models: this.modelsList, commands: [] };
     } catch (err) {
+      this.policyState = refusedPolicy(this.policyState, this.policyState.requested, err instanceof Error ? err.message : String(err));
       this.queue.fail(err);
       client.close();
       throw err;
@@ -194,6 +213,7 @@ class GeminiProcess implements AgentProcess {
     const input = this.pending.shift();
     if (!input) return;
     this.prompting = true;
+    const op = this.lifecycle.begin('turn');
     this.queue.push({ type: 'promptTaken', text: textOfContent(input.content) });
     const parts = promptOf(input.content);
     // The CLI detects commands from the leading text before any non-text part. Keep their arguments intact.
@@ -209,10 +229,12 @@ class GeminiProcess implements AgentProcess {
     if (refresh) parts.unshift({ type: 'text', text: `${this.spec.instructions}\n\n---\n` });
     try {
       const response = obj(await this.client.request('session/prompt', { sessionId: this.sessionId, prompt: parts }));
+      if (!this.lifecycle.owns(op)) return;
       if (refresh) this.fresh = false;
+      this.lifecycle.finish(op, response.stopReason === 'cancelled' ? 'interrupted' : response.stopReason === 'refusal' ? 'failed' : 'success');
       for (const e of this.stream.turn(response)) this.queue.push(e);
     } catch (err) {
-      if (this.closed) return;
+      if (!this.lifecycle.finish(op, 'failed')) return;
       for (const e of this.failure(err)) this.queue.push(e);
     } finally {
       this.prompting = false;
@@ -235,13 +257,15 @@ class GeminiProcess implements AgentProcess {
 
   private onNotification(method: string, params: Json): void {
     // The conversation the agent tells again on a load is already in the hub's items.
-    if (method !== 'session/update') return;
+    const expected = this.sessionId || (this.replaying ? this.spec.conversation.id : '');
+    if (this.closed || method !== 'session/update' || (expected && params.sessionId && params.sessionId !== expected)) return;
     if (this.replaying && obj(params.update).sessionUpdate !== 'available_commands_update') return;
     this.spec.onSignal();
     for (const e of this.stream.handle(obj(params.update))) this.queue.push(e);
   }
 
   private async onRequest(req: AcpRequest): Promise<unknown> {
+    if (this.closed) throw new AcpError('gemini process closed', -32600);
     if (req.method !== 'session/request_permission') throw new AcpError(`${req.method} is not handled by the hub`, -32601);
     const options = list(req.params.options);
     const call = obj(req.params.toolCall);
@@ -270,14 +294,26 @@ class GeminiProcess implements AgentProcess {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.finishActive('interrupted');
+    this.lifecycle.invalidate();
+    this.pending = [];
     for (const a of this.asks) a.abort();
     this.client.close();
     this.queue.close();
   }
 
+  private finishActive(terminal: 'interrupted' | 'failed'): void {
+    const op = this.lifecycle.active;
+    if (!op || !this.lifecycle.finish(op, terminal)) return;
+    for (const event of this.stream.flush()) this.queue.push(event);
+    this.queue.push({ type: 'turn', subtype: terminal === 'failed' ? 'error_during_execution' : terminal,
+      isError: terminal === 'failed', result: '', queued: this.pending.length, contextWindows: [], usage: this.stream.usage });
+  }
+
   async setModel(model: string): Promise<void> {
-    this.model = model;
+    await this.readyP;
     if (this.sessionId) await this.client.request('session/set_model', { sessionId: this.sessionId, modelId: model });
+    this.model = model;
   }
 
   /** Gemini takes no effort setting. */
@@ -291,8 +327,19 @@ class GeminiProcess implements AgentProcess {
   }
 
   async setMode(mode: Mode): Promise<void> {
-    this.mode = mode;
-    if (this.sessionId) await this.client.request('session/set_mode', { sessionId: this.sessionId, modeId: acpMode(mode, this.spec.readOnly) });
+    await this.readyP;
+    const previous = this.policyState;
+    const requested = policyOf('gemini', { ...this.spec, mode });
+    this.policyState = { ...requested, effective: previous.effective };
+    try {
+      const wanted = acpMode(mode, this.spec.readOnly);
+      await this.client.request('session/set_mode', { sessionId: this.sessionId, modeId: wanted });
+      this.mode = mode;
+      this.policyState = policyOf('gemini', { ...this.spec, mode }, wanted);
+    } catch (err) {
+      this.policyState = refusedPolicy(previous, requested.requested, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   async context() {

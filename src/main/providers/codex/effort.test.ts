@@ -34,7 +34,7 @@ process.stdin.on('data', (d) => {
     if (m.id === undefined) continue;
     let result = {};
     if (m.method === 'model/list') result = { data: [{ model: 'gpt-6-luna', displayName: 'GPT-6 Luna', supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'].map((e) => ({ reasoningEffort: e })) }] };
-    if (m.method === 'thread/start' || m.method === 'thread/resume') result = { thread: { id: 't1' }, model: 'gpt-6-luna', reasoningEffort: 'medium' };
+    if (m.method === 'thread/start' || m.method === 'thread/resume') result = { thread: { id: 't1' }, model: 'gpt-6-luna', reasoningEffort: 'medium', approvalPolicy: m.params.approvalPolicy, approvalsReviewer: m.params.approvalsReviewer, sandbox: { type: 'workspaceWrite', writableRoots: [], networkAccess: false } };
     if (m.method === 'turn/start') {
       fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(m.params) + '\\n');
       result = { turn: { id: 'u' + m.id } };
@@ -61,7 +61,7 @@ test('the effort a session is launched with, then the one picked by hand, reach 
     for (let i = 0; i < 200 && turns().length < n; i++) await new Promise((r) => setTimeout(r, 25));
   };
   const spec = {
-    role: 'worker', name: 'w', cwd: dir, extraDirs: [], readOnly: false, model: 'gpt-6-luna', effort: 'xhigh', mode: null, instructions: '', stableInstructions: false,
+    role: 'worker', name: 'w', cwd: dir, extraDirs: [], readDirs: [], readOnly: false, model: 'gpt-6-luna', effort: 'xhigh', mode: null, instructions: '', stableInstructions: false,
     onSignal: () => undefined,
     tools: [], mcp: null, executable: process.execPath, env: { ...process.env } as Record<string, string>, conversation: { id: '', resume: false },
     input: (async function* () {

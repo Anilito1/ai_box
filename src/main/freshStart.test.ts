@@ -72,7 +72,7 @@ async function hub() {
     inner.setContext(s, now, 1_000_000);
     return q;
   };
-  const sent = () => ((s.inbox as unknown as { queue: { content: unknown }[] }).queue ?? []).map((m) => String(m.content));
+  const sent = () => (s.inbox?.entries ?? []).filter(entry => entry.state === 'queued').map(entry => String(entry.value.content));
   return { inner, s, run, sent, done: () => (m.killAll(), rmSync(dir, { recursive: true, force: true })) };
 }
 

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
@@ -25,6 +25,7 @@ import { portOf } from '../shared/backgroundTask';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
+import { requireAppliedPolicy } from './providers/capabilities';
 import { SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
@@ -109,10 +110,10 @@ import {
   visibleText,
 } from './transcript';
 import { frameSteps, replayInput, spawnedName, TOPIC_TOOL, topicAnswer, topicBlock, topicErrors, topicToolSpec } from './topics';
-import { installPlan, makeTree, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
+import { installPlan, makeTrees, planText, retireTree, runInstall, type InstallPlan, type NewTree, type WorkTree } from './worktrees';
 import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
-import { Inbox } from './providers/inbox';
+import { Inbox, type InboxEntry } from './providers/inbox';
 import { EXIT_WAIT_MS, reapTrees, type CliProc } from './procTree';
 import type { McpHub, McpLease } from './mcpHub';
 import type {
@@ -169,6 +170,15 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   items: Map<string, ChatItem>;
   query: AgentProcess | null;
   inbox: Inbox<AgentInput> | null;
+  /** Retained until the provider echoes receipt; sent without receipt is ambiguous after a crash. */
+  deliveries: InboxEntry<AgentInput>[];
+  generation: number;
+  /** A single account transition owns the process and pauses delivery while its handoff is prepared. */
+  transitioning: boolean;
+  transitionToken: object | null;
+  /** All extra writable folders of an isolated instance, mapped into its own worktrees. */
+  isolatedDirs: string[] | null;
+  extraTrees: WorkTree[];
   /** Approval cards waiting for the user; null = withdrawn by the CLI. */
   pending: Map<string, (decision: PermissionDecision | null) => void>;
   liveId: string | null;
@@ -337,6 +347,9 @@ type Persisted = {
   | 'awayPaused'
   | 'awayOwes'
   | 'sentIds'
+  | 'deliveries'
+  | 'isolatedDirs'
+  | 'extraTrees'
 >;
 
 export interface ManagerOptions {
@@ -539,6 +552,7 @@ const isNetworkPath = (dir: string) => /^[\\/]{2}/.test(dir.trim());
 const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 
 export class SessionManager extends EventEmitter {
+  private readonly modeChanges = new WeakMap<AgentProcess, Promise<void>>();
   private readonly sessions = new Map<string, Session>();
   private modelInfos: AgentModel[] = [];
   /** The models of each Codex account, as Codex lists them. */
@@ -613,7 +627,8 @@ export class SessionManager extends EventEmitter {
       const s = this.sessions.get(id);
       if (!s) continue;
       s.owesReport = true;
-      if (why === 'mission' || !s.started) void this.launch(s, false, this.missionPrompt(s));
+      if (s.deliveries.some(e => e.state === 'queued')) void this.launch(s, s.started);
+      else if (why === 'mission' || !s.started) void this.launch(s, false, this.missionPrompt(s));
       else
         void this.launch(s, true, {
           text: `${tags().master}\n${t('hub.restarted')}`,
@@ -634,7 +649,7 @@ export class SessionManager extends EventEmitter {
   /** Worktrees of workers the hub closed when it quit, idle: checked one at a time, removed if nothing is lost. */
   private async retireLeftovers(): Promise<void> {
     for (const s of [...this.sessions.values()]) {
-      if (s.tree?.state === 'active' && !s.inbox && !this.quitting) await this.retire(s);
+      if (this.sessionTrees(s).some(tree => tree.state === 'active') && !s.inbox && !this.quitting) await this.retire(s);
     }
   }
 
@@ -713,7 +728,10 @@ export class SessionManager extends EventEmitter {
   stop(id: string): void {
     const s = this.sessions.get(id);
     if (s?.remoteRun && !s.inbox && s.remoteRun.state === 'detached') return void this.stopDetached(s);
-    if (!s?.inbox) return;
+    if (!s?.inbox) {
+      if (s?.transitioning) { s.generation++; s.transitioning = false; s.transitionToken = null; }
+      return;
+    }
     // Closed on purpose: a turn left to go on alone on the server ends with it.
     if (s.remoteRun && this.opts.cfg.remoteWorkers.enabled) void remoteStop(this.opts.cfg.remoteWorkers, s.sessionId);
     const q = s.query;
@@ -929,8 +947,33 @@ export class SessionManager extends EventEmitter {
     // Claude Code holds a cross-session message whose sender runs in another permission class (bypass vs prompting).
     const bypasses = (m: Mode | null) => m === 'bypassPermissions';
     if (bypasses(mode) !== bypasses(this.hubMode())) this.notice(s, t('notice.modeMismatch'), 'info');
-    s.mode = mode;
-    s.query?.setMode(mode).catch((err: unknown) => this.notice(s, t('notice.modeRefused'), 'error', errorText(err)));
+    const q = s.query;
+    if (!q) s.mode = mode;
+    else {
+      const inbox = s.inbox;
+      inbox?.pause();
+      const previous = this.modeChanges.get(q) ?? Promise.resolve();
+      const change = previous.then(async () => {
+        if (s.query !== q || s.inbox !== inbox) return;
+        await q.setMode(mode);
+        if (s.query !== q || s.inbox !== inbox) return;
+        requireAppliedPolicy(q.policy);
+        s.mode = mode;
+        this.changed();
+      }).catch((err: unknown) => {
+        if (s.query !== q || s.inbox !== inbox) return;
+        this.teardown(s);
+        q.close();
+        this.notice(s, t('notice.modeRefused'), 'error', errorText(err));
+        this.changed();
+      });
+      this.modeChanges.set(q, change);
+      void change.then(() => {
+        if (this.modeChanges.get(q) !== change) return;
+        this.modeChanges.delete(q);
+        if (s.query === q && s.inbox === inbox) inbox?.resume();
+      });
+    }
     this.changed();
   }
 
@@ -1237,17 +1280,51 @@ export class SessionManager extends EventEmitter {
 
   /** The session leaves the account that is limited, for the step's: a new conversation there, with a summary. */
   private async runFallback(s: Session, q: AgentProcess): Promise<void> {
-    const pending = s.fallbackPending;
-    if (!pending || s.query !== q) return;
-    s.fallbackPending = null;
-    const from = s.runAccount || this.accountOf(s);
-    // The target may have been limited itself while the turn ended.
-    const step = this.limitedSeconds(pending.step.account) === null ? pending.step : this.nextStep(from);
-    if (!step) return this.notice(s, t('notice.fallbackNone', { from: this.accountName(from) }), 'error');
-    const reason = pending.signal.kind === 'overloaded' ? 'rate' : pending.signal.kind;
-    const note = await this.handoffNote(s, 'away', from, step.account, reason);
-    if (s.query !== q) return; // Closed while the summary was written.
-    this.moveAway(s, step, reason, { text: note, images: [], from: 'hub', shown: t('fallback.shown', { from: this.accountName(from), to: this.accountName(step.account) }) });
+    if (!s.fallbackPending || s.query !== q || s.transitioning) return;
+    await this.accountTransition(s, undefined, async current => {
+      const pending = s.fallbackPending;
+      if (!pending || !current()) return;
+      const from = s.runAccount || this.accountOf(s);
+      const step = this.limitedSeconds(pending.step.account) === null ? pending.step : this.nextStep(from);
+      if (!step) { s.fallbackPending = null; return this.notice(s, t('notice.fallbackNone', { from: this.accountName(from) }), 'error'); }
+      const reason = pending.signal.kind === 'overloaded' ? 'rate' : pending.signal.kind;
+      const note = await this.handoffNote(s, 'away', from, step.account, reason);
+      if (!current()) return;
+      s.fallbackPending = null;
+      const queued = this.prefixQueued(s, note);
+      this.moveAway(s, step, reason, queued ? undefined : { text: note, images: [], from: 'hub', shown: t('fallback.shown', { from: this.accountName(from), to: this.accountName(step.account) }) });
+    });
+  }
+
+  /** Pause the existing stream before awaiting a summary. Concurrent messages stay journaled in FIFO order. */
+  private async accountTransition(s: Session, prompt: Prompt | undefined, work: (current: () => boolean) => Promise<void>): Promise<void> {
+    if (s.transitioning) { if (prompt) this.pushUser(s, prompt); return; }
+    const token = {}, generation = s.generation, query = s.query;
+    s.transitionToken = token;
+    s.transitioning = true;
+    s.inbox?.pause();
+    try {
+      if (prompt) this.pushUser(s, prompt);
+      await work(() => !this.quitting && s.transitionToken === token && s.generation === generation && s.query === query);
+    } catch (error) {
+      if (s.transitionToken === token && !this.quitting) this.notice(s, humanError(errorText(error)), 'error');
+    } finally {
+      if (s.transitionToken === token) {
+        s.transitionToken = null; s.transitioning = false;
+        s.inbox?.resume();
+        if (s.generation === generation && !s.inbox && s.deliveries.some(entry => entry.state === 'queued') && !this.quitting) void this.launch(s, s.started);
+        this.changed();
+      }
+    }
+  }
+
+  private prefixQueued(s: Session, note: string): boolean {
+    const entry = s.deliveries.find(e => e.state === 'queued');
+    if (!entry) return false;
+    const content = entry.value.content;
+    entry.value = { ...entry.value, content: typeof content === 'string' ? `${note}\n\n${content}` : [{ type: 'text', text: note }, ...content] };
+    this.save();
+    return true;
   }
 
   /** A new process on another account, in a new conversation (away) or the old one (back). */
@@ -1265,7 +1342,7 @@ export class SessionManager extends EventEmitter {
     void this.launch(s, conversation !== null, prompt);
   }
 
-  private moveAway(s: Session, step: FallbackStep, reason: string, prompt: Prompt): void {
+  private moveAway(s: Session, step: FallbackStep, reason: string, prompt?: Prompt): void {
     const from = s.runAccount || this.accountOf(s);
     if (s.home === null) Object.assign(s, { home: s.accountId, fallbackAt: Date.now(), fallbackMark: s.items.size });
     s.fallbackModel = step.model;
@@ -1280,18 +1357,20 @@ export class SessionManager extends EventEmitter {
   /** On its own account again: its old conversation, and what happened meanwhile. */
   private async goHome(s: Session, prompt?: Prompt): Promise<void> {
     if (s.home === null) return;
-    const home = s.home;
-    const target = this.accountOf(s, home);
-    const current = s.runAccount || this.accountOf(s);
-    const note = await this.handoffNote(s, 'back', current, target, 'ready');
-    const conversation = s.convs[target] ?? null;
-    Object.assign(s, { home: null, fallbackAt: 0, fallbackModel: '', fallbackPending: null });
-    this.notice(s, t('notice.fallbackBack', { to: this.accountName(target) }), 'info');
-    if (s.role === 'worker') this.notifyMaster(t('hub.fallbackBack', { name: displayName(s), to: this.accountName(target) }), t('hub.fallbackBack.note'), s);
-    if (prompt) prompt = { ...prompt, text: `${note}\n\n${prompt.text}` };
-    else s.backNote = note;
-    // The pick it had before it left (maybe empty: its post's or the usual one) applies again.
-    this.switchProcess(s, home, conversation, prompt);
+    await this.accountTransition(s, prompt, async current => {
+      const home = s.home;
+      if (home === null) return;
+      const target = this.accountOf(s, home);
+      const from = s.runAccount || this.accountOf(s);
+      const note = await this.handoffNote(s, 'back', from, target, 'ready');
+      if (!current() || s.home !== home) return;
+      const conversation = s.convs[target] ?? null;
+      Object.assign(s, { home: null, fallbackAt: 0, fallbackModel: '', fallbackPending: null });
+      this.notice(s, t('notice.fallbackBack', { to: this.accountName(target) }), 'info');
+      if (s.role === 'worker') this.notifyMaster(t('hub.fallbackBack', { name: displayName(s), to: this.accountName(target) }), t('hub.fallbackBack.note'), s);
+      if (!this.prefixQueued(s, note)) s.backNote = note;
+      this.switchProcess(s, home, conversation);
+    });
   }
 
   /** Whether a message goes through the fallback first: back home, or away from an account limited right now. */
@@ -1315,8 +1394,11 @@ export class SessionManager extends EventEmitter {
           return true;
         }
         if (step) {
-          void this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(this.canon(account)) === 'quota' ? 'quota' : 'rate').then((note) => {
-            this.moveAway(s, step, 'rate', { ...prompt, text: `${note}\n\n${prompt.text}` });
+          void this.accountTransition(s, prompt, async current => {
+            const note = await this.handoffNote(s, 'away', account, step.account, this.cooldowns.kindOf(this.canon(account)) === 'quota' ? 'quota' : 'rate');
+            if (!current()) return;
+            this.prefixQueued(s, note);
+            this.moveAway(s, step, 'rate');
           });
           return true;
         }
@@ -1580,11 +1662,12 @@ export class SessionManager extends EventEmitter {
   // ---------- SDK session ----------
 
   private async launch(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
+    const generation = s.generation + 1;
     try {
       await this.start(s, resume, firstPrompt);
     } catch (err) {
       // Claude Code could not be started (missing executable, broken install): nothing else would report it.
-      if (s.query) return; // Started: consume() reports what happens next.
+      if (s.generation !== generation || s.query) return; // Replaced or started: consume() reports what happens next.
       this.teardown(s);
       this.reap(s, s.procs.splice(0));
       this.failed(s, errorText(err), this.missingProgram(s, errorText(err)), this.adapterOf(s).harness);
@@ -1595,26 +1678,30 @@ export class SessionManager extends EventEmitter {
   private async start(s: Session, resume: boolean, firstPrompt?: Prompt): Promise<void> {
     const { cfg } = this.opts;
     // Claimed synchronously: a send() or resume() during the awaits below queues into this inbox instead of launching twice.
-    const inbox = new Inbox<AgentInput>();
+    s.generation++;
+    const inbox = this.deliveryInbox(s);
+    inbox.pause(); // No prompt is delivered before ready() acknowledges the provider's permission policy.
     s.inbox = inbox;
     s.status = 'starting';
     s.liveId = null;
     this.resetActivity(s); // Tracked per CLI process: the new one reports its own.
     s.activeAt = Date.now();
     s.closeWhenDone = false;
-    s.queued = 0;
+    s.queued = inbox.pending;
+    // Journal the first input before any asynchronous launch operation.
+    if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
     this.changed();
 
     // A close just checked its worktree: the outcome decides whether it can start there again.
     if (s.retiring) await s.retiring;
     if (this.quitting || s.inbox !== inbox) return;
-    if (s.tree?.state === 'removed') {
+    if (this.sessionTrees(s).some(tree => tree.state === 'removed')) {
       this.teardown(s);
       this.notice(s, t('notice.ended'), 'info');
       this.changed();
       return;
     }
-    if (s.tree?.state === 'kept') Object.assign(s.tree, { state: 'active', kept: [] });
+    for (const tree of this.sessionTrees(s)) if (tree.state === 'kept') Object.assign(tree, { state: 'active', kept: [] });
 
     const account = this.accountOf(s);
     const harness = harnessOf(this.kindOf(account));
@@ -1624,7 +1711,6 @@ export class SessionManager extends EventEmitter {
     const folder = await stat(s.cwd).then((st) => st.isDirectory(), () => false);
     if (this.quitting || s.inbox !== inbox) return;
     if (!folder) {
-      if (firstPrompt) this.pushUser(s, firstPrompt);
       this.teardown(s);
       this.folderGone(s);
       this.changed();
@@ -1635,25 +1721,28 @@ export class SessionManager extends EventEmitter {
     // A remote post that cannot run on the server is refused: never run here instead, without the user knowing.
     let remote = this.remoteOf(s, harness, account);
     const held = typeof remote === 'string' ? null : await this.leaseFor(s, remote);
+    if (this.quitting || s.inbox !== inbox) return;
     // Its scope's tokens (GH_TOKEN…), given in memory: the user's for their repos, the App's for an organisation's.
     if (remote && typeof remote === 'object') {
       // A worker refused its tokens does not switch the server on; then a server switched off by the hour is switched
       // on first (at once when it already runs).
       const secrets = await this.remoteSecrets(s);
+      if (this.quitting || s.inbox !== inbox) return;
       const down = typeof secrets === 'string' ? null : await this.opts.remoteServer?.wake();
       remote = typeof secrets === 'string' ? secrets : down ? downWhy(down) : { ...remote, secrets };
     }
     if (this.quitting || s.inbox !== inbox) return;
-    if (held) return this.leaseRefused(s, held, firstPrompt);
+    if (held) return this.leaseRefused(s, held);
     if (typeof remote === 'string') {
-      if (firstPrompt) this.pushUser(s, firstPrompt);
       this.teardown(s);
       this.remoteRefused(s, remote);
       this.changed();
       return;
     }
     // Resume only a conversation still on disk; an unreadable check keeps the id rather than dropping the link to it.
-    if (resume && !(await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account), ...(remote ? { remote } : {}) }))) {
+    const hasConversation = !resume || await adapter.hasConversation(s.sessionId, s.cwd, { executable, env: this.environment(account), ...(remote ? { remote } : {}) });
+    if (this.quitting || s.inbox !== inbox) return;
+    if (resume && !hasConversation) {
       resume = false;
       s.sessionId = randomUUID();
       if (s.id === MASTER_ID) this.topics.reset(); // Its conversation is gone, and its topics with it.
@@ -1671,8 +1760,9 @@ export class SessionManager extends EventEmitter {
     // Every launch starts in the configured mode (a composer change lasts as long as the process). None configured:
     // the program picks its own default, which its first event reports.
     const mode = this.modeOf(s);
-    s.mode = mode ?? (await adapter.defaultMode(s.cwd));
+    const defaultMode = mode ?? await adapter.defaultMode(s.cwd);
     if (this.quitting || s.inbox !== inbox) return;
+    s.mode = defaultMode;
     // The account is fixed for the life of the process: a switch starts another one on the same conversation.
     s.runAccount = account;
     s.usageAccount = this.canon(account);
@@ -1686,7 +1776,7 @@ export class SessionManager extends EventEmitter {
       : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
     // A program without Claude Code's SendMessage (or a worker on the server, whose peers are here) writes to the others
     // through the hub's tool of the same job.
-    const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
+    const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Read the packet immediately before summarizing and pass its lastEvent as covered_event; new activity invalidates an older summary. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
     const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules;
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
@@ -1697,12 +1787,11 @@ export class SessionManager extends EventEmitter {
     s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
     // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
-    if (firstPrompt) this.pushUser(s, this.withNote(s, firstPrompt));
     const q = adapter.start({
       role: s.role,
       name: s.name,
       cwd: s.cwd,
-      extraDirs: post && post.folders.length > 1 ? post.folders.slice(1) : [],
+      extraDirs: this.writableExtraDirs(s),
       readDirs: [this.attachDir],
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
@@ -1711,7 +1800,7 @@ export class SessionManager extends EventEmitter {
       // A worker never inherits the user's own effort from settings.json: unset, it runs at the hub's default.
       effort: s.fixedEffort ?? (isMaster ? null : this.workerEffort()),
       ultracode,
-      mode,
+      mode: defaultMode ?? 'default',
       instructions: append,
       stableInstructions: isMaster || !!post,
       tools,
@@ -1889,8 +1978,7 @@ export class SessionManager extends EventEmitter {
     return out;
   }
 
-  private leaseRefused(s: Session, held: Lease, firstPrompt?: Prompt): void {
-    if (firstPrompt) this.pushUser(s, firstPrompt);
+  private leaseRefused(s: Session, held: Lease): void {
     this.teardown(s);
     const when = new Date(held.since).toLocaleString(lang(), { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
     s.error = t('lease.refused', { branch: held.branch, repo: held.slug, worker: held.worker, side: t(held.side === 'server' ? 'lease.side.server' : 'lease.side.pc'), when });
@@ -2285,7 +2373,9 @@ export class SessionManager extends EventEmitter {
   }
 
   private teardown(s: Session): void {
-    // Its process is gone with the prompts it had not taken: the turn ends there.
+    // Keep queued inputs; a sent input without receipt becomes unknown rather than disappearing.
+    s.generation++;
+    s.inbox?.close();
     if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
@@ -2294,7 +2384,7 @@ export class SessionManager extends EventEmitter {
     s.mcpLease?.dispose();
     s.mcpLease = null;
     s.liveId = null;
-    s.queued = 0;
+    s.queued = this.deliveryPending(s);
     s.runAccount = '';
     s.usageAccount = '';
     s.switchPending = false;
@@ -2466,6 +2556,11 @@ export class SessionManager extends EventEmitter {
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
         const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
         const master = s.id === MASTER_ID;
+        if (ev.blocks.some(b => (b.type === 'text' && String(b.text ?? '').trim()) || (b.type === 'tool_use' && b.name !== 'topic_memory' && b.name !== TOPIC_TOOL))) {
+          const declared = [...ev.blocks].reverse().find(b => b.type === 'tool_use' && b.name === TOPIC_TOOL);
+          const topic = declared ? parseTopicCall(declared.input)?.id : undefined;
+          this.trackTopicEvent(s, topic);
+        }
         // The master's topic calls are the hub's filing, not a step worth reading.
         const blocks = master ? all.filter((b) => b.name !== TOPIC_TOOL) : all;
         const hasText = blocks.some((b) => b.type === 'text');
@@ -2498,8 +2593,9 @@ export class SessionManager extends EventEmitter {
         break;
       }
       case 'promptTaken':
-        // One of our prompts reached the model: it is no longer waiting in the queue.
-        s.queued = Math.max(0, s.queued - 1);
+        // Provider echoes are receipts, not iterator reads. Match FIFO among equal inputs.
+        if (s.deliveries.length) s.inbox?.acknowledge(value => this.inputText(value) === ev.text);
+        else s.queued = Math.max(0, s.queued - 1);
         if (s.id === MASTER_ID) this.topics.taken(ev.text);
         this.markBusy(s, true);
         break;
@@ -2532,7 +2628,8 @@ export class SessionManager extends EventEmitter {
       case 'turn': {
         s.liveId = null;
         // A local command (/context, /usage…) is never replayed: the program's own count says what still waits.
-        if (ev.queued !== null) s.queued = Math.min(s.queued, ev.queued);
+        // A provider queue count is not a receipt for a particular durable input.
+        if (ev.queued !== null && s.deliveries.length === 0) s.queued = Math.min(s.queued, ev.queued);
         if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
         s.limit = null;
@@ -2602,6 +2699,7 @@ export class SessionManager extends EventEmitter {
    * looks again a few times while a task has none.
    */
   private scanPorts(s: Session, attempt = 0): void {
+    const generation = s.generation;
     this.stopPortScan(s);
     const labels = new Set(s.background);
     for (const label of Object.keys(s.bgPorts)) if (!labels.has(label)) delete s.bgPorts[label];
@@ -2612,6 +2710,7 @@ export class SessionManager extends EventEmitter {
       for (const label of open) {
         const run = runFor(label, s.bgRuns.values());
         const port = run ? await portOfRun(run) : null;
+        if (s.generation !== generation) return;
         if (port !== null && s.background.includes(label)) {
           s.bgPorts[label] = port;
           found = true;
@@ -2660,17 +2759,26 @@ export class SessionManager extends EventEmitter {
 
   /** Nothing running and nothing on the way: no turn, no background task, no prompt waiting in the queue. */
   private settled(s: Session): boolean {
-    return s.status === 'idle' && s.background.length === 0 && s.pending.size === 0 && s.queued === 0;
+    return s.status === 'idle' && !this.hasActivity(s);
+  }
+
+  private hasActivity(s: Session): boolean {
+    return s.turnOver === false || s.background.length > 0 || s.pending.size > 0 || s.queued > 0 ||
+      (s.agentTasks?.size ?? 0) > 0 || (s.subagents?.running ?? 0) > 0 || (s.agents ?? 0) > 0 ||
+      !!s.compacting || !!s.retrying || !!s.moving || !!s.transitioning || !!s.installing;
   }
 
   private isWorking(s: Session): boolean {
-    return s.status === 'busy' || s.status === 'attention' || s.background.length > 0;
+    return s.status === 'starting' || s.status === 'busy' || s.status === 'attention' || this.hasActivity(s);
   }
 
   /** The CLI answers `initialize` at spawn, before any turn: the session is usable from then on. */
   private async onReady(s: Session, q: AgentProcess): Promise<void> {
     try {
       const init = await q.ready();
+      if (s.query !== q) return;
+      requireAppliedPolicy(q.policy);
+      s.inbox?.resume();
       // A bridged session lists Claude's models mapped onto its account's: only a Claude access names them truly.
       if (init.models.length > 0 && runsClaude(this.kindOf(s.runAccount)) && !this.pinned(s.runAccount)) this.modelInfos = init.models;
       else if (init.models.length > 0 && harnessOf(this.kindOf(s.runAccount)) !== 'claude') this.setCatalog(s.runAccount, init.models);
@@ -2678,8 +2786,13 @@ export class SessionManager extends EventEmitter {
         s.commands = init.commands;
         if (harnessOf(this.kindOf(s.runAccount)) === 'claude') this.lastCommands = init.commands;
       }
-    } catch {
-      return; // The session failed to start: consume() reports it.
+    } catch (err) {
+      if (s.query !== q) return;
+      this.teardown(s);
+      q.close();
+      this.failed(s, errorText(err), this.adapterOf(s).isMissingProgram(errorText(err)), this.adapterOf(s).harness);
+      this.changed();
+      return;
     }
     if (s.query !== q) return;
     s.error = '';
@@ -2695,10 +2808,12 @@ export class SessionManager extends EventEmitter {
   private async refreshContext(s: Session, q: AgentProcess): Promise<void> {
     try {
       const usage = await q.context();
+      if (s.query !== q) return;
       this.setContext(s, usage.tokens, usage.size);
       // Before the first turn this is the only source of the inherited model.
       this.applyModel(s, usage.model);
       await this.inheritEffort(s, usage.model);
+      if (s.query !== q) return;
       this.changed();
     } catch {
       // Session closed meanwhile.
@@ -2775,10 +2890,12 @@ export class SessionManager extends EventEmitter {
     this.usageAsking.add(account);
     this.usageCheckedAt.set(account, Date.now());
     try {
-      this.usage.set(account, usageRead(await q.rateLimits(), Date.now()));
+      const limits = await q.rateLimits();
+      if (s.query !== q) return;
+      this.usage.set(account, usageRead(limits, Date.now()));
     } catch {
       // Experimental API unavailable, signed out, offline: the status bar says the figure is unknown.
-      this.usage.set(account, usageFailed(this.usage.get(account)));
+      if (s.query === q) this.usage.set(account, usageFailed(this.usage.get(account)));
     } finally {
       this.usageAsking.delete(account);
     }
@@ -2882,6 +2999,7 @@ export class SessionManager extends EventEmitter {
     if (s.remoteRun?.interrupted) s.remoteRun.interrupted = false;
     // Away on another account: back on its own as soon as it is open again and the policy says so. Or its account is
     // limited at this very moment: it goes on elsewhere, with a summary.
+    if (s.transitioning) { this.pushUser(s, prompt); return; }
     if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
     if (!prompt.command) this.renewStale(s);
     if (s.backNote && s.inbox) {
@@ -2892,7 +3010,7 @@ export class SessionManager extends EventEmitter {
     prompt = this.withNote(s, prompt);
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
-    const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission;
+    const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission && !s.deliveries.some(e => e.state === 'queued' || e.state === 'unknown');
     void this.launch(s, s.started, lostMission ? { ...prompt, command: false, text:`${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
@@ -2905,11 +3023,10 @@ export class SessionManager extends EventEmitter {
       const state = this.contextMemory.get(topic);
       if (s.id === MASTER_ID) {
         const previous = this.memoryTopic;
-        const saved = previous ? this.contextMemory.get(previous) : null;
         const switching = previous !== topic;
         const hard = (s.metrics?.contextPct ?? 0) >= 90;
         // On restart previous is unknown: only renew if the destination has a saved handoff.
-        const safeHandoff = switching ? (previous ? saved?.summary : state?.summary) : state?.summary;
+        const safeHandoff = this.contextMemory.hasFreshSummary(switching && previous ? previous : topic);
         if ((switching || hard) && safeHandoff && (!s.inbox || this.settled(s)) && s.queued === 0) {
           this.stop(s.id);
           this.freshStart(s);
@@ -2951,6 +3068,33 @@ export class SessionManager extends EventEmitter {
     return { ...prompt, text: `${prompt.text}\n\n${news}` };
   }
 
+  private trackTopicEvent(s: Session, declared?: string): void {
+    const topic = declared ?? (s.role === 'worker' ? this.topics.linkOf(s.name) : this.memoryTopic);
+    if (s.role === 'master' && declared) this.memoryTopic = declared;
+    if (topic && this.contextMemory.status.mode === 'sqlite') {
+      try { this.contextMemory.trackEvent(topic); } catch { /* ordinary sessions continue */ }
+    }
+  }
+
+  private inputText(input: AgentInput): string {
+    return typeof input.content === 'string' ? input.content : input.content.filter(b => b.type === 'text').map(b => String(b.text ?? '')).join('\n');
+  }
+
+  private deliveryPending(s: Session): number {
+    return s.deliveries.filter(e => e.state === 'queued' || e.state === 'sent' || e.state === 'unknown').length;
+  }
+
+  private deliveryInbox(s: Session): Inbox<AgentInput> {
+    return new Inbox(s.deliveries, () => {
+      s.queued = this.deliveryPending(s);
+      const ended = s.deliveries.filter(e => e.state === 'acknowledged');
+      // The receipt needs its identity, not another retained copy of images or prompt contents.
+      for (const entry of ended) entry.value = { content: '' };
+      for (const entry of ended.slice(0, -32)) s.deliveries.splice(s.deliveries.indexOf(entry), 1);
+      if (!this.quitting) this.save(); // Persist before yielding to a provider, including within the debounce window.
+    });
+  }
+
   private pushUser(s: Session, { text, images, from, shown, handoff, topic, files }: Prompt): void {
     const content =
       images.length === 0
@@ -2973,8 +3117,13 @@ export class SessionManager extends EventEmitter {
       const urls = images.map((img) => `data:${img.mediaType};base64,${img.data}`);
       this.upsert(s, { kind: 'user', id, text: shown ?? text, images: urls, ...(files ? { files } : {}), ...tag });
     }
-    s.inbox?.push({ content });
-    s.queued++;
+    const inbox = s.inbox ?? this.deliveryInbox(s);
+    if (s.transitioning || !s.inbox) inbox.pause();
+    inbox.push({ content }, id);
+    const memoryTopic = topic ?? filed ?? (s.role === 'worker' ? this.topics.linkOf(s.name) : this.memoryTopic);
+    if (memoryTopic && this.contextMemory.status.mode === 'sqlite') {
+      try { this.contextMemory.trackEvent(memoryTopic); } catch { /* preserve the ordinary session */ }
+    }
     s.activeAt = Date.now();
     this.markBusy(s);
     this.event(s, 'message_in');
@@ -3035,6 +3184,7 @@ export class SessionManager extends EventEmitter {
   }
 
   private async readHistory(s: Session): Promise<void> {
+    const conversation = s.sessionId, generation = s.generation;
     const history = new Map<string, ChatItem>();
     const master = s.id === MASTER_ID;
     // The master's conversation is filed by topic again, from its own calls (shared/topics.ts).
@@ -3045,6 +3195,7 @@ export class SessionManager extends EventEmitter {
       const remote = this.remoteOf(s, harness, account);
       const ctx = { executable: this.executableOf(harness), env: this.environment(account), ...(remote && typeof remote === 'object' ? { remote } : {}) };
       const messages = (await this.adapterOf(s).history(s.sessionId, s.cwd, ctx)).slice(-HISTORY_MAX);
+      if (s.sessionId !== conversation || s.generation !== generation) return;
       for (const m of messages) {
         const { blocks } = m;
         if (m.role === 'assistant') {
@@ -3067,7 +3218,7 @@ export class SessionManager extends EventEmitter {
         }
       }
     } catch {
-      s.historyLoad = null; // Unreadable transcript (locked, missing): the view stays as is until the next try.
+      if (s.sessionId === conversation && s.generation === generation) s.historyLoad = null; // Unreadable transcript (locked, missing): the view stays as is until the next try.
       return;
     }
     if (master) {
@@ -3246,32 +3397,46 @@ export class SessionManager extends EventEmitter {
    * Checks a closed worker's worktree once its install is stopped, and removes it if nothing would be lost; a launch
    * meanwhile keeps it. Resolves to the outcome as the master reads it; the conversation shows it too.
    */
+  private sessionTrees(s: Session): WorkTree[] { return [...(s.tree ? [s.tree] : []), ...s.extraTrees]; }
+
+  private writableExtraDirs(s: Session): string[] {
+    const extras = this.postOf(s)?.folders.slice(1) ?? [];
+    if (!s.instanceOf || s.readOnly) return extras;
+    // Old persisted instances did not map their secondary folders: fail closed, never expose shared checkouts.
+    if (extras.length && s.isolatedDirs === null) throw new Error('This instance needs new isolated worktrees for its secondary folders');
+    const dirs = s.isolatedDirs ?? [];
+    const trees = this.sessionTrees(s);
+    if (dirs.some(dir => !trees.some(tree => samePath(dir, tree.path) || realPath(dir).startsWith(`${realPath(tree.path)}${sep}`)))) throw new Error('Invalid isolated writable folder');
+    return dirs;
+  }
+
   private retire(s: Session): Promise<string> {
-    const tree = s.tree;
-    if (!tree || tree.state === 'removed') return Promise.resolve('');
+    const trees = this.sessionTrees(s).filter(tree => tree.state !== 'removed');
+    if (!trees.length) return Promise.resolve('');
+    if (this.deliveryPending(s) > 0) {
+      for (const tree of trees) Object.assign(tree, { state: 'kept', kept: ['unknown'] });
+      this.changed();
+      return Promise.resolve('Les dossiers isolés sont conservés : des messages attendent encore leur accusé de réception.');
+    }
     let skipped = false;
     s.retiring ??= (async () => {
-      // Its Claude Code process, then its install, let go of the folder first.
       await Promise.race([s.exit, new Promise((r) => setTimeout(r, 10_000))]);
       await s.installing?.done;
-      const r = await retireTree(tree, () => !s.inbox);
-      // Started again before git touched anything (a kept worktree always has a reason): it works there.
-      skipped = !r.removed && r.why.length === 0;
-      if (skipped) return '';
-      // Removed while a launch waited: start() sees it, and the worker does not start in a deleted folder.
-      const leftover = r.removed && r.why.includes('inUse');
-      Object.assign(tree, { state: r.removed ? 'removed' : 'kept', kept: r.removed ? [] : r.why });
-      const reasons = r.why.map((w) => t(`tree.why.${w}`)).join(' · ');
-      if (this.sessions.get(s.id) === s) {
-        this.notice(s, leftover ? t('notice.treeLeftover') : r.removed ? t('notice.treeRemoved') : t('notice.treeKept', { reasons }), 'info');
+      const outcomes: string[] = [];
+      for (const tree of trees) {
+        const r = await retireTree(tree, () => !s.inbox && this.deliveryPending(s) === 0);
+        if (!r.removed && r.why.length === 0) { skipped = true; continue; }
+        const leftover = r.removed && r.why.includes('inUse');
+        Object.assign(tree, { state: r.removed ? 'removed' : 'kept', kept: r.removed ? [] : r.why });
+        const reasons = r.why.map((why) => t(`tree.why.${why}`)).join(' · ');
+        if (this.sessions.get(s.id) === s) this.notice(s, leftover ? t('notice.treeLeftover') : r.removed ? t('notice.treeRemoved') : t('notice.treeKept', { reasons }), 'info');
+        outcomes.push(leftover ? t('tree.leftover', { name: s.name, path: tree.path }) : r.removed ? t('tree.removed', { name: s.name }) : t('tree.kept', { name: s.name, path: tree.path, branch: tree.branch, reasons }));
       }
       this.changed();
-      if (leftover) return t('tree.leftover', { name: s.name, path: tree.path });
-      return r.removed ? t('tree.removed', { name: s.name }) : t('tree.kept', { name: s.name, path: tree.path, branch: tree.branch, reasons });
+      return outcomes.join('\n');
     })().finally(() => {
       s.retiring = null;
-      // Closed again while that check ran: checked once more.
-      if (skipped && !s.inbox && !this.quitting) void this.retire(s);
+      if (skipped && !s.inbox && this.deliveryPending(s) === 0 && !this.quitting) void this.retire(s);
     });
     return s.retiring;
   }
@@ -3334,7 +3499,7 @@ export class SessionManager extends EventEmitter {
    * a note the hub writes from its last note and steps (asking the model would reread the whole conversation).
    */
   private renewStale(s: Session): void {
-    if (s.inbox || !s.roleId || !s.started || s.noteFresh) return;
+    if (s.inbox || this.deliveryPending(s) > 0 || !s.roleId || !s.started || s.noteFresh) return;
     if (!freshStartDue({ working: false, worked: this.worked(s), idleMs: Date.now() - s.activeAt })) return;
     s.note = staleNote(s.note, [...s.items.values()], lang()).slice(0, NOTE_MAX);
     this.freshStart(s);
@@ -3396,7 +3561,7 @@ export class SessionManager extends EventEmitter {
       'Local short topic memory. Before switching jobs save an anonymized structured state and compact handoff. read returns a bounded packet, never a transcript. Decisions are append-only; source must identify the user message for user decisions. No client data or secrets. A version conflict requires reading again. The hub renews an idle master on topic switch only after a saved summary; busy turns continue. SQLite failure leaves ordinary sessions working.',
       {
         topic: z.string(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
-        version: z.number().int().nonnegative().optional(), source: z.string().max(160).optional(),
+        version: z.number().int().nonnegative().optional(), covered_event: z.number().int().nonnegative().optional(), source: z.string().max(160).optional(),
         anonymized: z.literal(true).optional(), text: z.string().max(12000).optional(), supersedes: z.string().optional(),
         state: z.object({ objective: z.string().max(2000).optional(), summary: z.string().max(6000).optional(),
           constraints: z.array(z.string().max(1000)).max(30).optional(), tasks: z.array(z.string().max(500)).max(30).optional(),
@@ -3405,13 +3570,17 @@ export class SessionManager extends EventEmitter {
       }, (args) => run(() => {
         if (role === 'worker' && this.topics.linkOf(s.name) !== args.topic) throw new Error('Memory access requires this worker’s assigned topic');
         if (this.contextMemory.status.mode !== 'sqlite') return JSON.stringify(this.contextMemory.status);
-        if (args.action === 'read') return JSON.stringify({ packet: this.contextMemory.get(args.topic) ? this.contextMemory.packet(args.topic) : null, pressure: this.contextMemory.pressure(args.topic) });
+        if (args.action === 'read') return JSON.stringify({ lastEvent: this.contextMemory.lastEvent(args.topic), packet: this.contextMemory.get(args.topic) ? this.contextMemory.packet(args.topic) : null, pressure: this.contextMemory.pressure(args.topic) });
         if (args.anonymized !== true || !args.source) throw new Error('Anonymize first and provide source provenance');
         const provenance: Provenance = { actor: s.name, source: args.source, anonymized: true };
         if (args.action === 'remember') return JSON.stringify(this.contextMemory.remember(args.topic, args.text ?? '', provenance));
         if (args.version === undefined) throw new Error('Read current version before writing (0 for a new topic)');
         if (args.action === 'decision') return JSON.stringify(this.contextMemory.decision(args.topic, args.text ?? '', provenance, args.version, args.supersedes));
-        if (args.action === 'compact') return JSON.stringify(this.contextMemory.compact(args.topic, args.text ?? '', provenance, args.version));
+        if (args.action === 'compact') {
+          if (args.covered_event === undefined) throw new Error('Read the packet and supply its lastEvent as covered_event before compacting');
+          return JSON.stringify(this.contextMemory.compact(args.topic, args.text ?? '', provenance, args.version, args.covered_event));
+        }
+        if (args.state?.summary !== undefined && args.covered_event !== this.contextMemory.lastEvent(args.topic)) throw new Error('Read the packet and supply its lastEvent as covered_event before summarizing');
         return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
       }));
     if (role === 'worker') {
@@ -3633,6 +3802,7 @@ export class SessionManager extends EventEmitter {
     const filed = new Map<string, string[]>();
     for (const step of frameSteps(blocks, items.filter((i) => i.kind !== 'tool'))) {
       if (step.kind === 'topic') {
+        this.memoryTopic = step.call.id;
         if (this.topics.declare(step.call)) this.changed();
       } else if (step.kind === 'wrote') {
         // A name another worker already has: the new worker starts as "<name>-2", the other one keeps its topic.
@@ -3685,9 +3855,13 @@ export class SessionManager extends EventEmitter {
 
     const topic = topicOf(args.name, post?.name ?? '');
     let made: NewTree | null = null;
+    let extraTrees: WorkTree[] = [], isolatedDirs: string[] | null = null;
     if (isolate && where) {
       try {
-        made = await makeTree(folder, post?.name ?? '', topic);
+        const bundle = await makeTrees(post?.folders ?? [folder], post?.name ?? '', topic);
+        made = bundle.primary;
+        extraTrees = bundle.trees.slice(1);
+        isolatedDirs = bundle.extraDirs;
       } catch (err) {
         throw new Error(t('tree.failed', { error: errorText(err) }));
       }
@@ -3696,12 +3870,12 @@ export class SessionManager extends EventEmitter {
     // The limits again, right before the worker exists: a message_worker may have woken one meanwhile.
     const overNow = this.overCap(post?.id ?? null);
     if (overNow) {
-      if (made) void retireTree(made.tree, () => true);
+      for (const tree of [...(made ? [made.tree] : []), ...extraTrees]) void retireTree(tree, () => true);
       throw new Error(overNow);
     }
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
-    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, readOnly, owesReport: true, accountId });
+    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, extraTrees, isolatedDirs, readOnly, owesReport: true, accountId });
     // Asked by the master or held by the post; refused (and said) where the account's plan does not have it.
     const ultracodeNote = args.ultracode ?? post?.ultracode ? this.startUltracode(s, args.ultracode === true) : '';
     this.topics.alias(spawnedName(args), s.name);
@@ -3744,7 +3918,7 @@ export class SessionManager extends EventEmitter {
     const key = checkout.toLowerCase();
     const inIt = (dir: string) => (repoOf(dir)?.checkout ?? resolve(dir)).toLowerCase() === key;
     return this.visible()
-      .filter((w) => w.role === 'worker' && !w.readOnly && (w.roleId ? !!this.roleOf(w)?.folders.some(inIt) : !!w.inbox && inIt(w.cwd)))
+      .filter((w) => w.role === 'worker' && !w.readOnly && (w.roleId ? !!this.roleOf(w)?.folders.some(inIt) : !!w.inbox && [w.cwd, ...(w.isolatedDirs ?? this.postOf(w)?.folders.slice(1) ?? [])].some(inIt)))
       .map((w) => w.name);
   }
 
@@ -4701,8 +4875,9 @@ export class SessionManager extends EventEmitter {
       s.effort = this.workerEffort();
       return;
     }
+    const generation = s.generation;
     const effort = await this.adapterOf(s).inheritedEffort(s.cwd, [modelId, s.model]);
-    if (s.fixedEffort || effort === undefined) return; // Chosen in the composer meanwhile, or unreadable.
+    if (s.generation !== generation || s.fixedEffort || effort === undefined) return; // Chosen in the composer meanwhile, or unreadable.
     s.effort = effort;
   }
 
@@ -4776,6 +4951,12 @@ export class SessionManager extends EventEmitter {
       items: new Map(),
       query: null,
       inbox: null,
+      deliveries: [],
+      generation: 0,
+      transitioning: false,
+      transitionToken: null,
+      isolatedDirs: null,
+      extraTrees: [],
       pending: new Map(),
       liveId: null,
       liveText: '',
@@ -4868,12 +5049,16 @@ export class SessionManager extends EventEmitter {
     try {
       const savedAt = statSync(this.stateFile).mtimeMs;
       const previous = new Map<string, CliProc[]>();
-      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown; cooldowns?: unknown; away?: SessionManager['awayMode'] };
+      const saved = JSON.parse(readFileSync(this.stateFile, 'utf8')) as { sessions?: Persisted[]; topics?: unknown; memoryTopic?: string | null; cooldowns?: unknown; away?: SessionManager['awayMode'] };
       this.cooldowns.restore(saved.cooldowns, Date.now());
       for (const { resume, ...p } of saved.sessions ?? []) {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
+        s.deliveries = Inbox.recover(Array.isArray(s.deliveries) ? s.deliveries : []);
+        s.queued = this.deliveryPending(s);
+        if (s.deliveries.some(e => e.state === 'unknown')) this.notice(s, 'Des messages ont été envoyés sans accusé de réception avant l’arrêt. Ils sont conservés sans réémission automatique.', 'info');
+        s.extraTrees = s.extraTrees.filter(validTree);
         // Programs of the hub's last run: last known to run when the state was saved (at its close, or before a crash).
         if (s.procs?.length) previous.set(s.id, s.procs.map((p) => ({ ...p, endedAt: p.endedAt ?? savedAt })));
         s.procs = [];
@@ -4883,7 +5068,7 @@ export class SessionManager extends EventEmitter {
         if (s.noteFresh) this.freshStart(s);
         // Saved before its first reading was kept: all of its context counts as work.
         if (s.started && !s.contextBase) s.contextBase = { id: s.sessionId, tokens: 0 };
-        if (resume && s.role === 'worker') this.resumeOnStart.set(s.id, resume);
+        if ((resume || s.deliveries.some(e => e.state === 'queued')) && s.role === 'worker') this.resumeOnStart.set(s.id, resume ?? 'work');
         // The app closed while it ran on the server: its turn may go on there alone.
         if (s.remoteRun) {
           // Saved before the runner: no line number yet, so the runner gives what it kept from the start.
@@ -4898,6 +5083,7 @@ export class SessionManager extends EventEmitter {
       if (previous.size > 0) this.clearProcs(previous, 0);
       // The topics of the master's conversation, if they are this conversation's.
       this.topics.restore(saved.topics, this.sessions.get(MASTER_ID)?.sessionId ?? '');
+      if (typeof saved.memoryTopic === 'string') this.memoryTopic = saved.memoryTopic;
     } catch {
       // Unreadable state file: set it aside (never overwrite it) and start with an empty hub.
       renameSync(this.stateFile, `${this.stateFile}.corrupt`);
@@ -4962,6 +5148,9 @@ export class SessionManager extends EventEmitter {
       awayPaused: s.awayPaused,
       awayOwes: s.awayOwes,
       sentIds: s.sentIds,
+      deliveries: s.deliveries,
+      isolatedDirs: s.isolatedDirs,
+      extraTrees: s.extraTrees,
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
       // A post woken without a mission has none to get back.
       ...(s.inbox && !s.remoteRun && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && !s.remoteRun && this.isWorking(s) ? { resume: 'work' as const } : {}),
@@ -4970,7 +5159,13 @@ export class SessionManager extends EventEmitter {
     const tmp = `${this.stateFile}.tmp`;
     const master = this.sessions.get(MASTER_ID);
     const topics = master ? this.topics.state(master.sessionId) : undefined;
-    writeFileSync(tmp, JSON.stringify({ sessions, topics, cooldowns: this.cooldowns.state(), ...(this.awayMode ? { away: this.awayMode } : {}) }, null, 2));
+    const fd = openSync(tmp, 'w', 0o600);
+    try {
+      writeFileSync(fd, JSON.stringify({ sessions, topics, memoryTopic: this.memoryTopic, cooldowns: this.cooldowns.state(), ...(this.awayMode ? { away: this.awayMode } : {}) }, null, 2));
+      fsyncSync(fd);
+    } finally { closeSync(fd); }
     renameSync(tmp, this.stateFile);
+    // The rename must survive power loss too (some platforms do not support directory fsync).
+    try { const dir = openSync(dirname(this.stateFile), 'r'); try { fsyncSync(dir); } finally { closeSync(dir); } } catch { /* file data already synced */ }
   }
 }

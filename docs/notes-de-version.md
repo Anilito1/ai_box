@@ -12,6 +12,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-10
 
+### Modifié
+
+- Les sessions reprennent plus sûrement leurs messages et leurs dossiers, et signalent les réglages de permissions refusés.
+
 ### Ajouté
 
 - Serveur distant : « propriétaire/* » dans la liste des repos y met tous tes repos d’un compte, et chaque dossier du PC retrouve son repo sur le serveur, même sous un autre nom.

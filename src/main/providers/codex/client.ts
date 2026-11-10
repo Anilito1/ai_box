@@ -25,9 +25,17 @@ export interface ClientOptions {
   cwd?: string;
   version: string;
   onSpawn?(pid: number): void;
+  /** Bounds protocol requests, including the handshake; model execution uses notifications. */
+  requestTimeoutMs?: number;
 }
 
 const STDERR_KEEP = 4000;
+const REQUEST_TIMEOUT_MS = 60_000;
+
+export interface RequestOptions {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
 
 /**
  * `codex app-server` over stdio: one JSON message per line. The client sends requests and notifications, receives
@@ -37,7 +45,7 @@ const STDERR_KEEP = 4000;
 export class CodexClient {
   private child: ChildProcess | null = null;
   private nextId = 0;
-  private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; dispose: () => void }>();
   private stderr = '';
   private closed = false;
   private finished = false;
@@ -51,6 +59,7 @@ export class CodexClient {
 
   /** Starts the server and completes the protocol's handshake. */
   async start(): Promise<void> {
+    if (this.closed || this.child) throw new Error('codex app-server already started or closed');
     const child = spawn(this.opts.executable, ['app-server', '--listen', 'stdio://'], {
       cwd: this.opts.cwd,
       env: this.opts.env,
@@ -91,31 +100,60 @@ export class CodexClient {
   private finish(code: number | null): void {
     if (this.finished) return;
     this.finished = true;
-    for (const w of this.waiting.values()) w.reject(new Error(this.stderr.trim().split('\n').pop() || 'codex app-server exited'));
+    for (const w of this.waiting.values()) {
+      w.dispose();
+      w.reject(new Error(this.stderr.trim().split('\n').pop() || (this.closed ? 'codex app-server is closed' : 'codex app-server exited')));
+    }
     this.waiting.clear();
     this.onExit({ code, stderr: this.stderr, closed: this.closed });
   }
 
   private send(message: Json): void {
-    if (!this.child?.stdin?.writable) return;
-    try {
-      this.child.stdin.write(`${JSON.stringify(message)}\n`);
-    } catch (err) {
-      this.stderr += String(err instanceof Error ? err.message : err);
-      this.finish(null);
+    const stdin = this.child?.stdin;
+    if (this.closed || this.finished || !stdin?.writable || stdin.destroyed || stdin.writableEnded) {
+      throw new Error('codex app-server pipe is not writable');
     }
+    // A false return is backpressure, not failure: Node has accepted and buffered the message.
+    stdin.write(`${JSON.stringify(message)}\n`, (err) => {
+      if (!err) return;
+      this.stderr += err.message;
+      this.finish(null);
+    });
   }
 
-  request<T = Json>(method: string, params: Json = {}): Promise<T> {
+  request<T = Json>(method: string, params: Json = {}, options: RequestOptions = {}): Promise<T> {
     if (this.closed || this.finished || !this.child) return Promise.reject(new Error('codex app-server is closed'));
+    if (options.signal?.aborted) return Promise.reject(new Error(`codex ${method} aborted`));
     const id = ++this.nextId;
     return new Promise<T>((resolve, reject) => {
-      this.waiting.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      this.send({ id, method, params });
+      const settleError = (error: Error) => {
+        const pending = this.waiting.get(id);
+        if (!pending) return;
+        this.waiting.delete(id);
+        pending.dispose();
+        reject(error);
+      };
+      const abort = () => settleError(new Error(`codex ${method} aborted`));
+      const timer = setTimeout(() => settleError(new Error(`codex ${method} timed out`)), options.timeoutMs ?? this.opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+      this.waiting.set(id, {
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        dispose: () => {
+          clearTimeout(timer);
+          options.signal?.removeEventListener('abort', abort);
+        },
+      });
+      options.signal?.addEventListener('abort', abort, { once: true });
+      try {
+        this.send({ id, method, params });
+      } catch (err) {
+        settleError(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
   private receive(line: string): void {
+    if (this.closed || this.finished) return;
     let m: Json;
     try {
       m = JSON.parse(line) as Json;
@@ -126,16 +164,21 @@ export class CodexClient {
     const method = typeof m.method === 'string' ? m.method : '';
     if (method && id !== undefined) {
       const params = (m.params ?? {}) as Json;
-      this.onRequest({ id, method, params }).then(
+      void Promise.resolve().then(() => this.closed || this.finished ? undefined : this.onRequest({ id, method, params })).then(
         (result) => this.send({ id, result }),
         (err: unknown) => this.send({ id, error: { code: err instanceof RpcError ? err.code : -32603, message: err instanceof Error ? err.message : String(err) } }),
-      );
+      ).catch((err: unknown) => {
+        if (this.closed || this.finished) return; // A reply after closure belongs to the old process.
+        this.stderr += err instanceof Error ? err.message : String(err);
+        this.finish(null);
+      });
     } else if (method) {
       this.onNotification(method, (m.params ?? {}) as Json);
     } else if (typeof id === 'number') {
       const w = this.waiting.get(id);
       if (!w) return;
       this.waiting.delete(id);
+      w.dispose();
       const error = m.error as { message?: string; code?: number } | undefined;
       if (error) w.reject(new RpcError(error.message ?? 'request failed', error.code ?? -32603));
       else w.resolve(m.result);
@@ -145,6 +188,7 @@ export class CodexClient {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.finish(null);
     this.child?.kill();
   }
 }

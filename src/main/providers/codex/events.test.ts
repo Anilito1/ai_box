@@ -217,3 +217,14 @@ test('Codex estimates usage without repricing earlier turns after a model change
   assert.equal(s.usage.models[model].input, 100);
   assert.equal(s.usage.models[model].cost, .0003);
 });
+
+test('duplicate item completion emits its content or tool result once', () => {
+  const stream = new CodexStream(() => 'gpt-6-luna');
+  for (const item of [
+    { id: 'message-once', type: 'agentMessage', text: 'answer' },
+    { id: 'tool-once', type: 'commandExecution', command: 'test', exitCode: 0, status: 'completed', aggregatedOutput: 'done' },
+  ]) {
+    assert.ok(stream.handle('item/completed', { item }).length > 0);
+    assert.deepEqual(stream.handle('item/completed', { item }), []);
+  }
+});

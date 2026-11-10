@@ -3,6 +3,7 @@ import type { Totals } from '../../shared/costs';
 import type { Effort, HarnessId, Mode, RateLimits, RemoteWorkers } from '../../shared/types';
 import type { RemoteExit, RemoteNotify, RemoteTexts } from '../remote';
 import type { Block } from './blocks';
+import type { EffectivePolicy, ProviderCapabilities } from './capabilities';
 
 // What the session manager knows of an AI agent, whichever program runs it. An adapter (providers/<harness>) starts the
 // program, turns its own protocol into AgentEvents and carries the hub's requests back; the manager keeps everything
@@ -180,6 +181,9 @@ export interface LaunchSpec {
 }
 
 export interface AgentProcess {
+  /** Optional for older adapters; built-in adapters report acknowledged controls before accepting input. */
+  readonly capabilities?: ProviderCapabilities;
+  readonly policy?: EffectivePolicy;
   /** Iterated once, by the manager; ends when the process ends, throws when it fails. */
   readonly events: AsyncIterable<AgentEvent>;
   /** Answers once the process is ready for prompts. */
