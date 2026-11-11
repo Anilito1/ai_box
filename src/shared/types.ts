@@ -764,6 +764,7 @@ export interface HubSettings {
   masterInstructions: string;
   /** The "client data" rule in every session's system prompt (shared/clientData); on by default. */
   clientDataRule: boolean;
+  contextGraph: import('./contextGraph').ContextGraphSettings;
   github: {
     /** Client ID of the GitHub OAuth App used for the device flow; empty = the build's default. */
     clientId: string;
@@ -802,7 +803,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation' | 'contextGraph'>> & {
   dictation?: Partial<DictationSettings>;
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
@@ -911,6 +912,11 @@ export interface HubApi {
   remove(id: string): void;
   openLocalFile(id: string, path: string, action: 'open' | 'reveal'): Promise<import('./localFiles').LocalFileResult>;
   openExternal(url: string): void;
+  /** Session id only; main resolves the configured workspace and local storage. */
+  contextGraphStatus(id: string): Promise<import('./contextGraph').ContextGraphStatus>;
+  contextGraphSetEnabled(id: string, enabled: boolean): Promise<import('./contextGraph').ContextGraphStatus>;
+  contextGraphExportSnapshot(id: string): Promise<import('./contextGraph').ContextGraphExport>;
+  contextGraphPurge(id: string): Promise<import('./contextGraph').ContextGraphStatus>;
   getSettings(): Promise<SettingsView>;
   saveSettings(patch: SettingsPatch): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;

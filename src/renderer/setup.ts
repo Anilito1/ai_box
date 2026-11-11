@@ -37,8 +37,9 @@ import { mascotMark } from './mascot';
 import { forumModeration } from './forum';
 import { updateSection } from './update';
 import { RemoteSection } from './remote';
+import { ContextGraphSection } from './contextGraph';
 
-type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about' | 'remote';
+type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about' | 'remote' | 'context';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
@@ -46,7 +47,7 @@ type Row = { name: string; path: string; slug: string; detail: string; private: 
 
 // The first run connects the providers only: the team and the fallback start empty, nothing imposed.
 const STEPS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions'];
-const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
+const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'context', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
@@ -146,6 +147,7 @@ export class SetupView {
   /** The providers' blocks of Settings › Accounts. */
   private readonly providers: ProvidersPanel;
   private confirmAccountDelete = '';
+  private readonly context: ContextGraphSection;
 
   constructor(
     private readonly hub: HubApi,
@@ -156,7 +158,10 @@ export class SetupView {
     private readonly limitedUntil: (account: string) => number | null = () => null,
     /** The providers, connected or not, with the account behind each. */
     private readonly providerList: () => ProviderBadge[] = () => [],
+    /** Only a session already known to the app, never a folder path. */
+    contextSession: () => string | null = () => null,
   ) {
+    this.context = new ContextGraphSection(hub, contextSession);
     this.providers = new ProvidersPanel(hub, { rerender: () => this.render(), errorText: (code) => this.accountErrorText(code), visible: () => !this.root.hidden && this.section === 'accounts' });
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
@@ -205,6 +210,7 @@ export class SetupView {
   }
 
   async open(mode: Kind, section?: Section): Promise<void> {
+    this.context.unmount();
     this.mode = mode;
     // A first run interrupted by a restart picks up at the step it reached.
     this.section = section ?? (mode === 'onboarding' ? stepReached() : 'general');
@@ -221,6 +227,7 @@ export class SetupView {
     if (!(await this.flush(false)) || !(await this.saveDraft())) return;
     if (this.device) this.hub.githubCancel();
     this.device = null;
+    this.context.unmount();
     this.root.hidden = true;
     // Emptied once its closing transition is over.
     this.clearTimer = window.setTimeout(() => this.root.hidden && this.root.replaceChildren(), 240);
@@ -243,6 +250,11 @@ export class SetupView {
     if (!r.ok) this.note = { text: t('setup.invalid'), tone: 'error' };
     if (redraw || !r.ok) this.render();
     return r.ok;
+  }
+
+  /** A replacement or missing master invalidates any graph action still in flight. */
+  contextChanged(): void {
+    if (this.isOpen && this.section === 'context') this.context.updateSession();
   }
 
   // ---------- frame ----------
@@ -294,6 +306,7 @@ export class SetupView {
       void this.saveDraft().then((ok) => ok && this.go(section));
       return;
     }
+    this.context.unmount();
     this.draft = null;
     this.agents = null;
     this.confirmDelete = '';
@@ -345,6 +358,10 @@ export class SetupView {
         return this.sessions(el, v.settings);
       case 'team':
         return this.team(el, v);
+      case 'context':
+        this.head(el, t('context.title'), t('context.lead'));
+        el.append(this.context.mount());
+        return;
       case 'about':
         return this.about(el, v);
       case 'remote':

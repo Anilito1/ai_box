@@ -24,7 +24,8 @@ import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { Subagents } from './subagents';
-import { TopicMemory, type Provenance } from './topicMemory';
+import { TopicMemory, type Provenance, type TopicState } from './topicMemory';
+import { ContextGraphRuntime, graphWorkspace, type GraphScope } from './contextGraph';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -587,6 +588,7 @@ export class SessionManager extends EventEmitter {
   private quitting = false;
   private readonly stateFile: string;
   private readonly contextMemory: TopicMemory;
+  private readonly contextGraph: ContextGraphRuntime;
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -607,10 +609,33 @@ export class SessionManager extends EventEmitter {
     this.stateFile = join(opts.dataDir, 'state.json');
     this.attachDir = join(opts.dataDir, 'attachments');
     this.contextMemory = new TopicMemory(join(opts.dataDir, 'context-memory.sqlite'));
+    this.contextGraph = new ContextGraphRuntime({ dataDir: opts.dataDir,
+      settings: () => opts.cfg.contextGraph ?? { enabled: false, workspaces: [] },
+      save: settings => { const before = opts.cfg.contextGraph; opts.cfg.contextGraph = settings; try { opts.persist(); } catch (error) { opts.cfg.contextGraph = before; throw error; } },
+    });
     this.restore();
     this.syncTeam();
     // The figure follows the user's other uses of the account too (a terminal, claude.ai): asked now and then, turn or not.
     setInterval(() => this.pollUsage(), USAGE_POLL_MS).unref();
+  }
+
+  private graphScope(id: unknown): GraphScope {
+    const session = typeof id === 'string' ? this.sessions.get(id) : undefined;
+    if (!session || !['master', 'worker'].includes(session.role)) throw new Error('Invalid graph session');
+    const workspace = graphWorkspace(session.cwd, this.opts.cfg.workspaces);
+    if (!workspace) throw new Error('Session outside configured workspace');
+    return { workspace, sessionId: session.id };
+  }
+  contextGraphStatus(id: unknown) { return this.contextGraph.status(this.graphScope(id)); }
+  contextGraphSetEnabled(id: unknown, enabled: unknown) {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid graph setting');
+    return this.contextGraph.setEnabled(this.graphScope(id), enabled);
+  }
+  contextGraphExportSnapshot(id: unknown) { return this.contextGraph.exportSnapshot(this.graphScope(id)); }
+  contextGraphPurge(id: unknown) { return this.contextGraph.purge(this.graphScope(id)); }
+  private async recordContextGraph(s: Session, state: TopicState, operation: 'update' | 'decision' | 'compact'): Promise<void> {
+    // Optional graph errors must never reject an already accepted topic-memory write.
+    try { await this.contextGraph?.record(this.graphScope(s.id), state, operation); } catch { /* closed or out-of-workspace session */ }
   }
 
   // ---------- lifecycle ----------
@@ -799,6 +824,7 @@ export class SessionManager extends EventEmitter {
       // State not saved (disk full, file locked): the sessions must still be closed.
     }
     this.contextMemory.close();
+    void this.contextGraph.close();
     for (const s of this.sessions.values()) {
       s.inbox?.close();
       s.query?.close();
@@ -3567,7 +3593,7 @@ export class SessionManager extends EventEmitter {
           constraints: z.array(z.string().max(1000)).max(30).optional(), tasks: z.array(z.string().max(500)).max(30).optional(),
           blockers: z.array(z.string().max(500)).max(20).optional(), artifacts: z.array(z.string().max(500)).max(30).optional(),
           nextStep: z.string().max(1000).optional() }).optional(),
-      }, (args) => run(() => {
+      }, (args) => run(async () => {
         if (role === 'worker' && this.topics.linkOf(s.name) !== args.topic) throw new Error('Memory access requires this worker’s assigned topic');
         if (this.contextMemory.status.mode !== 'sqlite') return JSON.stringify(this.contextMemory.status);
         if (args.action === 'read') return JSON.stringify({ lastEvent: this.contextMemory.lastEvent(args.topic), packet: this.contextMemory.get(args.topic) ? this.contextMemory.packet(args.topic) : null, pressure: this.contextMemory.pressure(args.topic) });
@@ -3575,13 +3601,25 @@ export class SessionManager extends EventEmitter {
         const provenance: Provenance = { actor: s.name, source: args.source, anonymized: true };
         if (args.action === 'remember') return JSON.stringify(this.contextMemory.remember(args.topic, args.text ?? '', provenance));
         if (args.version === undefined) throw new Error('Read current version before writing (0 for a new topic)');
-        if (args.action === 'decision') return JSON.stringify(this.contextMemory.decision(args.topic, args.text ?? '', provenance, args.version, args.supersedes));
+        if (args.action === 'decision') {
+          const state = this.contextMemory.decision(args.topic, args.text ?? '', provenance, args.version, args.supersedes);
+          await this.recordContextGraph(s, state, 'decision'); return JSON.stringify(state);
+        }
         if (args.action === 'compact') {
           if (args.covered_event === undefined) throw new Error('Read the packet and supply its lastEvent as covered_event before compacting');
-          return JSON.stringify(this.contextMemory.compact(args.topic, args.text ?? '', provenance, args.version, args.covered_event));
+          const result = this.contextMemory.compact(args.topic, args.text ?? '', provenance, args.version, args.covered_event);
+          await this.recordContextGraph(s, result.state, 'compact'); return JSON.stringify(result);
         }
         if (args.state?.summary !== undefined && args.covered_event !== this.contextMemory.lastEvent(args.topic)) throw new Error('Read the packet and supply its lastEvent as covered_event before summarizing');
-        return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
+        const state = this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version);
+        await this.recordContextGraph(s, state, 'update'); return JSON.stringify(state);
+      }));
+    const graph = tool('context_graph',
+      'Retrieve at most 50 structured context nodes for one topic in this session. Explicit opt-in in Settings is required. Opaque metadata only; no transcript, automatic prompt injection or arbitrary paths. Workers may access only their assigned topic.',
+      { topic: z.string().min(1).max(160), limit: z.number().int().min(1).max(50).optional() },
+      (args) => run(async () => {
+        if (role !== 'master' && (role !== 'worker' || this.topics.linkOf(s.name) !== args.topic)) throw new Error('Graph access requires this worker’s assigned topic');
+        return JSON.stringify(await this.contextGraph.retrieve(this.graphScope(s.id), args.topic, args.limit));
       }));
     if (role === 'worker') {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }, extra) =>
@@ -3616,7 +3654,7 @@ export class SessionManager extends EventEmitter {
       const toLead = this.groupOf(s)
         ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }, extra) => once(extra, () => this.messageLead(s, message)))]
         : [];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
+      return [...(this.topics.linkOf(s.name) ? [memory, graph] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -3647,7 +3685,7 @@ export class SessionManager extends EventEmitter {
       enabled: z.boolean().nullish().describe(t('tool.role.enabled')),
     };
     return [
-        memory,
+        memory, graph,
         tool(
           'spawn_worker',
           t('tool.spawn'),
