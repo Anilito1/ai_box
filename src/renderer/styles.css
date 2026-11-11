@@ -7531,3 +7531,15 @@ input[type='radio']:focus-visible {
 .ph-away[hidden] {
   display: none;
 }
+
+/* Structured context uses the existing settings rhythm and never exposes graph labels or paths. */
+.context-graph { max-width: 620px; }
+.context-toggle { margin-bottom: var(--sp-5); }
+.context-toggle > span { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.context-details { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: var(--sp-2) var(--sp-4); margin: 0 0 var(--sp-5); font-size: var(--fs-sm); line-height: 1.5; }
+.context-details dt { color: var(--text-3); }
+.context-details dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.context-confirm { margin: var(--sp-4) 0 0; }
+.context-note { margin-top: var(--sp-3); }
+.context-note.error { color: var(--danger-text); }
+.context-actions button { white-space: normal; text-align: left; }

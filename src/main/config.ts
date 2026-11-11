@@ -60,6 +60,7 @@ function defaults(lang: Lang): HubConfig {
     permissionMode: '',
     masterInstructions: '',
     clientDataRule: true,
+    contextGraph: { enabled: false, workspaces: [] },
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
     updates: 'auto',
     topicGroups: { order: [], collapsed: [] },
@@ -113,6 +114,10 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   take('parallel', raw.parallel, isParallel, (v) => (cfg.parallel = { perPost: v.perPost, maxWorkers: v.maxWorkers }));
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
+  take('contextGraph', raw.contextGraph, (v): v is HubConfig['contextGraph'] => {
+    const o = obj(v);
+    return Object.keys(o).every(k => ['enabled', 'workspaces'].includes(k)) && typeof o.enabled === 'boolean' && Array.isArray(o.workspaces) && o.workspaces.length <= 20 && o.workspaces.every(w => typeof w === 'string' && /^workspace:[a-f0-9]{64}$/.test(w));
+  }, v => (cfg.contextGraph = { enabled: v.enabled, workspaces: [...new Set(v.workspaces)] }));
   take('clientDataRule', raw.clientDataRule, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.clientDataRule = v));
   take('updates', raw.updates, (v): v is UpdateMode => UPDATE_MODES.includes(v as UpdateMode), (v) => (cfg.updates = v));
   take('background', raw.background, (v): v is string => v === '' || isStr(v, 7, /^#[0-9a-f]{6}$/), (v) => (cfg.background = v));
@@ -242,6 +247,7 @@ export function saveConfig(dataDir: string, cfg: HubConfig): void {
 
 /** Applies a patch from the renderer to `cfg` only if every field in it is valid; returns the first invalid field. */
 export function applyPatch(cfg: HubConfig, patch: SettingsPatch): string | null {
+  if (Object.hasOwn(obj(patch), 'contextGraph')) return 'contextGraph';
   const next: HubConfig = structuredClone(cfg);
   const bad = merge(next, obj(patch));
   if (bad) return bad;

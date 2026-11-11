@@ -1071,6 +1071,10 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
     });
 
+    handle('context-graph:status', (id) => mgr.contextGraphStatus(id));
+    handle('context-graph:set-enabled', (id, enabled) => mgr.contextGraphSetEnabled(id, enabled));
+    handle('context-graph:export-snapshot', (id) => mgr.contextGraphExportSnapshot(id));
+    handle('context-graph:purge', (id) => mgr.contextGraphPurge(id));
     handle('settings:get', () => this.view());
     handle('settings:save', (patch) => {
       const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
