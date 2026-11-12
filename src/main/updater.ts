@@ -93,6 +93,7 @@ export class Updater {
       checkedAt: null,
       offline: false,
       target: '',
+      offer: null,
       block: null,
       branch: '',
       files: [],
@@ -175,7 +176,7 @@ export class Updater {
   private async read(fetch: boolean): Promise<void> {
     const r = await inspect(this.root, fetch);
     const s = this.state;
-    Object.assign(s, { kind: r.kind, block: r.block, branch: r.branch, files: r.files, target: r.pending?.to.slice(0, 7) ?? '' });
+    Object.assign(s, { kind: r.kind, block: r.block, branch: r.branch, files: r.files, target: r.pending?.to.slice(0, 7) ?? '', offer: r.pending?.offer ?? null });
     if (r.kind === 'unofficial' || r.kind === 'none') Object.assign(s, { offline: false, detail: '' });
     if (r.fetched) Object.assign(s, { offline: !r.fetched.ok, detail: r.fetched.detail });
     this.pending = r.pending;

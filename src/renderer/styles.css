@@ -3404,8 +3404,40 @@ kbd,
 .notes-foot {
   display: flex;
   justify-content: flex-end;
+  gap: 6px;
   padding: var(--sp-3) var(--sp-6);
   border-top: 1px solid var(--line);
+}
+/* The update confirmation reuses the notes card: versions, then what the new one adds. */
+.update-modal {
+  position: relative;
+  width: min(460px, 100%);
+}
+.update-modal-lead {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-md);
+  line-height: var(--lh-base);
+}
+.update-modal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: var(--sp-4);
+  color: var(--text-2);
+  font: 500 var(--fs-sm) var(--font-mono);
+}
+.update-modal-to {
+  color: var(--text);
+}
+.update-modal-news {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.update-modal-versions:empty,
+.update-modal-notes:empty {
+  display: none;
 }
 
 /* ---------- command palette ---------- */

@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-12
+
+### Ajouté
+
+- Un clic sur « Mise à jour disponible » ouvre une fenêtre avec la nouvelle version et ses nouveautés : tu peux mettre à jour tout de suite, ou plus tard.
+
 ## 2026-11-10
 
 ### Modifié

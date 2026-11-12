@@ -1,9 +1,11 @@
+import { NOTE_SECTIONS } from '../shared/releaseNotes';
 import type { HubApi } from '../shared/types';
-import { UPDATE_MODES, type UpdateChoice, type UpdateMode, type UpdateState } from '../shared/update';
+import { UPDATE_MODES, type UpdateChoice, type UpdateMode, type UpdateOffer, type UpdateState } from '../shared/update';
 import { ago, h, icon, ICONS, techDetails } from './dom';
 import { t, tn } from './i18n';
 
-// The hub's own updates: a badge in the master's header that opens a card, and the block of Settings › About.
+// The hub's own updates: a badge in the master's header that opens a confirmation (a card for what has no action), and
+// the block of Settings › About.
 
 /** A result after the restart that installed it, or the outcome of a check the user asked for, fades after this long. */
 const DONE_MS = 12_000;
@@ -231,12 +233,13 @@ function renderChip(): void {
   if (!open && card.contains(document.activeElement)) (document.querySelector('#pane-master textarea') as HTMLElement | null)?.focus();
   slot.hidden = !visible;
   chip.setAttribute('aria-expanded', String(open));
-  card.hidden = !open;
+  card.hidden = !open || (!!s && inModal(s));
+  renderModal();
   if (!s || !visible) return;
   slot.dataset.tone = tone(s);
   const label = chipLabel(s);
   if (chipText.textContent !== label) chipText.textContent = label;
-  if (!open) return;
+  if (!open || inModal(s)) return;
   const words = message(s);
   if (text.textContent !== words) text.textContent = words;
   // The buttons and the fold only when what they do changed: the countdown redraws its text every second.
@@ -251,6 +254,112 @@ function renderChip(): void {
   close.setAttribute('aria-label', closing);
   close.hidden = topic(s) === 'progress';
   bar.hidden = topic(s) !== 'progress' || s.progress === 'ready';
+}
+
+// ---------- the confirmation: the badge opens it for whatever the user decides or follows ----------
+
+/** The rest (on hold, realign, done, a quiet check) has nothing to confirm and stays in the card. */
+const MODAL_TOPICS: Topic[] = ['available', 'confirm', 'waiting', 'countdown', 'progress', 'failed', 'problem'];
+const inModal = (s: UpdateState) => MODAL_TOPICS.includes(topic(s));
+
+const overlay = h('div', 'notes-overlay');
+const dialog = h('div', 'notes-card update-modal');
+const modalTitle = h('h2', 'notes-title');
+const modalLead = h('p', 'update-modal-lead');
+const modalVersions = h('div', 'update-modal-versions');
+const modalNotes = h('div', 'update-modal-notes');
+const modalMore = h('div', 'update-card-more');
+const modalFoot = h('div', 'notes-foot');
+const modalBar = h('div', 'update-card-bar');
+modalTitle.id = 'update-modal-title';
+modalLead.setAttribute('role', 'status');
+modalLead.setAttribute('aria-live', 'polite');
+dialog.setAttribute('role', 'dialog');
+dialog.setAttribute('aria-modal', 'true');
+dialog.setAttribute('aria-labelledby', 'update-modal-title');
+modalBar.append(h('span'));
+const modalBody = h('div', 'notes-body');
+modalBody.append(modalTitle, modalLead, modalVersions, modalNotes, modalMore);
+dialog.append(modalBody, modalFoot, modalBar);
+overlay.append(dialog);
+overlay.addEventListener('mousedown', (e) => {
+  if (e.target === overlay) dismiss();
+});
+overlay.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    dismiss();
+  } else if (e.key === 'Tab') {
+    // The dialog's own buttons are its only stops.
+    const stops = [...overlay.querySelectorAll<HTMLElement>('button:not([disabled]), summary')];
+    e.preventDefault();
+    if (stops.length === 0) return;
+    const at = stops.indexOf(document.activeElement as HTMLElement);
+    stops[e.shiftKey ? (at <= 0 ? stops.length - 1 : at - 1) : (at + 1) % stops.length].focus();
+  }
+});
+
+/** `0.2.0 (a1b2c3d)`: the package's version and its commit, either alone when the other is unknown. */
+const versionLabel = (version: string, sha: string) => (version && sha ? `${version} (${sha})` : version || sha);
+
+function dismiss(): void {
+  onClose();
+  chip.focus();
+}
+
+/** "Later" for an offer, "Cancel" for a wait, "Close" otherwise. */
+const modalCloseLabel = (s: UpdateState) => (topic(s) === 'available' ? t('update.later') : closeLabel(s));
+
+function renderModal(): void {
+  const s = state;
+  if (!open || !s || !shown(s) || !inModal(s)) {
+    overlay.remove();
+    return;
+  }
+  const k = topic(s);
+  const offer = s.offer;
+  const fresh = !overlay.isConnected;
+  if (fresh) document.body.append(overlay);
+  const title = k === 'progress' && s.progress === 'ready' ? t('update.modal.ready') : k === 'available' ? t('update.modal.title') : k === 'failed' || k === 'problem' ? t('update.chip.failed') : t('update.title');
+  if (modalTitle.textContent !== title) modalTitle.textContent = title;
+  const words = k === 'available' ? t('update.modal.ask', { version: offer ? versionLabel(offer.toVersion, offer.to) : s.target }) : message(s);
+  if (modalLead.textContent !== words) modalLead.textContent = words;
+  // The rest only when what it shows changed: the countdown redraws its text every second.
+  const key = JSON.stringify([k, s.progress, s.confirm, s.kind, s.last?.at ?? '', s.problem, s.offline, s.target]);
+  if (modalFoot.dataset.key !== key) {
+    modalFoot.dataset.key = key;
+    modalVersions.replaceChildren(...(offer ? versions(offer) : []));
+    modalNotes.replaceChildren(...(offer && k === 'available' ? notesOf(offer) : []));
+    modalMore.replaceChildren(...details(s));
+    const closing = button(modalCloseLabel(s), 'update-card-btn', dismiss);
+    modalFoot.replaceChildren(closing, ...actions(s, 'update-card-btn primary', 'update-card-btn'));
+    // Rebuilt buttons lose the focus: the main one takes it.
+    if (fresh || !overlay.contains(document.activeElement)) (modalFoot.querySelector<HTMLElement>('.primary') ?? closing).focus();
+  }
+  modalBar.hidden = k !== 'progress' || s.progress === 'ready';
+}
+
+/** The installed version → the new one. */
+function versions(offer: UpdateOffer): HTMLElement[] {
+  const row = h('div', 'update-modal-row');
+  row.append(h('span', 'update-modal-from', versionLabel(offer.fromVersion, offer.from)), h('span', 'update-modal-arrow', '→'),h('span', 'update-modal-to', versionLabel(offer.toVersion, offer.to)));
+  return [row];
+}
+
+/** What the new version adds to the installed one, in the sections of the release notes. */
+function notesOf(offer: UpdateOffer): HTMLElement[] {
+  if (!offer.notes) return [];
+  const out: HTMLElement[] = [h('h3', 'update-modal-news', t('update.modal.news'))];
+  for (const section of NOTE_SECTIONS) {
+    if (offer.notes[section].length === 0) continue;
+    const list = h('ul', 'notes-list');
+    list.append(...offer.notes[section].map((line) => h('li', '', line)));
+    const block = h('section', `notes-section ${section}`);
+    block.append(h('h3', 'notes-label', t(`notes.${section}`)), list);
+    out.push(block);
+  }
+  return out;
 }
 
 // ---------- countdown ----------
@@ -387,7 +496,7 @@ export function initUpdates(api: HubApi, busy: () => boolean, place: HTMLElement
   slot.hidden = true;
   slot.append(chip, card);
   document.addEventListener('pointerdown', (e) => {
-    if (!open || slot.contains(e.target as Node)) return;
+    if (!open || slot.contains(e.target as Node) || overlay.contains(e.target as Node)) return;
     open = false;
     render();
   });

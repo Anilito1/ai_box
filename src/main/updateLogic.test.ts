@@ -5,6 +5,7 @@ import {
   backupBranch,
   cherryEquivalents,
   normalizeRemote,
+  packageVersion,
   decide,
   npmCliCandidates,
   ownCommits,
@@ -274,4 +275,11 @@ test('npmCliCandidates: as npm start ran it, then beside Node', () => {
 test('retryable: a file still held by a closing process', () => {
   assert.equal(retryable('npm error code EBUSY'), true);
   assert.equal(retryable('npm error code ERESOLVE'), false);
+});
+
+test('packageVersion: the version of a package.json, empty when there is none', () => {
+  assert.equal(packageVersion('{"name":"x","version":"0.2.0"}'), '0.2.0');
+  assert.equal(packageVersion('{"name":"x"}'), '');
+  assert.equal(packageVersion('{"version":"1 2"}'), '');
+  assert.equal(packageVersion(''), '');
 });

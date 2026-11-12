@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { UpdateBlock, UpdateKind } from '../shared/update';
+import { addedNotes, parseNotes } from '../shared/releaseNotes';
+import type { UpdateBlock, UpdateKind, UpdateOffer } from '../shared/update';
 import { git, GitError } from './git';
 import { samePath } from './repos';
 import {
@@ -11,6 +12,7 @@ import {
   normalizeRemote,
   ownCommits,
   parseFull,
+  packageVersion,
   parseStatus,
   redact,
   repositoryOf,
@@ -30,7 +32,7 @@ export interface Inspection {
   /** A few of the files with local modifications. */
   files: string[];
   /** What an install would do, when there is a new version. */
-  pending: { from: string; to: string; lockChanged: boolean } | null;
+  pending: { from: string; to: string; lockChanged: boolean; offer: UpdateOffer } | null;
   /** The official repository, normalized; empty when the checkout declares none. */
   remote: string;
   /** With `fetch`: whether the repository answered, and git's words when not. */
@@ -78,7 +80,7 @@ export async function inspect(root: string, fetch: boolean): Promise<Inspection>
   const result: Inspection = { kind, block, branch, ahead: facts.ahead, behind: facts.behind, files: dirty.slice(0, 8), pending: null, remote, fetched };
   if (facts.behind > 0 && (kind === 'available' || kind === 'blocked' || kind === 'realign')) {
     const lockChanged = (await value(['diff', '--name-only', 'HEAD', TARGET_REF, '--', 'package-lock.json'])) !== '';
-    result.pending = { from: head, to: target, lockChanged };
+    result.pending = { from: head, to: target, lockChanged, offer: await offerOf(root, head, target) };
   }
   return result;
 }
@@ -99,4 +101,22 @@ async function nothingOwn(root: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** What the new version brings: both `package.json` versions and the release-note lines the installed copy lacks. */
+async function offerOf(root: string, head: string, target: string): Promise<UpdateOffer> {
+  const show = (ref: string, file: string) => git(root, ['show', `${ref}:${file}`]).catch(() => '');
+  const [fromPkg, toPkg, fromNotes, toNotes] = await Promise.all([
+    show(head, 'package.json'),
+    show(target, 'package.json'),
+    show(head, 'docs/notes-de-version.md'),
+    show(target, 'docs/notes-de-version.md'),
+  ]);
+  return {
+    from: head.slice(0, 7),
+    to: target.slice(0, 7),
+    fromVersion: packageVersion(fromPkg),
+    toVersion: packageVersion(toPkg),
+    notes: addedNotes(parseNotes(fromNotes).entries, parseNotes(toNotes).entries),
+  };
 }
