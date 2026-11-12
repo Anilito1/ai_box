@@ -120,6 +120,7 @@ const api: HubApi = {
   setPlugin: (id, on) => ipcRenderer.invoke('caps:plugin', id, on),
   finishSetup: () => ipcRenderer.invoke('setup:finish'),
   relaunch: () => ipcRenderer.send('app:relaunch'),
+  busySessions: () => ipcRenderer.invoke('app:busy'),
   onUpdate: (cb) => {
     ipcRenderer.on('hub:update', (_e, state: UpdateState) => cb(state));
   },

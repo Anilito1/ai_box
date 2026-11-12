@@ -202,7 +202,7 @@ test('sessionsQuiet: any work under way keeps the hub awake', () => {
   assert.equal(sessionsAtWork([session({}), session({ status: 'exited' })]), 0);
 });
 
-test('closing the hub asks only while sessions work, and never for the update restart', () => {
+test('closing the hub asks only while sessions work, and never for a restart the user clicked', () => {
   assert.equal(quitNeedsConfirm(0, false), false);
   assert.equal(quitNeedsConfirm(2, false), true);
   // The user already confirmed in the update's window: sessions cut pick up after the restart.

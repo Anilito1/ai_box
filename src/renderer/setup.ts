@@ -34,6 +34,7 @@ import { keyLabel } from './dictation';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
 import { mascotMark } from './mascot';
+import { busyNote } from './busyNote';
 import { forumModeration } from './forum';
 import { updateSection } from './update';
 import { RemoteSection } from './remote';
@@ -283,7 +284,7 @@ export class SetupView {
       else foot.append(this.button(this.startAnyway ? t('setup.finish.anyway') : t('setup.finish'), 'btn primary', () => void this.finish()));
     } else {
       foot.append(h('span', 'setup-hint', t('setup.appliesNext')), h('span', 'spacer'));
-      foot.append(this.button(t('setup.restart'), 'btn ghost', () => this.hub.relaunch()));
+      foot.append(busyNote(this.hub, 'setup-hint'), this.button(t('setup.restart'), 'btn ghost', () => this.hub.relaunch()));
       foot.append(this.button(t('setup.close'), 'btn primary', () => void this.close()));
     }
     body.append(foot);

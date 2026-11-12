@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-13
+
+### Modifié
+
+- Les boutons « Redémarrer » indiquent combien de sessions au travail seront interrompues et redémarrent sans redemander ; la boîte de confirmation à la fermeture s’appelle désormais « AI Box ».
+
 ## 2026-11-12
 
 ### Ajouté
