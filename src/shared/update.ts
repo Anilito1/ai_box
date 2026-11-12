@@ -1,3 +1,5 @@
+import type { Notes } from './releaseNotes';
+
 /** When an update installs by itself: as soon as nothing runs, when the hub closes, or only when the user says so. */
 export type UpdateMode = 'auto' | 'next-start' | 'ask';
 export const UPDATE_MODES: UpdateMode[] = ['auto', 'next-start', 'ask'];
@@ -37,6 +39,18 @@ export interface UpdateResult {
   to: string;
 }
 
+/** The new version on offer, as the confirmation reads it. */
+export interface UpdateOffer {
+  /** Installed and new commits (short). */
+  from: string;
+  to: string;
+  /** The `package.json` version of each, empty when unreadable. */
+  fromVersion: string;
+  toVersion: string;
+  /** The release-note lines the new version adds to the installed one, null for none. */
+  notes: Notes | null;
+}
+
 export interface UpdateState {
   kind: UpdateKind;
   mode: UpdateMode;
@@ -46,6 +60,8 @@ export interface UpdateState {
   offline: boolean;
   /** The official commit on offer (short), when there is one: a "later" holds until a newer one. */
   target: string;
+  /** What the new version brings, when there is one. */
+  offer: UpdateOffer | null;
   block: UpdateBlock | null;
   branch: string;
   /** A few of the files with local modifications. */

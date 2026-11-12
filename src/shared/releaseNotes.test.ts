@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { classify, draft } from '../../scripts/notesDraft.mjs';
-import { fingerprint, markSeen, parseNotes, pendingNotes, readMemory } from './releaseNotes';
+import { addedNotes, fingerprint, markSeen, parseNotes, pendingNotes, readMemory } from './releaseNotes';
 
 const FILE = `# Notes
 
@@ -114,4 +114,13 @@ test('the draft groups the commits under the French headings', () => {
   ]);
   assert.match(text, /^## \d{4}-\d{2}-\d{2}\n\n### Ajouté\n\n- Add a thing\n\n### Supprimé\n\n- Remove a thing\n$/);
   assert.equal(draft([{ subject: 'test: more', files: ['src/a.test.ts'] }]), '');
+});
+
+test('an update brings the lines the installed copy lacks, newest first, once each', () => {
+  const current = parseNotes('## 2026-11-01\n\n### Ajouté\n- Une ligne connue.\n').entries;
+  const target = parseNotes('## 2026-11-05\n\n### Ajouté\n- Une nouveauté.\n- Une ligne connue.\n\n### Modifié\n- Un réglage.\n\n## 2026-11-01\n\n### Ajouté\n- Une ligne connue.\n').entries;
+  assert.deepEqual(addedNotes(current, target), { added: ['Une nouveauté.'], changed: ['Un réglage.'], removed: [] });
+  assert.equal(addedNotes(target, target), null);
+  assert.equal(addedNotes(current, current), null);
+  assert.equal(addedNotes(current, target, 1)?.changed.length, 0);
 });

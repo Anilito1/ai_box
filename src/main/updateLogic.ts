@@ -43,6 +43,16 @@ export function repositoryOf(pkg: unknown): string {
   return normalizeRemote(url);
 }
 
+/** The `version` of a package.json's text, empty when it is not one. */
+export function packageVersion(json: string): string {
+  try {
+    const v = (JSON.parse(json) as { version?: unknown } | null)?.version;
+    return typeof v === 'string' && /^[\w.+-]{1,40}$/.test(v) ? v : '';
+  } catch {
+    return '';
+  }
+}
+
 export interface Facts {
   official: boolean;
   /** Current branch, empty when detached. */

@@ -105,6 +105,20 @@ export function pendingNotes(entries: NoteEntry[], memory: NotesMemory | null, f
   return NOTE_SECTIONS.some((s) => notes[s].length > 0) ? notes : null;
 }
 
+/** The lines `target` holds that `current` does not (an update's news), null for none; at most `max` lines. */
+export function addedNotes(current: NoteEntry[], target: NoteEntry[], max = 12): Notes | null {
+  const known = new Set(lines(current).map((l) => l.key));
+  const notes = emptyNotes();
+  let left = max;
+  for (const { section, text, key } of lines(target)) {
+    if (known.has(key) || left === 0) continue;
+    known.add(key);
+    notes[section].push(text);
+    left--;
+  }
+  return NOTE_SECTIONS.some((s) => notes[s].length > 0) ? notes : null;
+}
+
 /** The memory once every line of the file has been shown. */
 export function markSeen(entries: NoteEntry[], memory: NotesMemory | null): NotesMemory {
   return { seen: [...new Set([...lines(entries).map((l) => l.key), ...(memory?.seen ?? [])])].slice(0, KEEP) };
