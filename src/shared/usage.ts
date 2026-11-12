@@ -31,7 +31,25 @@ export function usageRead(limits: RateLimits | null, now: number): UsageRecord {
 export const usageFailed = (prev: UsageRecord | undefined): UsageRecord => ({ ...(prev ?? noUsage()), applicable: prev?.applicable ?? true, failed: true });
 
 /** What the status bar is given: null when the account has no plan limits, else what is known (possibly nothing yet). */
-export const usageState = (rec: UsageRecord | undefined): UsageState | null => (rec && !rec.applicable ? null : { limits: rec?.limits ?? null, measuredAt: rec?.measuredAt ?? null, failed: rec?.failed ?? false });
+export const usageState = (rec: UsageRecord | undefined, plan = ''): UsageState | null =>
+  rec && !rec.applicable ? null : { plan, limits: rec?.limits ?? null, measuredAt: rec?.measuredAt ?? null, failed: rec?.failed ?? false };
+
+export type UsageWindow = 'fiveHour' | 'sevenDay' | 'fable';
+
+const planName = (plan: string | null | undefined): string => (plan ?? '').trim().toLowerCase();
+
+/**
+ * The windows the status bar tells for an account, by its plan. Ultra plans have no 5 h window to show. Max and Ultra
+ * have a weekly window of their own for Fable, shown only when the answer holds its figure: never as a zero.
+ */
+export function usageWindows(usage: Pick<UsageState, 'plan' | 'limits'>): UsageWindow[] {
+  const plan = planName(usage.plan);
+  const windows: UsageWindow[] = [];
+  if (!plan.includes('ultra')) windows.push('fiveHour');
+  windows.push('sevenDay');
+  if ((plan.includes('max') || plan.includes('ultra')) && usage.limits?.fablePct != null) windows.push('fable');
+  return windows;
+}
 
 const pct = (v: unknown): number | null => {
   const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
@@ -46,9 +64,23 @@ const epoch = (v: unknown): number | null => {
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' ? (v as Record<string, unknown>) : {});
 
 /**
- * The 5 h and 7 d figures out of the `rate_limits` of Claude Code's /usage answer (percent of the window, 0-100).
- * The window objects first; the `limits` list ("session", "weekly_all") when a window is missing. Null when neither
- * holds a figure: the answer then says nothing, and nothing must be shown as zero.
+ * The Fable weekly window: the `model_scoped` entry the server labels "Fable", else the scoped row of the `limits`
+ * list for that model. Null when the answer holds no such figure (the account has none: nothing is shown).
+ */
+function fableOf(r: Record<string, unknown>): [number | null, number | null] {
+  const isFable = (name: unknown) => typeof name === 'string' && name.trim().toLowerCase() === 'fable';
+  const scoped = Array.isArray(r.model_scoped) ? r.model_scoped.map(obj).find((m) => isFable(m.display_name) && pct(m.utilization) !== null) : undefined;
+  if (scoped) return [pct(scoped.utilization), epoch(scoped.resets_at)];
+  const row = Array.isArray(r.limits)
+    ? r.limits.map(obj).find((l) => l.kind === 'weekly_scoped' && isFable(obj(obj(l.scope).model).display_name) && pct(l.percent) !== null)
+    : undefined;
+  return row ? [pct(row.percent), epoch(row.resets_at)] : [null, null];
+}
+
+/**
+ * The 5 h, 7 d and Fable figures out of the `rate_limits` of Claude Code's /usage answer (percent of the window,
+ * 0-100). The window objects first; the `limits` list ("session", "weekly_all") when a window is missing. Null when
+ * neither the 5 h nor the 7 d window holds a figure: the answer then says nothing, and nothing must be shown as zero.
  */
 export function limitsOfUsage(raw: unknown): RateLimits | null {
   const r = obj(raw);
@@ -61,7 +93,9 @@ export function limitsOfUsage(raw: unknown): RateLimits | null {
   };
   const [fiveHourPct, fiveHourResetsAt] = window('five_hour', 'session');
   const [sevenDayPct, sevenDayResetsAt] = window('seven_day', 'weekly_all');
-  return fiveHourPct === null && sevenDayPct === null ? null : { fiveHourPct, fiveHourResetsAt, sevenDayPct, sevenDayResetsAt };
+  if (fiveHourPct === null && sevenDayPct === null) return null;
+  const [fablePct, fableResetsAt] = fableOf(r);
+  return { fiveHourPct, fiveHourResetsAt, sevenDayPct, sevenDayResetsAt, ...(fablePct === null ? {} : { fablePct, fableResetsAt }) };
 }
 
 /**

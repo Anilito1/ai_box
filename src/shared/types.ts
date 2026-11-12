@@ -66,10 +66,15 @@ export interface RateLimits {
   fiveHourResetsAt: number | null;
   sevenDayPct: number | null;
   sevenDayResetsAt: number | null;
+  /** The weekly window of the Fable model (Claude Max and Ultra); absent or null when the answer holds none. */
+  fablePct?: number | null;
+  fableResetsAt?: number | null;
 }
 
 /** What the status bar knows of the plan limits of the account it shows. */
 export interface UsageState {
+  /** The plan Claude Code reports for the account ("pro", "max", "ultra"…); empty when it is not read. */
+  plan: string;
   /** The last good reading; null while there is none. */
   limits: RateLimits | null;
   /** Epoch ms of that reading. */

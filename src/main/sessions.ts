@@ -1605,7 +1605,7 @@ export class SessionManager extends EventEmitter {
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
     this.fileTopicsByRepo();
-    return { sessions, costToday: this.opts.costLog.today(), models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges(), ...this.awayView() };
+    return { sessions, costToday: this.opts.costLog.today(), models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown), this.planOf(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges(), ...this.awayView() };
   }
 
   allItems(): [string, ChatItem[]][] {

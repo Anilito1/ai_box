@@ -10,6 +10,16 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-13
+
+### Ajouté
+
+- Sur les abonnements Max et Ultra, la barre du bas affiche aussi l'utilisation hebdomadaire de Fable, avec son heure de réinitialisation.
+
+### Modifié
+
+- Sur l'abonnement Ultra, la barre du bas n'affiche plus l'utilisation sur 5 heures : seules les limites hebdomadaires restent.
+
 ## 2026-11-12
 
 ### Ajouté
