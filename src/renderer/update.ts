@@ -266,6 +266,7 @@ const overlay = h('div', 'notes-overlay');
 const dialog = h('div', 'notes-card update-modal');
 const modalTitle = h('h2', 'notes-title');
 const modalLead = h('p', 'update-modal-lead');
+const modalAtWork = h('p', 'update-modal-atwork');
 const modalVersions = h('div', 'update-modal-versions');
 const modalNotes = h('div', 'update-modal-notes');
 const modalMore = h('div', 'update-card-more');
@@ -279,7 +280,7 @@ dialog.setAttribute('aria-modal', 'true');
 dialog.setAttribute('aria-labelledby', 'update-modal-title');
 modalBar.append(h('span'));
 const modalBody = h('div', 'notes-body');
-modalBody.append(modalTitle, modalLead, modalVersions, modalNotes, modalMore);
+modalBody.append(modalTitle, modalLead, modalAtWork, modalVersions, modalNotes, modalMore);
 dialog.append(modalBody, modalFoot, modalBar);
 overlay.append(dialog);
 overlay.addEventListener('mousedown', (e) => {
@@ -325,6 +326,10 @@ function renderModal(): void {
   if (modalTitle.textContent !== title) modalTitle.textContent = title;
   const words = k === 'available' ? t('update.modal.ask', { version: offer ? versionLabel(offer.toVersion, offer.to) : s.target }) : message(s);
   if (modalLead.textContent !== words) modalLead.textContent = words;
+  // Before the click, once: after it the confirmation says the same in the lead.
+  const atWork = k === 'available' && s.atWork > 0 ? tn('update.modal.atWork', s.atWork) : '';
+  if (modalAtWork.textContent !== atWork) modalAtWork.textContent = atWork;
+  modalAtWork.hidden = atWork === '';
   // The rest only when what it shows changed: the countdown redraws its text every second.
   const key = JSON.stringify([k, s.progress, s.confirm, s.kind, s.last?.at ?? '', s.problem, s.offline, s.target]);
   if (modalFoot.dataset.key !== key) {

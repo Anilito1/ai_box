@@ -17,6 +17,7 @@ import {
   redact,
   repositoryOf,
   retryable,
+  quitNeedsConfirm,
   sessionsAtWork,
   sessionsQuiet,
   QUIET_MS,
@@ -199,6 +200,14 @@ test('sessionsQuiet: any work under way keeps the hub awake', () => {
     assert.equal(sessionsAtWork([session({}), busy, busy]), 2);
   }
   assert.equal(sessionsAtWork([session({}), session({ status: 'exited' })]), 0);
+});
+
+test('closing the hub asks only while sessions work, and never for the update restart', () => {
+  assert.equal(quitNeedsConfirm(0, false), false);
+  assert.equal(quitNeedsConfirm(2, false), true);
+  // The user already confirmed in the update's window: sessions cut pick up after the restart.
+  assert.equal(quitNeedsConfirm(2, true), false);
+  assert.equal(quitNeedsConfirm(0, true), false);
 });
 
 const moment = (over: Partial<Moment>): Moment => ({

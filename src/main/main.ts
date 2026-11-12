@@ -89,6 +89,7 @@ import { CliUpdater, realRunner, simulatedRunner } from './cliUpdate';
 import { ReleaseNotes } from './releaseNotes';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
+import { quitNeedsConfirm } from './updateLogic';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MODES: Mode[] = ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'];
@@ -210,11 +211,14 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
-/** Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q, relaunch). */
+/**
+ * Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q, relaunch). Never for
+ * the update's own restart: the user confirmed it in the update window, and the sessions pick up afterwards.
+ */
 let quitting = false;
 function confirmQuit(mgr: SessionManager | undefined): boolean {
   const busy = mgr?.busySessions() ?? 0;
-  if (busy === 0 || !win) return true;
+  if (!quitNeedsConfirm(busy, updater?.restarting() ?? false) || !win) return true;
   if (!win.isVisible()) win.show();
   const choice = dialog.showMessageBoxSync(win, {
     type: 'question',
