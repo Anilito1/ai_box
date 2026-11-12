@@ -45,7 +45,8 @@ type Resume = { mode: Kind; section: Section };
 type Row = { name: string; path: string; slug: string; detail: string; private: boolean; pushedAt: number };
 
 // The first run connects the providers only: the team and the fallback start empty, nothing imposed.
-const STEPS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions'];
+/** The first run: what a session needs to start, in that order; the rest waits in the settings. */
+const STEPS: Section[] = ['general', 'accounts', 'sessions', 'workspace', 'github', 'repos'];
 const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
@@ -306,19 +307,46 @@ export class SetupView {
     this.startAnyway = false;
     this.ghWait = 0;
     this.noTerminal = false;
+    const leaving = this.section;
     this.section = section;
     this.note = null;
     if (this.mode === 'onboarding') remember(STEP_KEY, section);
     this.render();
+    if (this.mode === 'onboarding' && leaving === 'accounts') void this.alignDefaults().then((moved) => moved && !this.root.hidden && this.render());
+  }
+
+  /** Whether an account stands for a connected provider, or is an older hand-made one (always usable). */
+  private usable(account: string): boolean {
+    if (this.providerList().some((p) => p.connected && p.accountId === account)) return true;
+    const own = this.view?.settings.accounts.find((a) => a.id === account);
+    return !!own && providerOfAccount(own) === null;
   }
 
   /**
-   * The master needs a connected provider: with none yet, a first press shows the Accounts step and explains, a second
+   * The master and the workers start on Anthropic. On a first run that connected other providers only, they move to the
+   * first connected one (its default model), so the master does not stop at its first message. True when saved.
+   */
+  private async alignDefaults(): Promise<boolean> {
+    const s = this.view?.settings;
+    const first = this.providerList().find((p) => p.connected && p.accountId);
+    if (!s || !first) return false;
+    const patch: SettingsPatch = {};
+    if (!this.usable(s.masterAccount)) Object.assign(patch, { masterAccount: first.accountId, master: { model: '', effort: s.master.effort } });
+    if (!this.usable(s.workerAccount)) Object.assign(patch, { workerAccount: first.accountId, worker: { model: '', effort: s.worker.effort } });
+    if (Object.keys(patch).length === 0) return false;
+    const r = await this.hub.saveSettings(patch);
+    this.view = r;
+    return r.ok;
+  }
+
+  /**
+   * The master needs its provider connected: without it, a first press shows the Accounts step and explains, a second
    * one starts anyway.
    */
   private async finish(): Promise<void> {
     if (!(await this.flush(false))) return;
-    if (!this.startAnyway && !(await this.hub.providers()).some((p) => p.connected)) {
+    await this.alignDefaults();
+    if (!this.startAnyway && !this.usable(this.view?.settings.masterAccount ?? DEFAULT_ACCOUNT)) {
       this.startAnyway = true;
       this.section = 'accounts';
       this.note = { text: t('setup.finish.noAccess'), tone: 'error' };
@@ -537,7 +565,7 @@ export class SetupView {
     if (this.mode === 'onboarding') {
       const list = h('ul', 'setup-list');
       for (const key of ['setup.welcome.p1', 'setup.welcome.p2', 'setup.welcome.p3'] as const) list.append(h('li', '', t(key)));
-      el.append(list);
+      el.append(list, h('p', 'setup-fine', t('setup.welcome.later')));
     }
   }
 
@@ -1003,8 +1031,13 @@ export class SetupView {
     el.append(
       this.defaultField(t('setup.sessions.master'), t('setup.accounts.master.hint'), s.masterAccount, s.master, (account, v) => void this.save({ masterAccount: account, master: v })),
       this.defaultField(t('setup.sessions.worker'), t('setup.accounts.workers.hint'), s.workerAccount, s.worker, (account, v) => void this.save({ workerAccount: account, worker: v })),
-      this.autoChoice(s),
     );
+    // The first run keeps to what a session needs to start; the finer choices wait in the settings.
+    if (this.mode === 'onboarding') {
+      el.append(h('p', 'setup-fine', t('setup.sessions.later')));
+      return;
+    }
+    el.append(this.autoChoice(s));
 
     const f = this.field(t('setup.sessions.instructions'), t('setup.sessions.instructions.hint'));
     const area = h('textarea', 'setup-textarea');
