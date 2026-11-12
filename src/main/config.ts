@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFile
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccount, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
-import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage } from '../shared/dictation';
+import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage, isSttEngine, isSttModel, isSttPreset, isSttUrl } from '../shared/dictation';
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
@@ -123,6 +123,10 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     take('dictation.enabled', d.enabled, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.dictation.enabled = v));
     take('dictation.language', d.language, isDictationLanguage, (v) => (cfg.dictation.language = v));
     take('dictation.key', d.key, isDictationKey, (v) => (cfg.dictation.key = v));
+    take('dictation.engine', d.engine, isSttEngine, (v) => (cfg.dictation.engine = v));
+    take('dictation.preset', d.preset, isSttPreset, (v) => (cfg.dictation.preset = v));
+    take('dictation.model', d.model, isSttModel, (v) => (cfg.dictation.model = v));
+    take('dictation.baseUrl', d.baseUrl, isSttUrl, (v) => (cfg.dictation.baseUrl = v));
   }
   if (raw.github !== undefined) {
     const g = obj(raw.github);

@@ -29,7 +29,7 @@ import {
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
-import { DICTATION_KEYS, DICTATION_LANGUAGES, type DictationSettings } from '../shared/dictation';
+import { DICTATION_KEYS, DICTATION_LANGUAGES, engineOf, STT_ENGINES, STT_PRESET_IDS, STT_PRESETS, type SttPresetId } from '../shared/dictation';
 import { keyLabel } from './dictation';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
 import { effortLabel, LANG, t, type Key } from './i18n';
@@ -147,6 +147,10 @@ export class SetupView {
   /** The providers' blocks of Settings › Accounts. */
   private readonly providers: ProvidersPanel;
   private confirmAccountDelete = '';
+  /** The key of a transcription service being typed, kept across renders; never shown back once saved. */
+  private sttKey = '';
+  /** A key is saved and the user asked to type another. */
+  private sttKeyEditing = false;
 
   constructor(
     private readonly hub: HubApi,
@@ -561,44 +565,11 @@ export class SetupView {
     f.append(seg);
     el.append(f);
     if (this.mode !== 'onboarding') el.append(this.backgroundField(v.settings.background));
-    if (v.dictationOffered && this.mode !== 'onboarding') this.dictationBlock(el, v.settings.dictation);
     if (this.mode === 'onboarding') {
       const list = h('ul', 'setup-list');
       for (const key of ['setup.welcome.p1', 'setup.welcome.p2', 'setup.welcome.p3'] as const) list.append(h('li', '', t(key)));
       el.append(list, h('p', 'setup-fine', t('setup.welcome.later')));
     }
-  }
-
-  /** Voice dictation: the switch, the spoken language and the key. Offered where the machine has an engine. */
-  private dictationBlock(el: HTMLElement, d: DictationSettings): void {
-    const group = this.field(t('setup.dictation'), t('setup.dictation.hint'));
-    const toggle = h('label', 'setup-toggle');
-    const box = h('input');
-    box.type = 'checkbox';
-    box.checked = d.enabled;
-    box.addEventListener('change', () => void this.save({ dictation: { enabled: box.checked } }));
-    const text = h('span', 'setup-choice-text');
-    text.append(h('span', 'setup-choice-title', t('setup.dictation.on')));
-    toggle.append(box, text);
-    group.append(toggle);
-    if (d.enabled) {
-      const language = h('select', 'setup-select');
-      for (const tag of DICTATION_LANGUAGES.includes(d.language) ? DICTATION_LANGUAGES : [d.language, ...DICTATION_LANGUAGES]) {
-        const option = h('option', '', new Intl.DisplayNames([LANG], { type: 'language' }).of(tag) ?? tag);
-        option.value = tag;
-        option.selected = tag === d.language;
-        language.append(option);
-      }
-      language.addEventListener('change', () => void this.save({ dictation: { language: language.value } }));
-      const key = h('div', 'segmented setup-seg');
-      for (const k of DICTATION_KEYS) {
-        const b = h('button', k === d.key ? 'seg active' : 'seg', keyLabel(k));
-        b.addEventListener('click', () => k !== d.key && void this.save({ dictation: { key: k } }));
-        key.append(b);
-      }
-      group.append(h('div', 'setup-label', t('setup.dictation.language')), language, h('div', 'setup-label', t('setup.dictation.key')), key);
-    }
-    el.append(group);
   }
 
   /**
@@ -1208,6 +1179,144 @@ export class SetupView {
       el.append(this.field(t('setup.accounts.legacy'), t('setup.accounts.legacy.hint')), list);
     }
     el.append(this.fallbackField(s));
+    this.dictationBlock(el, v);
+  }
+
+  /**
+   * The dictation model: the switch, the engine (Apple's on a Mac that has it, else a transcription service and its
+   * key), the spoken language and the key to hold.
+   */
+  private dictationBlock(el: HTMLElement, v: SettingsView): void {
+    const d = v.settings.dictation;
+    const group = this.field(t('setup.dictation'), t('setup.dictation.hint'));
+    const toggle = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = d.enabled;
+    box.addEventListener('change', () => void this.save({ dictation: { enabled: box.checked } }));
+    const text = h('span', 'setup-choice-text');
+    text.append(h('span', 'setup-choice-title', t('setup.dictation.on')));
+    toggle.append(box, text);
+    group.append(toggle);
+    if (d.enabled) {
+      const engine = engineOf(d, v.dictationNative);
+      // Only a Mac with Apple's engine has a choice; elsewhere the service is the engine.
+      if (v.dictationNative) {
+        const seg = h('div', 'segmented setup-seg');
+        for (const e of STT_ENGINES) {
+          const b = h('button', e === engine ? 'seg active' : 'seg', t(e === 'native' ? 'setup.dictation.native' : 'setup.dictation.api'));
+          b.addEventListener('click', () => e !== engine && void this.save({ dictation: { engine: e } }));
+          seg.append(b);
+        }
+        group.append(h('div', 'setup-label', t('setup.dictation.engine')), seg);
+      }
+      group.append(h('div', 'setup-hint', t(engine === 'native' ? 'setup.dictation.native.hint' : 'setup.dictation.api.hint')));
+      if (engine === 'api') this.sttService(group, v);
+      const language = h('select', 'setup-select');
+      for (const tag of DICTATION_LANGUAGES.includes(d.language) ? DICTATION_LANGUAGES : [d.language, ...DICTATION_LANGUAGES]) {
+        const option = h('option', '', new Intl.DisplayNames([LANG], { type: 'language' }).of(tag) ?? tag);
+        option.value = tag;
+        option.selected = tag === d.language;
+        language.append(option);
+      }
+      language.addEventListener('change', () => void this.save({ dictation: { language: language.value } }));
+      const key = h('div', 'segmented setup-seg');
+      for (const k of DICTATION_KEYS) {
+        const b = h('button', k === d.key ? 'seg active' : 'seg', keyLabel(k));
+        b.addEventListener('click', () => k !== d.key && void this.save({ dictation: { key: k } }));
+        key.append(b);
+      }
+      group.append(h('div', 'setup-label', t('setup.dictation.language')), language, h('div', 'setup-label', t('setup.dictation.key')), key);
+    }
+    el.append(group);
+  }
+
+  /** The transcription service: which one, its address (any OpenAI-compatible one), the model, and the key. */
+  private sttService(group: HTMLElement, v: SettingsView): void {
+    const d = v.settings.dictation;
+    const preset = STT_PRESETS[d.preset];
+    const service = h('select', 'setup-select');
+    service.setAttribute('aria-label', t('setup.dictation.service'));
+    for (const id of STT_PRESET_IDS) service.append(new Option(id === 'custom' ? t('setup.dictation.custom') : STT_PRESETS[id].label, id, false, id === d.preset));
+    // Another service's models mean nothing to this one: the model goes back to its default.
+    service.addEventListener('change', () => {
+      this.sttKeyEditing = false;
+      this.sttKey = '';
+      void this.save({ dictation: { preset: service.value as SttPresetId, model: '' } });
+    });
+    group.append(h('div', 'setup-label', t('setup.dictation.service')), service);
+    if (d.preset === 'custom') {
+      const url = h('input', 'setup-input stt-input');
+      url.type = 'url';
+      url.spellcheck = false;
+      url.placeholder = 'https://…/v1';
+      url.value = d.baseUrl;
+      url.setAttribute('aria-label', t('setup.dictation.baseUrl'));
+      url.addEventListener('change', () => void this.save({ dictation: { baseUrl: url.value.trim() } }));
+      group.append(h('div', 'setup-label', t('setup.dictation.baseUrl')), url, h('div', 'setup-hint', t('setup.dictation.baseUrl.hint')));
+    }
+    const model = h('input', 'setup-input stt-input');
+    model.spellcheck = false;
+    model.value = d.model;
+    model.placeholder = preset.models[0] ?? 'whisper-1';
+    model.setAttribute('aria-label', t('setup.dictation.model'));
+    if (preset.models.length > 0) {
+      const list = h('datalist');
+      list.id = 'stt-models';
+      for (const m of preset.models) list.append(new Option(m, m));
+      model.setAttribute('list', list.id);
+      group.append(list);
+    }
+    model.addEventListener('change', () => void this.save({ dictation: { model: model.value.trim() } }));
+    group.append(h('div', 'setup-label', t('setup.dictation.model')), model);
+    if (preset.models[0]) group.append(h('div', 'setup-hint', t('setup.dictation.model.default', { model: preset.models[0] })));
+    group.append(h('div', 'setup-label', t('setup.dictation.key.label')));
+    const saved = v.dictationKeys.includes(d.preset);
+    const row = h('div', 'acct-keyrow');
+    if (saved && !this.sttKeyEditing) {
+      row.append(
+        h('span', 'setup-hint', t('setup.dictation.key.set')),
+        this.button(t('setup.dictation.key.replace'), 'btn ghost small', () => {
+          this.sttKeyEditing = true;
+          this.render();
+        }),
+        this.button(t('setup.dictation.key.remove'), 'btn ghost small', () => void this.saveSttKey(d.preset, null), this.busy),
+      );
+      group.append(row);
+      return;
+    }
+    const input = h('input', 'setup-input');
+    input.type = 'password';
+    input.placeholder = d.preset === 'groq' ? 'gsk_…' : d.preset === 'xai' ? 'xai-…' : 'sk-…';
+    input.spellcheck = false;
+    input.autocomplete = 'off';
+    input.value = this.sttKey;
+    input.setAttribute('aria-label', t('setup.dictation.key.label'));
+    input.addEventListener('input', () => (this.sttKey = input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !this.busy) void this.saveSttKey(d.preset, this.sttKey);
+    });
+    row.append(input, this.button(t('provider.key.save'), 'btn', () => void this.saveSttKey(d.preset, this.sttKey), this.busy));
+    if (preset.keyUrl) {
+      const link = h('button', 'setup-link', t('provider.key.where'));
+      link.addEventListener('click', () => this.hub.openExternal(preset.keyUrl));
+      row.append(link);
+    }
+    group.append(row);
+    if (!saved) group.append(h('div', 'setup-hint', t('setup.dictation.missing')));
+  }
+
+  /** Keeps (once the service accepted it) or forgets the key; the composers show or hide their microphone. */
+  private async saveSttKey(preset: SttPresetId, key: string | null): Promise<void> {
+    const r = await this.run(() => this.hub.dictationKey(preset, key));
+    this.view = r;
+    if (r.ok) {
+      this.sttKey = '';
+      this.sttKeyEditing = false;
+      this.note = null;
+      window.dispatchEvent(new Event('hub-settings'));
+    } else this.note = { text: this.accountErrorText(r.error), tone: 'error' };
+    this.render();
   }
 
   /** The chain of accounts a session goes on with when its own reaches a limit. */

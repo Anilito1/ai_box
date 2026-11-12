@@ -53,6 +53,7 @@ import {
   type Mode,
   type PermissionDecision,
   type SettingsPatch,
+  type Result,
   type SettingsView,
   type TeamRole,
 } from '../shared/types';
@@ -62,6 +63,7 @@ import { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, checkOpe
 import { agentFiles } from './agents';
 import { CapabilityStore } from './capabilities';
 import { Dictation } from './dictation';
+import { baseUrlOf, isSttPreset, STT_PRESET_IDS } from '../shared/dictation';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
 import { checkGeminiKey, GEMINI_MIN_VERSION, geminiCatalog, geminiExecutable, geminiVersion, googleAccess, googleAccountStatus, googleSignIn, startGoogleLogin } from './providers/gemini/cli';
@@ -294,6 +296,7 @@ class Hub {
   readonly dictation = new Dictation(
     () => this.cfg.dictation,
     (event) => send('dictation:event', event),
+    (preset) => this.secrets.get(`stt:${preset}`),
   );
   private executable = '';
   private codex = '';
@@ -951,6 +954,31 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     return { ...this.view(), ok: true, error: '' };
   }
 
+  /**
+   * The key of a transcription service: checked with the service (its model list) before it goes to the keychain, so a
+   * mistyped one is caught here and not at the first dictation. Null forgets it.
+   */
+  async dictationKey(preset: unknown, key: unknown): Promise<SettingsView & Result> {
+    const out = (error = '') => ({ ...this.view(), ok: error === '', error });
+    if (!isSttPreset(preset)) return out('preset');
+    if (key === null) {
+      await this.secrets.set(`stt:${preset}`, null);
+      return out();
+    }
+    const typed = isStr(key) ? key.trim() : '';
+    if (!typed) return out('required');
+    if (typed.length > 500 || /\s/.test(typed)) return out('format');
+    if (!this.secrets.available()) return out('no-keychain');
+    const base = baseUrlOf({ preset, baseUrl: this.cfg.dictation.baseUrl });
+    if (base) {
+      const st = await checkOpenAI(base, typed);
+      // Only a refusal stops it: an address without a model list (some self-hosted servers) still takes the key.
+      if (st.error === 'unauthorized' || st.error === 'forbidden' || st.error === 'network') return out(st.error);
+    }
+    await this.secrets.set(`stt:${preset}`, typed);
+    return out();
+  }
+
   view(): SettingsView {
     return {
       settings: structuredClone(this.cfg),
@@ -959,7 +987,8 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       githubTokenSet: this.secrets.has('githubToken'),
       secureStorage: this.secrets.available(),
       defaultClientId: DEFAULT_CLIENT_ID !== '',
-      dictationOffered: this.dictation.offered(),
+      dictationNative: this.dictation.nativeOffered(),
+      dictationKeys: STT_PRESET_IDS.filter((p) => this.secrets.has(`stt:${p}`)),
       platform: process.platform,
       version: app.getVersion(),
     };
@@ -1321,6 +1350,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('dictation:audio', (pcm) => pcm instanceof ArrayBuffer && pcm.byteLength <= 1 << 18 && this.dictation.feed(Buffer.from(pcm)));
     on('dictation:stop', () => this.dictation.stop());
     on('dictation:cancel', () => this.dictation.cancel());
+    handle('dictation:key', (preset, key) => this.dictationKey(preset, key));
     on('app:relaunch', () => {
       // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
       if (!confirmQuit(mgr)) return;
