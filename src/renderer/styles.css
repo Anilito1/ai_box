@@ -2926,6 +2926,20 @@ kbd,
 .dictation-partial {
   color: var(--text-3);
 }
+/* "…" while starting; with a service, "Listening…" then "Transcribing…" where the text will land. */
+.dictation-wait {
+  color: var(--text-3);
+  font-style: italic;
+}
+/* The dictation's model and address in Settings › Accounts: long ids (whisper-large-v3-turbo, https://…/v1). */
+.setup-input.stt-input {
+  width: min(100%, 420px);
+}
+/* The audio is with the service: no longer recording, the button stops being red. */
+.cbtn-mic.transcribing[aria-pressed='true'] {
+  background: none;
+  color: var(--text-2);
+}
 .cbtn-mic[aria-pressed='true'] {
   background: var(--danger-soft);
   color: var(--danger);

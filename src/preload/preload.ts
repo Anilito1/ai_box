@@ -146,6 +146,7 @@ const api: HubApi = {
   dictationAudio: (pcm) => ipcRenderer.send('dictation:audio', pcm),
   dictationStop: () => ipcRenderer.send('dictation:stop'),
   dictationCancel: () => ipcRenderer.send('dictation:cancel'),
+  dictationKey: (preset, key) => ipcRenderer.invoke('dictation:key', preset, key),
   onDictation: (cb) => {
     ipcRenderer.on('dictation:event', (_e, event: DictationEvent) => cb(event));
   },

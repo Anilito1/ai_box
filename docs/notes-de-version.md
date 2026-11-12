@@ -15,10 +15,12 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Ajouté
 
 - Un clic sur « Mise à jour disponible » ouvre une fenêtre avec la nouvelle version et ses nouveautés : tu peux mettre à jour tout de suite, ou plus tard.
+- Dictée vocale sur Windows : choisis un service de transcription (Groq, OpenAI, xAI ou une autre adresse compatible) et colle sa clé dans Réglages › Comptes › Modèle de dictée ; le bouton micro apparaît alors dans le champ du message.
 
 ### Modifié
 
 - L'assistant du premier lancement suit l'ordre des réglages actuels : comptes, puis sessions, dossiers, GitHub et repos ; le maître démarre sur un fournisseur connecté.
+- Les réglages de la dictée vocale sont passés dans Réglages › Comptes ; sur Mac, tu peux garder le modèle d’Apple ou passer par un service en ligne.
 
 ## 2026-11-10
 

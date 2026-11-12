@@ -2,7 +2,7 @@ import type { AttachedFile, FileInput } from './attachments';
 import type { RemoteSetting, RemoteView } from './vps';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { DayCost, TurnRecord } from './costs';
-import type { DictationEvent, DictationSettings, DictationSupport } from './dictation';
+import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
@@ -795,8 +795,10 @@ export interface SettingsView {
   secureStorage: boolean;
   /** A client ID ships with this build, so the device flow works without configuring one. */
   defaultClientId: boolean;
-  /** This machine has a dictation engine, whether or not it is switched on. */
-  dictationOffered: boolean;
+  /** This machine has a native dictation engine (Apple's), whether or not it is switched on. */
+  dictationNative: boolean;
+  /** The transcription services whose key is stored. */
+  dictationKeys: SttPresetId[];
   platform: string;
   version: string;
 }
@@ -1050,5 +1052,7 @@ export interface HubApi {
   /** The audio has ended: the engine settles the text and answers with a `final` event. */
   dictationStop(): void;
   dictationCancel(): void;
+  /** Keeps (checked with the service first) or, with null, forgets the key of a transcription service. */
+  dictationKey(preset: SttPresetId, key: string | null): Promise<SettingsView & Result>;
   onDictation(cb: (event: DictationEvent) => void): void;
 }

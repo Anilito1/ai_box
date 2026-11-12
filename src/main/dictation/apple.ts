@@ -15,7 +15,7 @@ export const appleSupported = (platform = process.platform, kernel = release()):
 
 /** Asks the helper whether the language is supported and its voice asset installed. */
 export function checkApple(helper: string, language: string): Promise<DictationSupport> {
-  const none: DictationSupport = { available: false, installed: false };
+  const none: DictationSupport = { available: false, installed: false, streaming: true };
   if (!appleSupported() || !existsSync(helper)) return Promise.resolve(none);
   return new Promise((resolve) => {
     const child = spawn(helper, ['--check', '--locale', language], { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -27,7 +27,7 @@ export function checkApple(helper: string, language: string): Promise<DictationS
       clearTimeout(timer);
       try {
         const o = JSON.parse(out.trim().split('\n')[0] ?? '') as { type?: string; available?: boolean; installed?: boolean };
-        resolve(o.type === 'check' ? { available: o.available === true, installed: o.installed === true } : none);
+        resolve(o.type === 'check' ? { available: o.available === true, installed: o.installed === true, streaming: true } : none);
       } catch {
         resolve(none);
       }

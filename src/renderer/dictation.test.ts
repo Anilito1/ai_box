@@ -50,11 +50,12 @@ async function until(fact: (s: Spy) => boolean): Promise<Spy> {
   }
 }
 
-async function reload(available: boolean): Promise<void> {
-  await app.evaluate(({ ipcMain }, on) => {
+/** `streaming`: Apple's engine, words while speaking; else a service, which answers once the audio has ended. */
+async function reload(available: boolean, streaming = true): Promise<void> {
+  await app.evaluate(({ ipcMain }, [on, live]) => {
     ipcMain.removeHandler('dictation:support');
-    ipcMain.handle('dictation:support', () => ({ available: on, installed: on }));
-  }, available);
+    ipcMain.handle('dictation:support', () => ({ available: on, installed: on, streaming: live }));
+  }, [available, streaming] as const);
   await page.reload();
   await page.waitForSelector('.composer-input');
   await page.evaluate(() => {
@@ -203,4 +204,35 @@ test('a cancel while the dictation starts gives the field back at once, and the 
   await page.keyboard.press('Escape');
   await hasText('Encore');
   await reset();
+});
+
+test('with a service: the field says it listens, then that it transcribes, and the text lands at once', async () => {
+  await reload(true, false);
+  const mirror = () => page.evaluate(() => [...document.querySelectorAll('.composer-mirror')].map((m) => m.textContent ?? '').join(''));
+  const { stops } = await spy();
+  await field().click();
+  await field().fill('Note :');
+  await mic().click();
+  await recording();
+  await page.waitForFunction(() => document.querySelector('.dictation-wait')?.textContent === 'Écoute…');
+  await mic().click();
+  await until((s) => s.stops === stops + 1);
+  await page.waitForSelector('.cbtn-mic.transcribing', { state: 'attached' });
+  assert.ok((await mirror()).includes('Transcription…'));
+  assert.equal((await composer()).sendOff, true);
+  await fromEngine({ type: 'final', text: 'ajoute un test' });
+  await hasText('Note : ajoute un test');
+  assert.deepEqual(await composer(), { value: 'Note : ajoute un test', readOnly: false, sendOff: false });
+  assert.equal(await page.locator('.cbtn-mic.transcribing').count(), 0);
+  await reset();
+  // A refused key gives the draft back.
+  await field().fill('Brouillon');
+  await mic().click();
+  await recording();
+  await mic().click();
+  await fromEngine({ type: 'error', code: 'auth', message: 'Invalid API Key' });
+  await page.waitForFunction(() => !document.querySelector('.cbtn-mic.recording'));
+  assert.deepEqual(await composer(), { value: 'Brouillon', readOnly: false, sendOff: false });
+  await reset();
+  await reload(true);
 });

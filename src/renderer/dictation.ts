@@ -1,16 +1,30 @@
 import type { DictationEvent, DictationKey, DictationSettings } from '../shared/dictation';
 import type { HubApi } from '../shared/types';
 import { h, icon, ICONS } from './dom';
-import { PLATFORM, t } from './i18n';
+import { PLATFORM, t, type Key } from './i18n';
 
 // Voice dictation in the composer: a microphone button, and a key to hold (talk while it is down) or tap (talk until
 // it is tapped again). The words appear dimmed where the cursor is while they are being recognised, and settle there
 // when the speech ends. Nothing is sent: the text waits in the composer. Enter ends the speech too. Escape drops it.
+// With a transcription service (Windows, or a Mac set so) no word comes while speaking: the field says it listens,
+// then that it transcribes, and the whole text lands at once.
 
 /** Under this long, a press of the key is a tap (it toggles) and not a hold (it ends on release). */
 const HOLD_MS = 350;
 /** How long the settled text is waited for once the audio has ended, before the last partial stands in for it. */
 const FINAL_WAIT_MS = 4000;
+/** The same with a service, which answers only once the audio is sent; the main process gives up at 45 s. */
+const SERVICE_WAIT_MS = 50_000;
+/** The engine's error codes that have words of their own; any other is "the dictation stopped". */
+const ERRORS: Record<string, Key> = {
+  auth: 'dictation.err.auth',
+  rate: 'dictation.err.rate',
+  network: 'dictation.err.network',
+  timeout: 'dictation.err.timeout',
+  model: 'dictation.err.model',
+  'too-long': 'dictation.err.tooLong',
+  service: 'dictation.err.service',
+};
 
 export interface DictationSource {
   input: HTMLTextAreaElement;
@@ -52,6 +66,8 @@ interface Ui extends DictationUi {
 let hub: HubApi;
 let settings: DictationSettings | null = null;
 let supported = false;
+/** Words come while the user speaks (Apple's engine); false for a service, which answers at the end. */
+let streaming = true;
 let state: State = 'idle';
 let run: Run | null = null;
 /** The key went down and has not come up: its release ends a dictation that lasted HOLD_MS or more. */
@@ -74,7 +90,9 @@ export function initDictation(api: HubApi): void {
 async function refresh(): Promise<void> {
   const view = await hub.getSettings();
   settings = view.settings.dictation;
-  supported = settings.enabled && (await hub.dictationSupport()).available;
+  const support = await hub.dictationSupport();
+  supported = settings.enabled && support.available;
+  streaming = support.streaming;
   for (const ui of uis) {
     ui.button.hidden = !supported;
     ui.button.title = buttonTitle();
@@ -150,13 +168,13 @@ async function start(ui: Ui): Promise<void> {
   paint(current, true);
   try {
     const allowed = await hub.dictationPermission();
-    if (!allowed.ok) return fail(current, t('dictation.denied'));
+    if (!allowed.ok) return fail(current, deniedText());
     // The engine and the microphone start together; audio gathered meanwhile waits in the pipe.
     const [started, audio] = await Promise.all([hub.dictationStart(termsOf(ui)), openMicrophone(current)]);
     current.audio = audio;
     if (!started.ok) return fail(current, t('dictation.unavailable'));
   } catch (err) {
-    return fail(current, err instanceof DOMException && err.name === 'NotAllowedError' ? t('dictation.denied') : t('dictation.noMic'));
+    return fail(current, err instanceof DOMException && err.name === 'NotAllowedError' ? deniedText() : t('dictation.noMic'));
   }
   if (run !== current) return closeAudio(current);
   state = 'listening';
@@ -164,6 +182,8 @@ async function start(ui: Ui): Promise<void> {
   paint(current, true);
   if (current.stopAsked) stop();
 }
+
+const deniedText = (): string => t(PLATFORM === 'win32' ? 'dictation.deniedWin' : 'dictation.denied');
 
 const termsOf = (ui: Ui): string[] => {
   try {
@@ -216,7 +236,7 @@ function stop(): void {
     if (run !== current) return;
     closeAudio(current);
     hub.dictationStop();
-    current.finalTimer = window.setTimeout(() => run === current && settle(current, current.partial), FINAL_WAIT_MS);
+    current.finalTimer = window.setTimeout(() => run === current && settle(current, current.partial), streaming ? FINAL_WAIT_MS : SERVICE_WAIT_MS);
   }, 60);
 }
 
@@ -260,7 +280,7 @@ function end(current: Run): void {
 function release(ui: Ui): void {
   ui.source.input.readOnly = false;
   ui.field.classList.remove('dictating');
-  ui.button.classList.remove('recording');
+  ui.button.classList.remove('recording', 'transcribing');
   ui.button.setAttribute('aria-pressed', 'false');
   ui.mirror.replaceChildren();
 }
@@ -288,7 +308,8 @@ function onEvent(event: DictationEvent): void {
   } else if (event.type === 'final') {
     settle(current, event.text);
   } else if (event.type === 'error') {
-    fail(current, t('dictation.failed'));
+    const key = ERRORS[event.code];
+    fail(current, key ? t(key) : t('dictation.failed'));
   }
 }
 
@@ -318,9 +339,10 @@ function paint(current: Run, force: boolean): void {
   if (force || input.value !== current.before + inserted + current.after) input.value = current.before + inserted + current.after;
   ui.field.classList.add('dictating');
   ui.button.classList.add('recording');
+  ui.button.classList.toggle('transcribing', !streaming && state === 'finishing');
   ui.button.setAttribute('aria-pressed', 'true');
-  const hint = state === 'starting' ? h('span', 'dictation-wait', '…') : null;
-  ui.mirror.replaceChildren(document.createTextNode(current.before + lead), h('span', 'dictation-partial', text), ...(hint ? [hint] : []), document.createTextNode(trail + current.after + '​'));
+  const hint = h('span', 'dictation-wait', state === 'starting' ? '…' : streaming || text ? '' : t(state === 'finishing' ? 'dictation.transcribing' : 'dictation.listening'));
+  ui.mirror.replaceChildren(document.createTextNode(current.before + lead), h('span', 'dictation-partial', text), hint, document.createTextNode(trail + current.after + '​'));
   ui.mirror.scrollTop = input.scrollTop;
   ui.source.changed();
 }
