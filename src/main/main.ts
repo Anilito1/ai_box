@@ -212,8 +212,9 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
 const isStr = (v: unknown): v is string => typeof v === 'string';
 
 /**
- * Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q, relaunch). Never for
- * the update's own restart: the user confirmed it in the update window, and the sessions pick up afterwards.
+ * Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q). Never for the
+ * update's own restart or a restart button of the window: the window said what it interrupts, and the sessions pick
+ * up afterwards.
  */
 let quitting = false;
 function confirmQuit(mgr: SessionManager | undefined): boolean {
@@ -222,6 +223,7 @@ function confirmQuit(mgr: SessionManager | undefined): boolean {
   if (!win.isVisible()) win.show();
   const choice = dialog.showMessageBoxSync(win, {
     type: 'question',
+    title: APP_NAME,
     buttons: [t('close.quit'), t('close.cancel')],
     defaultId: 1,
     cancelId: 1,
@@ -1355,9 +1357,9 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('dictation:stop', () => this.dictation.stop());
     on('dictation:cancel', () => this.dictation.cancel());
     handle('dictation:key', (preset, key) => this.dictationKey(preset, key));
+    handle('app:busy', () => mgr.busySessions());
+    // A click on a restart button: the window said how many sessions it interrupts, no second question.
     on('app:relaunch', () => {
-      // Asked before the relaunch is scheduled: a cancelled quit must not relaunch later.
-      if (!confirmQuit(mgr)) return;
       quitting = true;
       relaunching = true;
       app.relaunch();

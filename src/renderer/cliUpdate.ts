@@ -2,6 +2,7 @@ import { switchCommand, type CliRun, type UpdateAction } from '../shared/cliUpda
 import type { CliUpdate } from '../shared/news';
 import type { ProviderId } from '../shared/providers';
 import type { HubApi } from '../shared/types';
+import { busyNote } from './busyNote';
 import { h, icon, ICONS } from './dom';
 import { t, tn, type Key } from './i18n';
 
@@ -171,6 +172,7 @@ function fill(el: HTMLElement, provider: ProviderId, update: CliUpdate | null, i
     }
     if (run.restart > 0) {
       el.append(h('div', 'cli-update-note', tn('cliUpdate.restart', run.restart, { tool: run.tool })));
+      if (api) el.append(busyNote(api, 'cli-update-note'));
       el.append(row(button(t('cliUpdate.restartNow'), 'primary', () => api?.relaunch()), button(t('cliUpdate.later'), 'ghost', () => dismiss(provider))));
     } else {
       el.append(h('div', 'cli-update-note', t('cliUpdate.nextSessions')));
@@ -188,6 +190,7 @@ function fill(el: HTMLElement, provider: ProviderId, update: CliUpdate | null, i
     if (run.switchTo) actions.unshift(button(switchLabel(run.switchTo), 'primary', () => start(provider, 'switch'), busy));
     if (run.error === 'in-use') actions.push(button(t('cliUpdate.restartNow'), 'ghost', () => api?.relaunch()));
     actions.push(button(t('news.close'), 'ghost', () => dismiss(provider)));
+    if (run.error === 'in-use' && api) el.append(busyNote(api, 'cli-update-note'));
     el.append(row(...actions), logOf(run, logOpen));
     if (update?.command) el.append(copyLink(update.command));
     return;
