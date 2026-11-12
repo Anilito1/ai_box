@@ -16,6 +16,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Un clic sur « Mise à jour disponible » ouvre une fenêtre avec la nouvelle version et ses nouveautés : tu peux mettre à jour tout de suite, ou plus tard.
 
+### Modifié
+
+- L'assistant du premier lancement suit l'ordre des réglages actuels : comptes, puis sessions, dossiers, GitHub et repos ; le maître démarre sur un fournisseur connecté.
+
 ## 2026-11-10
 
 ### Modifié
