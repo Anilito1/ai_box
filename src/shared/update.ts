@@ -70,6 +70,8 @@ export interface UpdateState {
   progress: UpdateStep | null;
   /** Sessions at work when the user asked to update: the window asks to wait for them or interrupt them. */
   confirm: number;
+  /** Sessions at work now, while an update is on offer: the confirmation tells they would be interrupted. */
+  atWork: number;
   /** The install waits for the sessions to finish. */
   waiting: boolean;
   /** Time (ms) of an unattended restart the window counts down to, else null. */

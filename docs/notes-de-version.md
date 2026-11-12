@@ -18,6 +18,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les boutons « Redémarrer » indiquent combien de sessions au travail seront interrompues et redémarrent sans redemander ; la boîte de confirmation à la fermeture s’appelle désormais « AI Box ».
 - Sur l'abonnement Ultra, la barre du bas n'affiche plus l'utilisation sur 5 heures : seules les limites hebdomadaires restent.
 
 ## 2026-11-12
@@ -29,6 +30,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- La fenêtre de mise à jour indique combien de sessions au travail seront interrompues, et le redémarrage ne redemande plus de confirmation.
 - L'assistant du premier lancement suit l'ordre des réglages actuels : comptes, puis sessions, dossiers, GitHub et repos ; le maître démarre sur un fournisseur connecté.
 - Les réglages de la dictée vocale sont passés dans Réglages › Comptes ; sur Mac, tu peux garder le modèle d’Apple ou passer par un service en ligne.
 

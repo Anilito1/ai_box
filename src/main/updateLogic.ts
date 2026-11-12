@@ -164,6 +164,12 @@ export const sessionsQuiet = (sessions: SessionView[]) => sessions.every(quietOn
 /** Sessions an install now would interrupt. */
 export const sessionsAtWork = (sessions: SessionView[]) => sessions.filter((s) => !quietOne(s)).length;
 
+/**
+ * Whether closing the hub asks first: sessions at work would be cut. Not for a restart the user asked for with a click
+ * in the window (the update's, or a "Restart now"), which said how many it interrupts: the sessions pick up after it.
+ */
+export const quitNeedsConfirm = (busy: number, restartAsked: boolean) => busy > 0 && !restartAsked;
+
 /** How long everything must have been quiet, and the user away from the hub, before an unattended install. */
 export const QUIET_MS = 2 * 60_000;
 export const AWAY_MS = 5 * 60_000;

@@ -1017,7 +1017,10 @@ export interface HubApi {
   onTeam(cb: (team: TeamRole[]) => void): void;
   /** Ends the first-run setup and starts the master. */
   finishSetup(): Promise<void>;
+  /** Closes and opens the hub again, without asking: the user clicked a restart button. */
   relaunch(): void;
+  /** Sessions a restart would interrupt (a turn or background tasks in progress). */
+  busySessions(): Promise<number>;
   onUpdate(cb: (state: UpdateState) => void): void;
   /** A discovery at a connected provider (a new model, a newer program), told once. */
   onNews(cb: (toast: NewsToast) => void): void;
