@@ -10,7 +10,7 @@ import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, on
 import { taskView } from '../shared/backgroundTask';
 import { dayOf } from '../shared/costs';
 import { arrangeTeam, type Arranged } from '../shared/teamFolders';
-import { windowFigure } from '../shared/usage';
+import { usageWindows, windowFigure } from '../shared/usage';
 import { syncList, TeamFolders, type Block } from './folders';
 import { effortLabel, LANG, PLATFORM, t, tn, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
@@ -345,7 +345,7 @@ function resetTime(epochSeconds: number | null, withDay: boolean): string {
 }
 
 /** A plan-limit figure: the number while it can be claimed, else "unknown" with the date of the last reading. */
-function usageItem(label: string, usage: UsageState, pctKey: 'fiveHourPct' | 'sevenDayPct', resetKey: 'fiveHourResetsAt' | 'sevenDayResetsAt', withDay: boolean): HTMLDivElement {
+function usageItem(label: string, usage: UsageState, pctKey: 'fiveHourPct' | 'sevenDayPct' | 'fablePct', resetKey: 'fiveHourResetsAt' | 'sevenDayResetsAt' | 'fableResetsAt', withDay: boolean): HTMLDivElement {
   const limits = usage.limits;
   const value = windowFigure(limits?.[pctKey], limits?.[resetKey], usage.measuredAt, Date.now());
   const when = usage.measuredAt ? t('sb.measured', { date: new Date(usage.measuredAt).toLocaleString(LANG, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }) : t('sb.neverMeasured');
@@ -388,7 +388,12 @@ function renderStatusbar(usage: UsageState | null): void {
   cost.addEventListener('click', () => toggleCostPanel(hub, cost));
   const right: HTMLElement[] = [cost];
   if (usage) {
-    right.push(h('span', 'sb-sep'), usageItem(t('sb.5h'), usage, 'fiveHourPct', 'fiveHourResetsAt', false), usageItem(t('sb.7d'), usage, 'sevenDayPct', 'sevenDayResetsAt', true));
+    right.push(h('span', 'sb-sep'));
+    for (const w of usageWindows(usage)) {
+      if (w === 'fiveHour') right.push(usageItem(t('sb.5h'), usage, 'fiveHourPct', 'fiveHourResetsAt', false));
+      else if (w === 'sevenDay') right.push(usageItem(t('sb.7d'), usage, 'sevenDayPct', 'sevenDayResetsAt', true));
+      else right.push(usageItem(t('sb.fable'), usage, 'fablePct', 'fableResetsAt', true));
+    }
   }
   $('sb-right').replaceChildren(...right);
 }

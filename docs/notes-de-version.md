@@ -12,9 +12,14 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-13
 
+### Ajouté
+
+- Sur les abonnements Max et Ultra, la barre du bas affiche aussi l'utilisation hebdomadaire de Fable, avec son heure de réinitialisation.
+
 ### Modifié
 
 - Les boutons « Redémarrer » indiquent combien de sessions au travail seront interrompues et redémarrent sans redemander ; la boîte de confirmation à la fermeture s’appelle désormais « AI Box ».
+- Sur l'abonnement Ultra, la barre du bas n'affiche plus l'utilisation sur 5 heures : seules les limites hebdomadaires restent.
 
 ## 2026-11-12
 
