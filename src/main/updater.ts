@@ -71,6 +71,8 @@ export class Updater {
   private quietSince: number | null = null;
   private awaySince: number | null = null;
   private lastQuietCheck = 0;
+  /** The count of sessions at work the window was last told. */
+  private shownAtWork = 0;
   /** The update the user put off (unattended installs leave it to the hub's close). */
   private postponed = '';
   /** Target of an install that failed: never retried unattended. */
@@ -99,6 +101,7 @@ export class Updater {
       files: [],
       progress: null,
       confirm: 0,
+      atWork: 0,
       waiting: false,
       countdown: null,
       last: null,
@@ -125,11 +128,23 @@ export class Updater {
   }
 
   view(): UpdateState {
-    return { ...this.state, mode: this.opts.cfg.updates, files: [...this.state.files] };
+    return { ...this.state, mode: this.opts.cfg.updates, files: [...this.state.files], atWork: this.atWork() };
+  }
+
+  /** Sessions an update now would interrupt, counted while one is on offer. */
+  private atWork(): number {
+    return this.state.kind === 'available' ? sessionsAtWork(this.opts.sessions.snapshot().sessions) : 0;
+  }
+
+  /** The hub is closing for the update the user confirmed: its close has nothing left to ask. */
+  restarting(): boolean {
+    return this.launched && (this.state.progress === 'restart' || this.state.progress === 'closing');
   }
 
   private emit(): void {
-    this.opts.send(this.view());
+    const view = this.view();
+    this.shownAtWork = view.atWork;
+    this.opts.send(view);
   }
 
   /** The last install's result, left before the restart that followed it: read once. */
@@ -197,6 +212,9 @@ export class Updater {
     if (this.state.kind !== 'available' || Date.now() - this.lastQuietCheck < 1000) return;
     this.lastQuietCheck = Date.now();
     if (!this.quiet()) this.quietSince = null;
+    // The confirmation tells how many sessions the update would interrupt: redrawn when that changes.
+    const atWork = this.atWork();
+    if (atWork !== this.shownAtWork) this.emit();
   }
 
   private tick(): void {

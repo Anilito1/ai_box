@@ -3432,6 +3432,12 @@ kbd,
   font-size: var(--fs-md);
   line-height: var(--lh-base);
 }
+.update-modal-atwork {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-base);
+}
 .update-modal-row {
   display: flex;
   flex-wrap: wrap;
