@@ -73,6 +73,8 @@ export interface RateLimits {
 
 /** What the status bar knows of the plan limits of the account it shows. */
 export interface UsageState {
+  /** The provider of the account ("anthropic", "openai"…): the Fable window is Anthropic's only. */
+  provider: string;
   /** The plan Claude Code reports for the account ("pro", "max", "ultra"…); empty when it is not read. */
   plan: string;
   /** The last good reading; null while there is none. */

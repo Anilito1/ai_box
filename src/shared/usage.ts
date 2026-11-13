@@ -30,25 +30,54 @@ export function usageRead(limits: RateLimits | null, now: number): UsageRecord {
 /** An attempt failed: the last good reading stays (with its date), flagged. */
 export const usageFailed = (prev: UsageRecord | undefined): UsageRecord => ({ ...(prev ?? noUsage()), applicable: prev?.applicable ?? true, failed: true });
 
-/** What the status bar is given: null when the account has no plan limits, else what is known (possibly nothing yet). */
-export const usageState = (rec: UsageRecord | undefined, plan = ''): UsageState | null =>
-  rec && !rec.applicable ? null : { plan, limits: rec?.limits ?? null, measuredAt: rec?.measuredAt ?? null, failed: rec?.failed ?? false };
+/**
+ * What the status bar is given: null when the account has no plan limits, else what is known (possibly nothing yet),
+ * with the plan and the provider of the account it belongs to.
+ */
+export const usageState = (rec: UsageRecord | undefined, plan = '', provider = 'anthropic'): UsageState | null =>
+  rec && !rec.applicable ? null : { provider, plan, limits: rec?.limits ?? null, measuredAt: rec?.measuredAt ?? null, failed: rec?.failed ?? false };
 
 export type UsageWindow = 'fiveHour' | 'sevenDay' | 'fable';
+
+/** A window the status bar shows: its figure as it can be claimed now, and when the window starts again. */
+export interface UsageGauge {
+  window: UsageWindow;
+  pct: number;
+  resetsAt: number | null;
+}
 
 const planName = (plan: string | null | undefined): string => (plan ?? '').trim().toLowerCase();
 
 /**
- * The windows the status bar tells for an account, by its plan. Ultra plans have no 5 h window to show. Max and Ultra
- * have a weekly window of their own for Fable, shown only when the answer holds its figure: never as a zero.
+ * The windows that may apply to an account, before its figures: Ultra plans have no 5 h window; the Fable weekly window
+ * belongs to Anthropic accounts on Max or Ultra (or whose plan is not read: the server's answer then decides).
  */
-export function usageWindows(usage: Pick<UsageState, 'plan' | 'limits'>): UsageWindow[] {
+export function usageWindows(usage: Pick<UsageState, 'provider' | 'plan'>): UsageWindow[] {
   const plan = planName(usage.plan);
   const windows: UsageWindow[] = [];
   if (!plan.includes('ultra')) windows.push('fiveHour');
   windows.push('sevenDay');
-  if ((plan.includes('max') || plan.includes('ultra')) && usage.limits?.fablePct != null) windows.push('fable');
+  if (usage.provider === 'anthropic' && (plan === '' || plan.includes('max') || plan.includes('ultra'))) windows.push('fable');
   return windows;
+}
+
+const FIELDS = {
+  fiveHour: ['fiveHourPct', 'fiveHourResetsAt'],
+  sevenDay: ['sevenDayPct', 'sevenDayResetsAt'],
+  fable: ['fablePct', 'fableResetsAt'],
+} as const satisfies Record<UsageWindow, readonly [keyof RateLimits, keyof RateLimits]>;
+
+/**
+ * What the status bar shows: each window that applies to the account and holds a figure that can still be claimed. A
+ * window without one (none in the answer, never read, too old, ended since) is left out: never "unknown", never zero.
+ */
+export function usageGauges(usage: UsageState, now: number): UsageGauge[] {
+  return usageWindows(usage).flatMap((window) => {
+    const [pctKey, resetKey] = FIELDS[window];
+    const resetsAt = usage.limits?.[resetKey] ?? null;
+    const value = windowFigure(usage.limits?.[pctKey], resetsAt, usage.measuredAt, now);
+    return value === null ? [] : [{ window, pct: value, resetsAt }];
+  });
 }
 
 const pct = (v: unknown): number | null => {

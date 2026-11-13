@@ -1083,6 +1083,12 @@ export class SessionManager extends EventEmitter {
     this.changed();
   }
 
+  /** The provider of an account, "anthropic" for the built-in ones; empty for one no provider stands for. */
+  private providerOf(account: string): string {
+    const a = this.opts.cfg.accounts.find((x) => x.id === account);
+    return (a ? providerOfAccount(a) : 'anthropic') ?? '';
+  }
+
   private planOf(account: string): string {
     return this.plans.get(this.canon(account)) ?? '';
   }
@@ -1605,7 +1611,7 @@ export class SessionManager extends EventEmitter {
     const catalogs: Record<string, ModelOption[]> = {};
     for (const a of this.opts.cfg.accounts) if (this.ownCatalog(a.id)) catalogs[a.id] = this.optionsOf(this.catalogOf(a.id));
     this.fileTopicsByRepo();
-    return { sessions, costToday: this.opts.costLog.today(), models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown), this.planOf(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges(), ...this.awayView() };
+    return { sessions, costToday: this.opts.costLog.today(), models: this.modelOptions(), catalogs, usage: this.kindOf(shown) === 'openai' || this.kindOf(shown) === 'anthropic-compatible' ? null : usageState(this.usage.get(shown), this.planOf(shown), this.providerOf(shown)), topics: this.topics.list(), accounts: this.accountBadges(), providers: this.providerBadges(), ...this.awayView() };
   }
 
   allItems(): [string, ChatItem[]][] {
@@ -2880,7 +2886,7 @@ export class SessionManager extends EventEmitter {
   /**
    * Plan limits (5 h / 7 days) of the account a session's process runs on, from the program's own /usage answer. Asked at
    * a start, after each turn, and every few minutes (pollUsage); once per account at a time, at most every 20 s. A failed
-   * reading keeps the last good one with its date and says it failed: the status bar then reads "unknown", never zero.
+   * reading keeps the last good one with its date and says it failed: the status bar then leaves the figure out, never zero.
    */
   private async refreshUsage(s: Session, q: AgentProcess, force = false): Promise<void> {
     const account = s.usageAccount || this.canon(s.runAccount || DEFAULT_ACCOUNT);
@@ -2894,7 +2900,7 @@ export class SessionManager extends EventEmitter {
       if (s.query !== q) return;
       this.usage.set(account, usageRead(limits, Date.now()));
     } catch {
-      // Experimental API unavailable, signed out, offline: the status bar says the figure is unknown.
+      // Experimental API unavailable, signed out, offline: the status bar leaves the figure out.
       if (s.query === q) this.usage.set(account, usageFailed(this.usage.get(account)));
     } finally {
       this.usageAsking.delete(account);

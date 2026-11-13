@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { limitsOfUsage, usageAccount, noUsage, USAGE_FRESH_MS, usageFailed, usageRead, usageState, usageWindows, windowFigure } from './usage';
+import { limitsOfUsage, usageAccount, noUsage, USAGE_FRESH_MS, usageFailed, usageRead, usageGauges, usageState, usageWindows, windowFigure } from './usage';
+import type { UsageState } from './types';
 import type { RateLimits } from './types';
 
 const NOW = 1_800_000_000_000;
@@ -45,17 +46,17 @@ test('an answer with no figure is nothing, never zero', () => {
 
 test('a reading, a failure after it, and an account with no plan limits', () => {
   const ok = usageRead(LIMITS, NOW);
-  assert.deepEqual(usageState(ok), { plan: '', limits: LIMITS, measuredAt: NOW, failed: false });
+  assert.deepEqual(usageState(ok), { provider: 'anthropic', plan: '', limits: LIMITS, measuredAt: NOW, failed: false });
   const failed = usageFailed(ok);
-  assert.deepEqual(usageState(failed), { plan: '', limits: LIMITS, measuredAt: NOW, failed: true }, 'the last good reading and its date are kept');
+  assert.deepEqual(usageState(failed), { provider: 'anthropic', plan: '', limits: LIMITS, measuredAt: NOW, failed: true }, 'the last good reading and its date are kept');
   assert.equal(usageState(usageRead(null, NOW)), null, 'no plan limits: nothing shown');
   assert.equal(usageState(usageFailed(usageRead(null, NOW))), null);
 });
 
 test('an account never read is unknown, not zero', () => {
-  assert.deepEqual(usageState(undefined), { plan: '', limits: null, measuredAt: null, failed: false });
-  assert.deepEqual(usageState(noUsage()), { plan: '', limits: null, measuredAt: null, failed: false });
-  assert.deepEqual(usageState(usageFailed(undefined)), { plan: '', limits: null, measuredAt: null, failed: true });
+  assert.deepEqual(usageState(undefined), { provider: 'anthropic', plan: '', limits: null, measuredAt: null, failed: false });
+  assert.deepEqual(usageState(noUsage()), { provider: 'anthropic', plan: '', limits: null, measuredAt: null, failed: false });
+  assert.deepEqual(usageState(usageFailed(undefined)), { provider: 'anthropic', plan: '', limits: null, measuredAt: null, failed: true });
 });
 
 test('a figure is claimed only while fresh and in its window', () => {
@@ -118,21 +119,54 @@ test('an Ultra account without a 5 h window still has its weekly figures', () =>
   assert.equal(got?.fablePct, 23);
 });
 
-test('the windows shown by plan: Pro, Max and Ultra, with and without a Fable figure', () => {
+test('the windows that apply, by provider and plan', () => {
+  const at = (provider: string, plan: string) => usageWindows({ provider, plan });
+  assert.deepEqual(at('anthropic', 'pro'), ['fiveHour', 'sevenDay'], 'Pro: no Fable');
+  assert.deepEqual(at('anthropic', 'max'), ['fiveHour', 'sevenDay', 'fable']);
+  assert.deepEqual(at('anthropic', 'Ultra'), ['sevenDay', 'fable'], 'Ultra: no 5 h window');
+  assert.deepEqual(at('anthropic', ''), ['fiveHour', 'sevenDay', 'fable'], 'plan not read: the answer decides');
+  for (const provider of ['openai', 'deepseek', 'gemini', '']) assert.ok(!at(provider, 'max').includes('fable'), provider);
+});
+
+/** A reading taken before the windows of WINDOWS end. */
+const READ = Date.parse('2026-10-28T09:00:00Z');
+const state = (limits: RateLimits | null, plan = 'max', provider = 'anthropic', measuredAt: number | null = READ): UsageState => ({ provider, plan, limits, measuredAt, failed: false });
+const shown = (u: UsageState) => usageGauges(u, READ + 1000).map((g) => `${g.window} ${g.pct}`);
+
+test('the gauges shown: only the windows that apply and hold a figure, never unknown', () => {
   const withFable = limitsOfUsage({ ...WINDOWS, model_scoped: [FABLE] });
-  const without = limitsOfUsage(WINDOWS);
-  const shown = (plan: string, limits: typeof without) => usageWindows({ plan, limits });
-  assert.deepEqual(shown('pro', withFable), ['fiveHour', 'sevenDay'], 'Pro: no Fable, even if the answer holds one');
-  assert.deepEqual(shown('pro', without), ['fiveHour', 'sevenDay']);
-  assert.deepEqual(shown('max', withFable), ['fiveHour', 'sevenDay', 'fable']);
-  assert.deepEqual(shown('max', without), ['fiveHour', 'sevenDay'], 'Max without the field: nothing for Fable');
-  assert.deepEqual(shown('ultra', withFable), ['sevenDay', 'fable'], 'Ultra: no 5 h window');
-  assert.deepEqual(shown('Ultra', without), ['sevenDay']);
-  assert.deepEqual(shown('', withFable), ['fiveHour', 'sevenDay'], 'plan not read: as before');
-  assert.deepEqual(shown('max', null), ['fiveHour', 'sevenDay'], 'never read: no Fable item');
+  const noFive = limitsOfUsage({ five_hour: null, seven_day: WINDOWS.seven_day, model_scoped: [FABLE] });
+  assert.deepEqual(shown(state(withFable)), ['fiveHour 11', 'sevenDay 4', 'fable 23'], 'Max with all three figures');
+  assert.deepEqual(shown(state(noFive)), ['sevenDay 4', 'fable 23'], 'Max whose answer has no 5 h window: no 5 h item');
+  assert.deepEqual(shown(state(limitsOfUsage(WINDOWS))), ['fiveHour 11', 'sevenDay 4'], 'no Fable figure: no Fable item');
+  assert.deepEqual(shown(state(withFable, 'ultra')), ['sevenDay 4', 'fable 23'], 'Ultra: no 5 h, even with a figure');
+  assert.deepEqual(shown(state(withFable, 'pro')), ['fiveHour 11', 'sevenDay 4'], 'Pro: no Fable, even if the answer holds one');
+  assert.deepEqual(shown(state(withFable, '')), ['fiveHour 11', 'sevenDay 4', 'fable 23'], 'plan not read');
+});
+
+test('a Codex or other non-Anthropic account never shows Fable', () => {
+  const limits: RateLimits = { ...LIMITS, fablePct: 50, fableResetsAt: null };
+  assert.deepEqual(shown(state(limits, '', 'openai')), ['fiveHour 11', 'sevenDay 4']);
+  assert.deepEqual(shown(state(limits, 'max', 'gemini')), ['fiveHour 11', 'sevenDay 4']);
+});
+
+test('no figure to claim: no gauge at all', () => {
+  assert.deepEqual(shown(state(null)), [], 'never read');
+  assert.deepEqual(shown(state(LIMITS, 'max', 'anthropic', null)), [], 'no reading date');
+  assert.deepEqual(shown(state(LIMITS, 'max', 'anthropic', READ - USAGE_FRESH_MS - 5000)), [], 'too old');
+  const ended: RateLimits = { ...LIMITS, fiveHourResetsAt: READ / 1000 };
+  assert.deepEqual(shown(state(ended)), ['sevenDay 4'], 'a window ended since its reading is left out');
+});
+
+test('an account switch shows the new account only, nothing of the last one', () => {
+  const read = usageRead(limitsOfUsage({ ...WINDOWS, model_scoped: [FABLE] }), READ);
+  assert.equal(shown(usageState(read, 'max')!).length, 3);
+  assert.deepEqual(shown(usageState(undefined, 'pro')!), [], 'the new account, not read yet: nothing');
+  assert.equal(usageState(usageRead(null, NOW), 'max'), null, 'an API key: no plan limits at all');
 });
 
 test('the plan travels with the usage state', () => {
   assert.equal(usageState(usageRead(LIMITS, NOW), 'ultra')?.plan, 'ultra');
+  assert.equal(usageState(usageRead(LIMITS, NOW), 'plus', 'openai')?.provider, 'openai');
   assert.equal(usageState(usageRead(null, NOW), 'ultra'), null);
 });

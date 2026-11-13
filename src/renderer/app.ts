@@ -10,7 +10,7 @@ import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, on
 import { taskView } from '../shared/backgroundTask';
 import { dayOf } from '../shared/costs';
 import { arrangeTeam, type Arranged } from '../shared/teamFolders';
-import { usageWindows, windowFigure } from '../shared/usage';
+import { usageGauges, type UsageGauge } from '../shared/usage';
 import { syncList, TeamFolders, type Block } from './folders';
 import { effortLabel, LANG, PLATFORM, t, tn, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
@@ -344,13 +344,17 @@ function resetTime(epochSeconds: number | null, withDay: boolean): string {
   return t('sb.reset', { date: new Date(epochSeconds * 1000).toLocaleString(LANG, opts) });
 }
 
-/** A plan-limit figure: the number while it can be claimed, else "unknown" with the date of the last reading. */
-function usageItem(label: string, usage: UsageState, pctKey: 'fiveHourPct' | 'sevenDayPct' | 'fablePct', resetKey: 'fiveHourResetsAt' | 'sevenDayResetsAt' | 'fableResetsAt', withDay: boolean): HTMLDivElement {
-  const limits = usage.limits;
-  const value = windowFigure(limits?.[pctKey], limits?.[resetKey], usage.measuredAt, Date.now());
+/** When the plan limits were last read, and whether the last attempt failed. */
+function usageWhen(usage: UsageState): string {
   const when = usage.measuredAt ? t('sb.measured', { date: new Date(usage.measuredAt).toLocaleString(LANG, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) }) : t('sb.neverMeasured');
-  if (value == null) return sbItem(label, t('sb.unknown'), 'sb-unknown', [when, usage.failed ? t('sb.readFailed') : ''].filter(Boolean).join('\n'));
-  return sbItem(label, fmtPct(value), level(value), [resetTime(limits?.[resetKey] ?? null, withDay), when].filter(Boolean).join('\n'));
+  return [when, usage.failed ? t('sb.readFailed') : ''].filter(Boolean).join('\n');
+}
+
+const GAUGE_LABEL = { fiveHour: 'sb.5h', sevenDay: 'sb.7d', fable: 'sb.fable' } as const satisfies Record<UsageGauge['window'], string>;
+
+/** A plan-limit figure that can be claimed, with its reset time. */
+function usageItem(usage: UsageState, gauge: UsageGauge): HTMLDivElement {
+  return sbItem(t(GAUGE_LABEL[gauge.window]), fmtPct(gauge.pct), level(gauge.pct), [resetTime(gauge.resetsAt, gauge.window !== 'fiveHour'), usageWhen(usage)].filter(Boolean).join('\n'));
 }
 
 /** Changes every 30 s: a figure turns "unknown" on its own when its reading gets old, without waiting for a new snapshot. */
@@ -387,14 +391,10 @@ function renderStatusbar(usage: UsageState | null): void {
   cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(today)));
   cost.addEventListener('click', () => toggleCostPanel(hub, cost));
   const right: HTMLElement[] = [cost];
-  if (usage) {
-    right.push(h('span', 'sb-sep'));
-    for (const w of usageWindows(usage)) {
-      if (w === 'fiveHour') right.push(usageItem(t('sb.5h'), usage, 'fiveHourPct', 'fiveHourResetsAt', false));
-      else if (w === 'sevenDay') right.push(usageItem(t('sb.7d'), usage, 'sevenDayPct', 'sevenDayResetsAt', true));
-      else right.push(usageItem(t('sb.fable'), usage, 'fablePct', 'fableResetsAt', true));
-    }
-  }
+  // Only the windows that apply to the account and hold a figure; none: the cost item tells why in its hint.
+  const gauges = usage ? usageGauges(usage, Date.now()) : [];
+  if (gauges.length) right.push(h('span', 'sb-sep'), ...gauges.map((g) => usageItem(usage!, g)));
+  else if (usage) cost.title += `\n\n${t('sb.noLimits')}\n${usageWhen(usage)}`;
   $('sb-right').replaceChildren(...right);
 }
 

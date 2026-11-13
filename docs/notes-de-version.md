@@ -20,6 +20,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Les boutons « Redémarrer » indiquent combien de sessions au travail seront interrompues et redémarrent sans redemander ; la boîte de confirmation à la fermeture s’appelle désormais « AI Box ».
 - Sur l'abonnement Ultra, la barre du bas n'affiche plus l'utilisation sur 5 heures : seules les limites hebdomadaires restent.
+- La barre du bas n'affiche plus que les limites qui s'appliquent à ton compte et dont la valeur est connue : plus de « inconnu », plus de 5 heures sur un compte qui n'en a pas, et Fable seulement sur les comptes Claude concernés.
 
 ## 2026-11-12
 
