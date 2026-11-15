@@ -3,6 +3,7 @@ import type { RemoteSetting, RemoteView } from './vps';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { PurgeLogEntry, PurgeProject, PurgeReport, PurgeRestoreResult, PurgeSettingsView, PurgeTrashResult } from './purge';
 import type { DayCost, TurnRecord } from './costs';
+import type { DiagnosisView } from './diagnosis';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
@@ -372,6 +373,10 @@ export interface SessionView {
   ultracodeAccess: UltracodeAccess;
   /** Remote workers on only: where it works while the user is away, or that it waits for them. */
   remote?: RemoteBadge;
+  /** The last analysis of its silence the user asked for (running or ended), else null. */
+  diagnosis?: DiagnosisView | null;
+  /** A diagnosis worker: the name of the worker it looks into. */
+  diagFor?: string;
 }
 
 /**
@@ -895,6 +900,8 @@ export interface HubApi {
   moveTopic(topic: string, group: string | undefined): void;
   /** Says the session's cost and tokens in its conversation. */
   showCost(id: string): void;
+  /** Starts a read-only worker that finds out why this worker has been silent; resolves to the refusal, '' once started. */
+  analyze(id: string): Promise<string>;
   /** Turns logged in [from, to), oldest first, and when the log started. */
   costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number }>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */

@@ -1108,6 +1108,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('session:resume', (id) => isStr(id) && mgr.resume(id));
     on('session:remove', (id) => isStr(id) && mgr.remove(id));
     on('session:open', (id) => isStr(id) && mgr.open(id));
+    handle('session:analyze', (id) => (isStr(id) ? mgr.analyze(id) : ''));
     handle('session:commands', (id) => (isStr(id) ? mgr.commands(id) : []));
     on('session:compact', (id, instructions) => isStr(id) && isStr(instructions) && instructions.length <= 4000 && mgr.compact(id, instructions));
     on('session:clear', (id) => isStr(id) && mgr.clear(id));

@@ -1,4 +1,5 @@
 import { taskView } from '../shared/backgroundTask';
+import type { DiagnosisView } from '../shared/diagnosis';
 import { splitBackground } from '../shared/subagentList';
 import { pulseState, shortTokens } from '../shared/pulse';
 import type { ChatItem, SessionView } from '../shared/types';
@@ -89,25 +90,105 @@ export class WorkingLine {
   private readonly pulseShort = h('span', 'working-pulse-short');
   private readonly hintState = h('span', 'working-hint-state', t('work.stuck'));
   private readonly hintEsc = h('span', 'working-hint-esc');
+  private readonly diagBtn = h('button', 'working-diag-btn', t('diag.analyze'));
+  private readonly diagPanel = h('div', 'working-diag');
+  private diagKey = '';
+  /** A refusal said by the click itself (an analysis already running elsewhere, a worker gone). */
+  private diagRefused: DiagnosisView | null = null;
+  /** The diagnosis the user closed (its start): hidden until the next one. */
+  private diagHidden = 0;
+  private diagFor: string | undefined;
+  private diagAsking = false;
   private since = 0;
   private seed = 0;
   private activity = '';
   private session: SessionView | undefined;
   private mode: 'busy' | 'waiting' = 'busy';
 
-  /** `open`: how a link leaves the app (the default browser). */
-  constructor(private readonly open: (url: string) => void) {
+  /** `open`: how a link leaves the app (the default browser). `analyze`: asks why a worker is silent ('' once started, else the refusal). */
+  constructor(
+    private readonly open: (url: string) => void,
+    private readonly analyze: (id: string) => Promise<string> = async () => '',
+  ) {
     this.pulse.title = t('work.signalTip');
     this.pulse.append(h('span', 'working-pulse-dot'), this.pulseLong, this.pulseShort);
+    // "Analyser" shows on hover of the signal: a worker silent for long gets a diagnosis worker of its own.
+    const signal = h('span', 'working-signal');
+    this.diagBtn.type = 'button';
+    this.diagBtn.title = t('diag.analyzeTip');
+    this.diagBtn.addEventListener('click', () => this.startDiag());
+    signal.append(this.pulse, this.diagBtn);
     const hint = h('span', 'working-hint');
     hint.append(this.hintState, this.hintEsc);
     const info = h('span', 'working-info');
     info.append(this.meta, this.facts);
-    this.line.append(this.glyph, this.verb, info, this.pulse, hint);
-    this.root.append(this.line, this.subs.root, this.tasks);
+    this.line.append(this.glyph, this.verb, info, signal, hint);
+    this.root.append(this.line, this.diagPanel, this.subs.root, this.tasks);
     this.root.hidden = true;
     this.line.hidden = true;
     this.tasks.hidden = true;
+    this.diagPanel.hidden = true;
+  }
+
+  private startDiag(): void {
+    const s = this.session;
+    if (!s || this.diagBtn.disabled) return;
+    this.diagAsking = true;
+    this.diagBtn.disabled = true;
+    this.diagRefused = null;
+    const startedAt = Date.now();
+    void this.analyze(s.id)
+      .catch((err: unknown) => (err instanceof Error ? err.message : String(err)))
+      .then((error) => {
+        // Shown from here at once; a refusal the hub keeps too (the workers' limit) replaces it with the next snapshot.
+        if (error && this.session?.id === s.id) this.diagRefused = { state: 'failed', by: '', startedAt, endedAt: Date.now(), verdict: null, cause: error, text: '' };
+        this.diagAsking = false;
+        this.showDiag(this.session);
+      });
+  }
+
+  /** The button's state, and the last diagnosis under the line: its verdict and cause, the report folded under them. */
+  private showDiag(s: SessionView | undefined): void {
+    const server = s?.diagnosis ?? null;
+    const local = this.diagRefused;
+    const d = local && (!server || server.startedAt < local.startedAt) ? local : server;
+    const running = d?.state === 'running';
+    this.diagBtn.hidden = !s || s.role !== 'worker' || !!s.diagFor;
+    this.diagBtn.classList.toggle('running', running);
+    this.diagBtn.disabled = running || this.diagAsking;
+    setText(this.diagBtn, t(running ? 'diag.running' : 'diag.analyze'));
+    const shown = d && !running && d.startedAt !== this.diagHidden ? d : null;
+    const key = shown ? `${s?.id}\t${shown.state}\t${shown.startedAt}\t${shown.endedAt}\t${shown.text.length}\t${shown.cause}` : '';
+    this.diagPanel.hidden = !shown;
+    if (key === this.diagKey) return;
+    this.diagKey = key;
+    if (!shown) return this.diagPanel.replaceChildren();
+    const tone = shown.state === 'failed' ? 'failed' : (shown.verdict ?? 'unknown');
+    this.diagPanel.dataset.verdict = tone;
+    const head = h('div', 'working-diag-head');
+    const close = h('button', 'working-diag-close', '×');
+    close.type = 'button';
+    close.title = t('diag.close');
+    close.addEventListener('click', () => {
+      this.diagHidden = shown.startedAt;
+      if (shown === this.diagRefused) this.diagRefused = null;
+      this.showDiag(this.session);
+    });
+    const meta = [shown.endedAt ? t('diag.at', { time: new Date(shown.endedAt).toLocaleTimeString(LANG, { hour: '2-digit', minute: '2-digit' }) }) : '', shown.by ? t('diag.by', { name: shown.by.replace(/^hub-/, '') }) : '']
+      .filter(Boolean)
+      .join(' · ');
+    head.append(
+      h('span', 'working-diag-verdict', t(`diag.verdict.${tone}` as 'diag.verdict.normal')),
+      h('span', 'working-diag-cause', shown.cause),
+      h('span', 'working-diag-meta', meta),
+      close,
+    );
+    this.diagPanel.replaceChildren(head);
+    if (shown.text) {
+      const detail = h('details', 'working-diag-detail');
+      detail.append(h('summary', 'working-diag-summary', t('diag.detail')), h('div', 'working-diag-text', shown.text));
+      this.diagPanel.append(detail);
+    }
   }
 
   /** Busy: animated from the turn's start. Attention: frozen on the permission prompt. Background tasks: a still list, whatever the turn does. */
@@ -116,7 +197,14 @@ export class WorkingLine {
     const { turn, tasks } = workView(session);
     this.subs.update(session ?? undefined);
     this.showTasks(tasks, session?.backgroundPorts ?? {}, session ?? undefined);
-    this.root.hidden = !turn && tasks.length === 0 && this.subs.empty;
+    if (session?.id !== this.diagFor) {
+      // Another conversation in this view: its own diagnosis, nothing of the previous one's.
+      this.diagFor = session?.id;
+      this.diagRefused = null;
+      this.diagHidden = 0;
+    }
+    this.showDiag(session ?? undefined);
+    this.root.hidden = !turn && tasks.length === 0 && this.subs.empty && this.diagPanel.hidden;
     this.line.hidden = !turn;
     if (!turn) {
       active.delete(this);

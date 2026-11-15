@@ -65,7 +65,7 @@ export function leftBehind(procs: Proc[], root: CliProc, until = Infinity): Proc
 }
 
 /** Every process of Windows, null elsewhere or when it cannot be listed. */
-function listProcs(): Promise<Proc[] | null> {
+export function listProcs(): Promise<Proc[] | null> {
   if (process.platform !== 'win32') return Promise.resolve(null);
   return new Promise((resolve) => {
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', LIST_SCRIPT], { windowsHide: true, timeout: LIST_TIMEOUT_MS, maxBuffer: 16_000_000 }, (err, out) =>
