@@ -6,6 +6,8 @@ export interface BackgroundRun {
   description: string;
   command: string;
   outputFile: string;
+  /** When the hub saw it start. */
+  since?: number;
 }
 
 const TAIL_BYTES = 8192;

@@ -1,0 +1,103 @@
+{
+ "sessions": [
+  {
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "model": "",
+   "modelLabel": "",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "",
+   "metrics": null,
+   "createdAt": 1794753262491,
+   "idleSince": 1794756802491,
+   "agents": 0,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "background": [],
+   "id": "master",
+   "role": "master",
+   "name": "hub-maitre",
+   "mission": "",
+   "cwd": "/tmp/demo",
+   "status": "idle",
+   "busySince": null,
+   "tool": null,
+   "pulse": {
+    "signalAt": 1794756802491,
+    "tokens": 0,
+    "estimated": false
+   }
+  },
+  {
+   "post": null,
+   "instance": null,
+   "group": null,
+   "leads": [],
+   "tree": null,
+   "model": "",
+   "modelLabel": "",
+   "effort": null,
+   "mode": "bypassPermissions",
+   "lastMessage": "",
+   "metrics": null,
+   "createdAt": 1794753262491,
+   "idleSince": null,
+   "agents": 0,
+   "compacting": false,
+   "retrying": false,
+   "limit": null,
+   "approvedAt": null,
+   "modelStreams": true,
+   "error": "",
+   "account": "default",
+   "fallbackFrom": "",
+   "accountPending": false,
+   "userAccount": false,
+   "ultracode": false,
+   "ultracodeAccess": "unknown",
+   "background": [
+    "Rendu des 240 images"
+   ],
+   "id": "w-render",
+   "role": "worker",
+   "name": "hub-render",
+   "mission": "Rendu Blender de la scène finale",
+   "cwd": "/tmp/demo/render",
+   "status": "busy",
+   "busySince": 1794755482491,
+   "tool": {
+    "name": "Bash",
+    "summary": "blender -b scene.blend -a",
+    "since": 1794755602491
+   },
+   "pulse": {
+    "signalAt": 1794755602491,
+    "tokens": 1800,
+    "estimated": false
+   },
+   "diagnosis": {
+    "state": "done",
+    "by": "hub-diag-render",
+    "startedAt": 1794756772491,
+    "endedAt": 1794756842491,
+    "verdict": "normal",
+    "cause": "le rendu Blender avance, image 142 sur 240.",
+    "text": "Verdict : Normal\nCause : le rendu Blender avance, image 142 sur 240.\nPreuves :\n- blender.exe (PID 5151) vivant, CPU 96 %, 3,1 Go\n- sortie : 142 images, +6 depuis 2 min\n- transcript inchangé depuis 21 min (attente de la commande)\nEstimation de fin : environ 35 min\nAction recommandée : attendre"
+   }
+  }
+ ]
+}
