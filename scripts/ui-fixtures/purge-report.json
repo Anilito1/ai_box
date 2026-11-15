@@ -1,0 +1,1067 @@
+{
+ "root": "/home/demo/projets/site-vitrine",
+ "name": "site-vitrine",
+ "scanId": "demo",
+ "scannedAt": 1794759122514,
+ "durationMs": 420,
+ "files": 812,
+ "bytes": 1400000000,
+ "entries": [
+  {
+   "id": 0,
+   "rel": ".aibox/scratch/hub-qa-site/capture-0.png",
+   "size": 240000,
+   "mtime": 1794751982514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 1,
+   "rel": ".aibox/scratch/hub-qa-site/capture-1.png",
+   "size": 241000,
+   "mtime": 1794748382514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 2,
+   "rel": ".aibox/scratch/hub-qa-site/capture-2.png",
+   "size": 242000,
+   "mtime": 1794744782514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 3,
+   "rel": ".aibox/scratch/hub-qa-site/capture-3.png",
+   "size": 243000,
+   "mtime": 1794741182514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 4,
+   "rel": ".aibox/scratch/hub-qa-site/capture-4.png",
+   "size": 244000,
+   "mtime": 1794737582514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 5,
+   "rel": ".aibox/scratch/hub-qa-site/capture-5.png",
+   "size": 245000,
+   "mtime": 1794733982514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 6,
+   "rel": ".aibox/scratch/hub-qa-site/capture-6.png",
+   "size": 246000,
+   "mtime": 1794730382514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 7,
+   "rel": ".aibox/scratch/hub-qa-site/capture-7.png",
+   "size": 247000,
+   "mtime": 1794726782514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 8,
+   "rel": ".aibox/scratch/hub-qa-site/capture-8.png",
+   "size": 248000,
+   "mtime": 1794723182514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 9,
+   "rel": ".aibox/scratch/hub-qa-site/capture-9.png",
+   "size": 249000,
+   "mtime": 1794719582514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 10,
+   "rel": ".aibox/scratch/hub-qa-site/capture-10.png",
+   "size": 250000,
+   "mtime": 1794715982514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 11,
+   "rel": ".aibox/scratch/hub-qa-site/capture-11.png",
+   "size": 251000,
+   "mtime": 1794712382514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 12,
+   "rel": ".aibox/scratch/hub-qa-site/capture-12.png",
+   "size": 252000,
+   "mtime": 1794708782514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 13,
+   "rel": ".aibox/scratch/hub-qa-site/capture-13.png",
+   "size": 253000,
+   "mtime": 1794705182514,
+   "category": "safe",
+   "signals": [
+    "scratch",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 14,
+   "rel": "qc/frames/frame_0000.png",
+   "size": 900000,
+   "mtime": 1794701582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 15,
+   "rel": "qc/frames/frame_0001.png",
+   "size": 900000,
+   "mtime": 1794697982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 16,
+   "rel": "qc/frames/frame_0002.png",
+   "size": 900000,
+   "mtime": 1794694382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 17,
+   "rel": "qc/frames/frame_0003.png",
+   "size": 900000,
+   "mtime": 1794690782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 18,
+   "rel": "qc/frames/frame_0004.png",
+   "size": 900000,
+   "mtime": 1794687182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 19,
+   "rel": "qc/frames/frame_0005.png",
+   "size": 900000,
+   "mtime": 1794683582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 20,
+   "rel": "qc/frames/frame_0006.png",
+   "size": 900000,
+   "mtime": 1794679982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 21,
+   "rel": "qc/frames/frame_0007.png",
+   "size": 900000,
+   "mtime": 1794676382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 22,
+   "rel": "qc/frames/frame_0008.png",
+   "size": 900000,
+   "mtime": 1794672782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 23,
+   "rel": "qc/frames/frame_0009.png",
+   "size": 900000,
+   "mtime": 1794669182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 24,
+   "rel": "qc/frames/frame_0010.png",
+   "size": 900000,
+   "mtime": 1794665582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 25,
+   "rel": "qc/frames/frame_0011.png",
+   "size": 900000,
+   "mtime": 1794661982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 26,
+   "rel": "qc/frames/frame_0012.png",
+   "size": 900000,
+   "mtime": 1794658382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 27,
+   "rel": "qc/frames/frame_0013.png",
+   "size": 900000,
+   "mtime": 1794654782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 28,
+   "rel": "qc/frames/frame_0014.png",
+   "size": 900000,
+   "mtime": 1794651182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 29,
+   "rel": "qc/frames/frame_0015.png",
+   "size": 900000,
+   "mtime": 1794647582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 30,
+   "rel": "qc/frames/frame_0016.png",
+   "size": 900000,
+   "mtime": 1794643982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 31,
+   "rel": "qc/frames/frame_0017.png",
+   "size": 900000,
+   "mtime": 1794640382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 32,
+   "rel": "qc/frames/frame_0018.png",
+   "size": 900000,
+   "mtime": 1794636782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 33,
+   "rel": "qc/frames/frame_0019.png",
+   "size": 900000,
+   "mtime": 1794633182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 34,
+   "rel": "qc/frames/frame_0020.png",
+   "size": 900000,
+   "mtime": 1794629582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 35,
+   "rel": "qc/frames/frame_0021.png",
+   "size": 900000,
+   "mtime": 1794625982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 36,
+   "rel": "qc/frames/frame_0022.png",
+   "size": 900000,
+   "mtime": 1794622382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 37,
+   "rel": "qc/frames/frame_0023.png",
+   "size": 900000,
+   "mtime": 1794618782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 38,
+   "rel": "qc/frames/frame_0024.png",
+   "size": 900000,
+   "mtime": 1794615182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 39,
+   "rel": "qc/frames/frame_0025.png",
+   "size": 900000,
+   "mtime": 1794611582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 40,
+   "rel": "qc/frames/frame_0026.png",
+   "size": 900000,
+   "mtime": 1794607982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 41,
+   "rel": "qc/frames/frame_0027.png",
+   "size": 900000,
+   "mtime": 1794604382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 42,
+   "rel": "qc/frames/frame_0028.png",
+   "size": 900000,
+   "mtime": 1794600782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 43,
+   "rel": "qc/frames/frame_0029.png",
+   "size": 900000,
+   "mtime": 1794597182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 44,
+   "rel": "qc/frames/frame_0030.png",
+   "size": 900000,
+   "mtime": 1794593582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 45,
+   "rel": "qc/frames/frame_0031.png",
+   "size": 900000,
+   "mtime": 1794589982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 46,
+   "rel": "qc/frames/frame_0032.png",
+   "size": 900000,
+   "mtime": 1794586382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 47,
+   "rel": "qc/frames/frame_0033.png",
+   "size": 900000,
+   "mtime": 1794582782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 48,
+   "rel": "qc/frames/frame_0034.png",
+   "size": 900000,
+   "mtime": 1794579182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 49,
+   "rel": "qc/frames/frame_0035.png",
+   "size": 900000,
+   "mtime": 1794575582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 50,
+   "rel": "qc/frames/frame_0036.png",
+   "size": 900000,
+   "mtime": 1794571982514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 51,
+   "rel": "qc/frames/frame_0037.png",
+   "size": 900000,
+   "mtime": 1794568382514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 52,
+   "rel": "qc/frames/frame_0038.png",
+   "size": 900000,
+   "mtime": 1794564782514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 53,
+   "rel": "qc/frames/frame_0039.png",
+   "size": 900000,
+   "mtime": 1794561182514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 54,
+   "rel": "test-results/run.log",
+   "size": 12000,
+   "mtime": 1794557582514,
+   "category": "safe",
+   "signals": [
+    "agentCommand",
+    "toolCache",
+    "log"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 55,
+   "rel": "models/segment.onnx",
+   "size": 176000000,
+   "mtime": 1794553982514,
+   "category": "likely",
+   "signals": [
+    "agentCommand",
+    "tmpDir"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 56,
+   "rel": "renders/essai-0.png",
+   "size": 3100000,
+   "mtime": 1794550382514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 57,
+   "rel": "renders/essai-1.png",
+   "size": 3100000,
+   "mtime": 1794546782514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 58,
+   "rel": "renders/essai-2.png",
+   "size": 3100000,
+   "mtime": 1794543182514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 59,
+   "rel": "renders/essai-3.png",
+   "size": 3100000,
+   "mtime": 1794539582514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 60,
+   "rel": "renders/essai-4.png",
+   "size": 3100000,
+   "mtime": 1794535982514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 61,
+   "rel": "renders/essai-5.png",
+   "size": 3100000,
+   "mtime": 1794532382514,
+   "category": "check",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 62,
+   "rel": "scripts/essai_lumiere.py",
+   "size": 4200,
+   "mtime": 1794528782514,
+   "category": "check",
+   "signals": [
+    "agentWrite",
+    "script"
+   ],
+   "block": null,
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 63,
+   "rel": "renders/final/hero.png",
+   "size": 8200000,
+   "mtime": 1794525182514,
+   "category": "protected",
+   "signals": [
+    "agentCommand",
+    "media"
+   ],
+   "block": "deliverable",
+   "sessions": [
+    "hub-rendu-3d"
+   ]
+  },
+  {
+   "id": 64,
+   "rel": "KIT-DEMO.zip",
+   "size": 52000000,
+   "mtime": 1794521582514,
+   "category": "protected",
+   "signals": [
+    "agentCommand"
+   ],
+   "block": "document",
+   "sessions": [
+    "hub-qa-site"
+   ]
+  },
+  {
+   "id": 65,
+   "rel": "qc/planche-avant-apres.png",
+   "size": 2100000,
+   "mtime": 1794517982514,
+   "category": "protected",
+   "signals": [
+    "agentCommand",
+    "tmpDir",
+    "media"
+   ],
+   "block": "cited",
+   "sessions": [
+    "hub-qa-site"
+   ]
+  }
+ ],
+ "totals": {
+  "safe": {
+   "count": 55,
+   "bytes": 39463000
+  },
+  "likely": {
+   "count": 1,
+   "bytes": 176000000
+  },
+  "check": {
+   "count": 7,
+   "bytes": 18604200
+  },
+  "protected": {
+   "count": 3,
+   "bytes": 62300000
+  }
+ },
+ "partial": "",
+ "sources": {
+  "claude": 12,
+  "codex": 2,
+  "gemini": 0,
+  "activity": 30
+ }
+}

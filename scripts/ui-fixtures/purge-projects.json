@@ -1,0 +1,5 @@
+[
+  { "root": "/home/demo/projets/site-vitrine", "name": "site-vitrine", "source": "repo" },
+  { "root": "/home/demo/projets/rendus-3d", "name": "rendus-3d", "source": "session" },
+  { "root": "/home/demo/.config/AI Box/scratch", "name": "scratch", "source": "appScratch" }
+]

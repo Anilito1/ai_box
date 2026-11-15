@@ -82,6 +82,10 @@ import { findRepos, remoteOf } from './repos';
 import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
+import { PurgeService } from './purge';
+import { TranscriptIndex, transcriptRoots } from './purgeIndex';
+import { git } from './git';
+import { baseConfigDir } from './accounts';
 import { openTerminal } from './terminal';
 import { installTool, setToolsDir, type Tool } from './providers/tools';
 import { ProviderNewsWatch, resolved } from './news';
@@ -293,6 +297,8 @@ class Hub {
   /** The remote server (experimental): inert while remote workers are off. */
   readonly remote: RemoteServer;
   readonly caps: CapabilityStore;
+  /** The purge of ephemeral files, project by project (docs/purge-ephemeres.md). */
+  readonly purge: PurgeService;
   readonly updater: Updater;
   /** Where the sessions of OpenAI accounts send Claude Code's requests. */
   readonly bridge = new Bridge((id) => this.bridgeAccount(id));
@@ -387,8 +393,28 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       costLog: this.costLog,
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
       remoteServer: this.remote,
+      scratchRoot: join(this.dataDir, 'scratch'),
+      wideFolders: () => this.wideFolders(),
+      onActivity: (record) => this.purge.recordActivity(record),
     });
     this.remote.mgr = this.mgr;
+    const transcripts = new TranscriptIndex(
+      () => transcriptRoots(baseConfigDir(), this.cfg.accounts.map((a) => accountDir(this.dataDir, a.id))),
+      () => this.purge.activityRecords(),
+      () => this.mgr.sessionFolders(),
+    );
+    this.purge = new PurgeService({
+      dataDir: this.dataDir,
+      index: transcripts,
+      trash: (path) => shell.trashItem(path),
+      known: () => [
+        ...this.cfg.mainRepos.map((root) => ({ root, source: 'repo' as const })),
+        ...this.mgr.sessionFolders().map((root) => ({ root, source: 'session' as const })),
+      ],
+      broad: () => this.wideFolders(),
+      busyScratch: () => this.mgr.busyScratch(),
+      git: (cwd, args) => git(cwd, args, { hooks: false, timeout: 60_000 }),
+    });
     this.caps = new CapabilityStore({
       cfg: this.cfg,
       executable: () => this.executable,
@@ -436,6 +462,19 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
    * The access of a session's account (the Claude access chosen in the settings for "default"), plus the GitHub
    * sign-in when the user shares it with the sessions.
    */
+  /** Folders too wide to be a project: the home folder's standard ones and the workspaces that hold the repos. */
+  private wideFolders(): string[] {
+    const out = [...this.cfg.workspaces];
+    for (const name of ['home', 'desktop', 'documents', 'downloads', 'pictures', 'videos', 'music'] as const) {
+      try {
+        out.push(app.getPath(name));
+      } catch {
+        /* not on this system */
+      }
+    }
+    return out;
+  }
+
   sessionEnv(account: string, model?: string): { set: Record<string, string>; unset: string[] } {
     const github = this.cfg.github.shareWithSessions ? githubGitEnv(this.cfg, this.secrets.get('githubToken'), this.gh) : {};
     // "default" is the active Anthropic account; "own" is the user's own sign-in, whichever is active.
@@ -1165,6 +1204,39 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('away:leave', () => void this.remote.stepAway(false));
     on('away:back', (mode) => void this.remote.comeBack(mode === 'leave' ? 'leave' : 'bring'));
     // The MCP and Skills panels: the list from the files at once, the servers' state when Claude Code has checked them.
+    handle('purge:projects', () => this.purge.projects());
+    handle('purge:suggest', () => this.purge.suggestions());
+    handle('purge:scan', (root) => {
+      if (!this.purge.isAllowed(root)) throw new Error('unknown project');
+      return this.purge.scan(root);
+    });
+    handle('purge:trash', (scanId, ids) => this.purge.trash(isStr(scanId) ? scanId : '', ids));
+    handle('purge:history', (root) => this.purge.history(this.purge.isAllowed(root) ? root : undefined));
+    handle('purge:restore', (id) => this.purge.restore(isStr(id) ? id : ''));
+    handle('purge:settings', (root) => (this.purge.isAllowed(root) ? this.purge.projectSettings(root) : { exclude: [] }));
+    handle('purge:save-settings', (root, exclude) => {
+      if (!this.purge.isAllowed(root)) throw new Error('unknown project');
+      return this.purge.saveProjectSettings(root, exclude);
+    });
+    handle('purge:add', async () => {
+      if (!win) return null;
+      const r = await dialog.showOpenDialog(win, { title: t('dialog.pickFolder'), properties: ['openDirectory'] });
+      const root = r.canceled ? '' : (r.filePaths[0] ?? '');
+      if (!root) return null;
+      const problem = this.purge.addProject(root);
+      return problem ? { problem } : { project: this.purge.projects().find((p) => p.root.toLowerCase() === root.toLowerCase()) ?? null };
+    });
+    handle('purge:remove', (root) => {
+      if (isStr(root)) this.purge.removeProject(root);
+      return this.purge.projects();
+    });
+    handle('purge:open', (root) => {
+      if (this.purge.isAllowed(root)) void shell.openPath(root);
+    });
+    handle('purge:reveal', (scanId, id) => {
+      const path = this.purge.pathOf(scanId, id);
+      if (path) shell.showItemInFolder(path);
+    });
     handle('caps:get', () => this.caps.inventory());
     handle('caps:check', async () => {
       await this.caps.check();

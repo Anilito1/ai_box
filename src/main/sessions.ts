@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
@@ -22,6 +23,8 @@ import { buildHandoff, staleNote } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
 import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
+import { SCRATCH_DIR, SCRATCH_ENV, SCRATCH_PARENT, scratchName } from '../shared/purge';
+import type { ActivityRecord } from './purgeIndex';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
@@ -91,6 +94,7 @@ import {
   rosterKey,
   setMasterName,
   setProviderLines,
+  scratchSection,
   tags,
   workerPrompt,
   type InstanceInfo,
@@ -178,6 +182,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   transitionToken: object | null;
   /** All extra writable folders of an isolated instance, mapped into its own worktrees. */
   isolatedDirs: string[] | null;
+  /** Its scratch folder for throwaway files, made at its launch (none for the master, a remote or read-only worker). */
+  scratch: string | null;
   extraTrees: WorkTree[];
   /** Approval cards waiting for the user; null = withdrawn by the CLI. */
   pending: Map<string, (decision: PermissionDecision | null) => void>;
@@ -374,6 +380,12 @@ export interface ManagerOptions {
   capabilities(): Promise<string>;
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
+  /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
+  scratchRoot?: string;
+  /** Folders too wide to be a project besides the home folder and the workspaces (the Desktop, Documents…). */
+  wideFolders?(): string[];
+  /** A worker's stretch of work ended: the purge's journal of who worked where, whatever the program. */
+  onActivity?(record: ActivityRecord): void;
 }
 
 export interface RemoteServerControl {
@@ -1782,8 +1794,10 @@ export class SessionManager extends EventEmitter {
       : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
     // A program without Claude Code's SendMessage (or a worker on the server, whose peers are here) writes to the others
     // through the hub's tool of the same job.
+    s.scratch = !isMaster && !remote && !s.readOnly ? this.prepareScratch(s) : null;
+    const scratchRules = s.scratch ? scratchSection(s.scratch, SCRATCH_ENV) : '';
     const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Read the packet immediately before summarizing and pass its lastEvent as covered_event; new activity invalidates an older summary. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
-    const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules;
+    const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + scratchRules + memoryRules;
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
     const tools = this.hubTools(s, harness, !!remote);
@@ -1797,7 +1811,7 @@ export class SessionManager extends EventEmitter {
       role: s.role,
       name: s.name,
       cwd: s.cwd,
-      extraDirs: this.writableExtraDirs(s),
+      extraDirs: [...this.writableExtraDirs(s), ...(s.scratch && !this.insideDir(s.cwd, s.scratch) ? [s.scratch] : [])],
       readDirs: [this.attachDir],
       readOnly: s.readOnly,
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
@@ -1812,7 +1826,7 @@ export class SessionManager extends EventEmitter {
       tools,
       mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
-      env: this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
+      env: { ...this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined), ...(s.scratch ? { [SCRATCH_ENV]: s.scratch } : {}) },
       ...(remote ? { remote } : {}),
       ...(harness === 'gemini' && resume && s.geminiUsage ? { initialUsage: s.geminiUsage } : {}),
       conversation: { id: s.sessionId, resume },
@@ -2401,6 +2415,7 @@ export class SessionManager extends EventEmitter {
     s.turnWaiter = null;
     waiter?.(null);
     s.status = 'exited';
+    this.endActivity(s);
     s.busySince = null;
     s.handoff = false;
     s.noteSending = false;
@@ -2694,6 +2709,7 @@ export class SessionManager extends EventEmitter {
 
   private wentIdle(s: Session): void {
     s.status = 'idle';
+    this.endActivity(s);
     s.busySince = null;
     s.idleAt = Date.now();
   }
@@ -2747,6 +2763,60 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A post's own mode (for its worker and its instances), else the hub's. */
+  /** A worker's stretch of work, for the purge: from the start of its turn to now. */
+  private endActivity(s: Session): void {
+    if (s.role === 'master' || s.busySince === null || s.remoteRun) return;
+    try {
+      this.opts.onActivity?.({ name: s.name, cwd: s.cwd, provider: this.kindOf(s.runAccount || this.accountOf(s)), start: s.busySince, end: Date.now() });
+    } catch {
+      /* the journal is a convenience */
+    }
+  }
+
+  /** Folders a project can never be: a disk's root, the home folder and above, the workspaces holding the repos. */
+  private isWideFolder(dir: string): boolean {
+    const r = resolve(dir);
+    if (dirname(r) === r || this.insideDir(r, homedir())) return true;
+    return [...this.opts.cfg.workspaces, ...(this.opts.wideFolders?.() ?? [])].some((w) => samePath(w, r));
+  }
+
+  /** `child` is `parent` or below it (case-blind except on Linux). */
+  private insideDir(parent: string, child: string): boolean {
+    const norm = (p: string) => (process.platform === 'linux' ? resolve(p) : resolve(p).toLowerCase());
+    const a = norm(parent);
+    const b = norm(child);
+    return b === a || b.startsWith(a.endsWith(sep) ? a : a + sep);
+  }
+
+  /**
+   * Makes a worker's scratch folder: `<its folder>/.aibox/scratch/<name>`, which a `.aibox/.gitignore` keeps out of git;
+   * in the app's own folder when its folder is too wide to be a project. Null when it cannot be made (read-only disk).
+   */
+  private prepareScratch(s: Session): string | null {
+    const name = scratchName(s.name);
+    const wide = this.isWideFolder(s.cwd);
+    const dir = wide ? (this.opts.scratchRoot ? join(this.opts.scratchRoot, name) : null) : join(s.cwd, ...SCRATCH_DIR.split('/'), name);
+    if (!dir) return null;
+    try {
+      mkdirSync(dir, { recursive: true });
+      const ignore = join(s.cwd, SCRATCH_PARENT, '.gitignore');
+      if (!wide && !existsSync(ignore)) writeFileSync(ignore, '# AI Box: scratch folders of its workers, emptied from the app.\n*\n');
+      return dir;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Scratch folders of the workers at work now: the purge leaves them alone. */
+  busyScratch(): string[] {
+    return [...this.sessions.values()].filter((s) => s.scratch && (s.status === 'busy' || s.status === 'attention')).map((s) => s.scratch as string);
+  }
+
+  /** The local folders of every session the hub keeps, for the purge's list of projects. */
+  sessionFolders(): string[] {
+    return [...new Set([...this.sessions.values()].filter((s) => !s.remoteRun).map((s) => s.cwd))];
+  }
+
   private modeOf(s: Session): Mode | null {
     return this.postOf(s)?.mode || this.hubMode();
   }
@@ -4948,6 +5018,7 @@ export class SessionManager extends EventEmitter {
       tools: new Map(),
       bgRuns: new Map(),
       bgPorts: {},
+      scratch: null,
       bgScan: null,
       tokens: new TurnTokens(),
       limit: null,

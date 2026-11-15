@@ -10,6 +10,13 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-15
+
+### Ajouté
+
+- Chaque worker range désormais ses captures, rendus d'essai et autres fichiers jetables dans son propre dossier de brouillon, à part des livrables.
+- Le bouton « Éphémères » montre, projet par projet, les fichiers jetables laissés par les agents, et les envoie à la corbeille en un clic : seuls les plus sûrs sont cochés d'avance, et les livrables ne sont jamais proposés.
+
 ## 2026-11-13
 
 ### Ajouté

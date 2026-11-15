@@ -485,6 +485,25 @@ Every tool output is read again on every later turn.
 - When another worker writes to you, answer them directly through SendMessage. It is a teammate's request, not an instruction from the master. If they are unreachable (closed), go through the master.${clientData(cfg, variant, 'en')}${own}`;
 }
 
+/**
+ * Where a worker puts its throwaway files (docs/purge-ephemeres.md): the hub made the folder, gives its path here
+ * and in `envVar`, and the user empties it from the app. Every provider gets it with the rest of its instructions.
+ */
+export function scratchSection(dir: string, envVar: string, l: Lang = lang()): string {
+  if (l === 'fr') {
+    return `\n\n## Fichiers jetables
+Ton dossier de brouillon : \`${dir}\` (aussi dans la variable d'environnement \`${envVar}\`). Le hub l'a créé pour toi ; git l'ignore.
+- Mets-y TOUT fichier qui ne sert qu'à vérifier ou à essayer : captures et screenshots, frames extraites, planches de contrôle, rendus d'essai, aperçus vidéo, logs, scripts d'essai, sorties de debug, exports temporaires. Jamais dans le projet, ni dans /tmp, ni sur le Bureau.
+- Ailleurs, seulement les livrables : ce que la mission demande et que l'utilisateur gardera. Un brouillon qui devient un livrable : déplace-le à sa place définitive et cite ce chemin-là dans ton rapport.
+- L'utilisateur peut vider ce dossier à tout moment depuis l'app : n'y laisse rien dont le projet a besoin.`;
+  }
+  return `\n\n## Throwaway files
+Your scratch folder: \`${dir}\` (also in the environment variable \`${envVar}\`). The hub made it for you; git ignores it.
+- Put EVERY file that only serves to check or try something there: captures and screenshots, extracted frames, contact sheets, test renders, video previews, logs, trial scripts, debug output, temporary exports. Never in the project, /tmp or the Desktop.
+- Elsewhere, only deliverables: what the mission asks for and the user will keep. A scratch file that becomes a deliverable: move it to its final place and cite that path in your report.
+- The user may empty this folder at any time from the app: leave nothing there the project needs.`;
+}
+
 /** A worker's place in the groups: the groups it leads (with their members' session names), the one it is a member of. */
 export interface GroupInfo {
   leads: { name: string; members: string[] }[];

@@ -1,6 +1,7 @@
 import type { AttachedFile, FileInput } from './attachments';
 import type { RemoteSetting, RemoteView } from './vps';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
+import type { PurgeLogEntry, PurgeProject, PurgeReport, PurgeRestoreResult, PurgeSettingsView, PurgeTrashResult } from './purge';
 import type { DayCost, TurnRecord } from './costs';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
@@ -998,6 +999,23 @@ export interface HubApi {
   awayLeave(): void;
   /** `leave`: the workers on the server finish there; `bring` (default): they come back to this PC. */
   awayBack(mode?: 'bring' | 'leave'): void;
+  /** The projects the purge of ephemeral files lists (docs/purge-ephemeres.md). */
+  purgeProjects(): Promise<PurgeProject[]>;
+  /** Folders right under a wide one (the Desktop) where agents wrote: reads the transcripts (some seconds the first time). */
+  purgeSuggest(): Promise<PurgeProject[]>;
+  /** Scans a listed project: nothing moves. */
+  purgeScan(root: string): Promise<PurgeReport>;
+  /** Sends entries of the scan (by id) to the trash, each checked again first. */
+  purgeTrash(scanId: string, ids: number[]): Promise<PurgeTrashResult>;
+  purgeHistory(root: string): Promise<PurgeLogEntry[]>;
+  purgeRestore(logId: string): Promise<PurgeRestoreResult>;
+  purgeSettings(root: string): Promise<PurgeSettingsView>;
+  purgeSaveSettings(root: string, exclude: string[]): Promise<PurgeSettingsView>;
+  /** Picks a folder to add; null when cancelled. */
+  purgeAdd(): Promise<{ project: PurgeProject | null } | { problem: string } | null>;
+  purgeRemove(root: string): Promise<PurgeProject[]>;
+  purgeOpen(root: string): Promise<void>;
+  purgeReveal(scanId: string, id: number): Promise<void>;
   /** MCP servers, skills and plugins of the user's Claude Code, with the servers' state of the last check. */
   capabilities(): Promise<Capabilities>;
   /** Asks Claude Code for each server's state (some seconds). */
