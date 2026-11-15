@@ -53,6 +53,7 @@ const api: HubApi = {
   deleteTopic: (topic) => ipcRenderer.send('topic:delete', topic),
   moveTopic: (topic, group) => ipcRenderer.send('topic:move', topic, group ?? null),
   showCost: (id) => ipcRenderer.send('session:cost', id),
+  analyze: (id) => ipcRenderer.invoke('session:analyze', id),
   costHistory: (from, to) => ipcRenderer.invoke('cost:history', from, to),
   openLocalFile: (id, path, action) => ipcRenderer.invoke('session:open-file', id, path, action),
   openExternal: (url) => ipcRenderer.send('open-external', url),

@@ -150,6 +150,8 @@ export interface LaunchSpec {
   /** Folders the session reads without working in them: the files the user attaches. */
   readDirs: string[];
   readOnly: boolean;
+  /** Only looks into another session (a diagnosis): never writes to the others, whatever its tools. */
+  observer?: boolean;
   /** Empty = the program's own choice (its settings). */
   model: string;
   effort: Effort | null;

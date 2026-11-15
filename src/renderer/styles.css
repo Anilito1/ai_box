@@ -2140,6 +2140,128 @@ kbd,
 .working-pulse-short {
   display: none;
 }
+/* "Analyser": shown on hover of the signal, kept in view while its analysis runs. */
+.working-signal {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.working-diag-btn {
+  display: none;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  cursor: pointer;
+}
+.working-signal:hover .working-diag-btn,
+.working-diag-btn:focus-visible,
+.working-diag-btn.running {
+  display: inline-block;
+}
+.working-diag-btn[hidden] {
+  display: none !important;
+}
+.working-diag-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.working-diag-btn:disabled {
+  cursor: default;
+}
+.working-diag-btn.running {
+  border-color: transparent;
+  color: var(--text-3);
+  font-style: italic;
+}
+/* The analysis's outcome under the line: the verdict and its cause, the report folded under them. */
+.working-diag {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-top: var(--sp-1);
+  padding: 4px 8px;
+  border-left: 2px solid var(--text-3);
+  border-radius: 2px;
+  background: var(--hover);
+  font-size: var(--fs-sm);
+}
+.working-diag[hidden] {
+  display: none;
+}
+.working-diag[data-verdict='normal'] {
+  border-left-color: var(--ok);
+}
+.working-diag[data-verdict='watch'] {
+  border-left-color: var(--warn);
+}
+.working-diag[data-verdict='blocked'],
+.working-diag[data-verdict='failed'] {
+  border-left-color: var(--danger);
+}
+.working-diag-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.working-diag-verdict {
+  flex: none;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.working-diag[data-verdict='normal'] .working-diag-verdict {
+  color: var(--ok);
+}
+.working-diag[data-verdict='watch'] .working-diag-verdict {
+  color: var(--warn);
+}
+.working-diag:is([data-verdict='blocked'], [data-verdict='failed']) .working-diag-verdict {
+  color: var(--danger);
+}
+.working-diag-cause {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.working-diag-meta {
+  flex: none;
+  color: var(--text-3);
+}
+.working-diag-close {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+.working-diag-close:hover {
+  color: var(--text);
+}
+.working-diag-summary {
+  color: var(--text-3);
+  cursor: pointer;
+  user-select: none;
+}
+.working-diag-text {
+  margin-top: 2px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .working-hint {
   flex: none;
   margin-left: auto;

@@ -30,10 +30,11 @@ const FULL_WINDOW = 1_000_000;
  * the remote server has no SendMessage (the peers are on this PC): the hub's send_message carries it, kept while away.
  * This is a tool filter, not a read-only sandbox: Bash and MCP can still have side effects.
  */
-export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode'> & { remote?: unknown }): string[] {
+export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode' | 'observer'> & { remote?: unknown }): string[] {
   if (spec.role === 'master') return ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'];
   const workflow = spec.ultracode ? [] : ['Workflow'];
-  const peers = spec.remote ? ['SendMessage'] : [];
+  // A diagnosis worker has no SendMessage either: it never writes to the worker it looks into.
+  const peers = spec.remote || spec.observer ? ['SendMessage'] : [];
   return spec.readOnly ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers] : ['AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers];
 }
 

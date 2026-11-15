@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-15
+
+### Ajouté
+
+- Au survol de « signal il y a … » d'un worker, un bouton « Analyser » lance un court diagnostic qui explique pourquoi il ne donne plus de signal (tâche longue, validation en attente, process bloqué…) : le verdict s'affiche sous le worker, le détail se déplie, et le maître le reçoit aussi.
+
 ## 2026-11-13
 
 ### Ajouté

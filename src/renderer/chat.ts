@@ -118,7 +118,7 @@ export class ChatView {
   private readonly attachStrip = h('div', 'attachments');
   private readonly attachNote = h('div', 'attach-note');
   private readonly fileInput = h('input');
-  private readonly working = new WorkingLine((url) => this.hub.openExternal(url));
+  private readonly working = new WorkingLine((url) => this.hub.openExternal(url), (id) => this.hub.analyze(id));
   private readonly slash: SlashMenu;
   /** The session's Clawd, large, in the header of a panel that asks for one. */
   private readonly mascot: Avatar | null;

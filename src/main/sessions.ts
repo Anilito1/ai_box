@@ -26,7 +26,7 @@ import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './ba
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
 import { requireAppliedPolicy } from './providers/capabilities';
-import { SubagentTails } from './subagentTail';
+import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
@@ -114,7 +114,9 @@ import { installPlan, makeTrees, planText, retireTree, runInstall, type InstallP
 import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
 import { Inbox, type InboxEntry } from './providers/inbox';
-import { EXIT_WAIT_MS, reapTrees, type CliProc } from './procTree';
+import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
+import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
+import { readReport, type DiagnosisView } from '../shared/diagnosis';
 import type { McpHub, McpLease } from './mcpHub';
 import type {
   ProviderAdapter,
@@ -136,7 +138,7 @@ import { commitsSince, pullBack, pushedState } from './awayGit';
 import { awayBrief, backNote, resumeNote, saveRequest, type RepoReturn } from '../shared/away';
 import { accessOf, allowedRepo, callOf, leaseConflict, onServer, scopeOf, type Lease } from '../shared/vps';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote' | 'diagnosis' | 'diagFor'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -275,6 +277,11 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   tree: WorkTree | null;
   /** Shares another worker's folder to read it: Edit and Write are off. */
   readOnly: boolean;
+  /**
+   * A diagnosis worker the user started from another worker's signal: the session it looks into, the folders it reads
+   * outside its own (the target's transcript, its tasks' output), and whether its report came in.
+   */
+  diagOf: { target: string; dirs: string[]; reported: boolean } | null;
   /** The hub installing its worktree's dependencies. */
   installing: { kill: () => void; done: Promise<unknown>; command: string } | null;
   installFailed: boolean;
@@ -334,6 +341,7 @@ type Persisted = {
   | 'reportTo'
   | 'tree'
   | 'readOnly'
+  | 'diagOf'
   | 'accountId'
   | 'userAccount'
   | 'home'
@@ -404,6 +412,9 @@ const HISTORY_MAX = 400;
 const REPORT_ITEMS = 12;
 // A queued message starts its turn within this delay; only a worker still idle after it has really stopped.
 const SILENCE_MS = 5_000;
+/** A diagnosis reads processes and files and writes a short report: a fast model is enough. */
+const DIAG_MODEL = 'sonnet';
+const DIAG_EFFORT: Effort = 'medium';
 /** When a background task's port is looked for again after the first reading, while it has none. */
 const PORT_SCAN_MS = [1_500, 3_000, 6_000, 15_000, 30_000];
 // Deltas can come by the hundred per second: what they say reaches the windows at this pace.
@@ -582,6 +593,8 @@ export class SessionManager extends EventEmitter {
   private saveTimer: NodeJS.Timeout | null = null;
   private itemsTimer: NodeJS.Timeout | null = null;
   private readonly pulsed = new Set<Session>();
+  /** The last analysis of each worker's silence, by its session id: shown under its working line until the next one. */
+  private readonly diagnoses = new Map<string, DiagnosisView>();
   private pulseTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
   private quitting = false;
@@ -1605,6 +1618,8 @@ export class SessionManager extends EventEmitter {
         ultracode: s.ultracode,
         ultracodeAccess: this.ultracodeAccessOf(s.runAccount || this.accountOf(s)),
         ...this.remoteBadge(s),
+        ...(s.role === 'worker' && !s.diagOf ? { diagnosis: this.diagView(s.id) } : {}),
+        ...(s.diagOf ? { diagFor: this.sessions.get(s.diagOf.target)?.name ?? '' } : {}),
       }));
     // The status bar shows the limits of the master's account.
     const shown = this.shownUsageAccount();
@@ -1783,7 +1798,7 @@ export class SessionManager extends EventEmitter {
     // A program without Claude Code's SendMessage (or a worker on the server, whose peers are here) writes to the others
     // through the hub's tool of the same job.
     const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Read the packet immediately before summarizing and pass its lastEvent as covered_event; new activity invalidates an older summary. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
-    const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules;
+    const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + memoryRules + (s.diagOf ? `\n${diagPrompt(lang())}\n` : '');
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
     const tools = this.hubTools(s, harness, !!remote);
@@ -1797,9 +1812,10 @@ export class SessionManager extends EventEmitter {
       role: s.role,
       name: s.name,
       cwd: s.cwd,
-      extraDirs: this.writableExtraDirs(s),
+      extraDirs: [...this.writableExtraDirs(s), ...(s.diagOf?.dirs ?? [])],
       readDirs: [this.attachDir],
       readOnly: s.readOnly,
+      ...(s.diagOf ? { observer: true } : {}),
       // No model/effort = the program resolves them from its settings, exactly like a normal session. On a bridged
       // account the model is the account's (ANTHROPIC_MODEL): a Claude name, or its 1M variant, would mean nothing there.
       model: this.launchModel(account, picked),
@@ -2584,7 +2600,7 @@ export class SessionManager extends EventEmitter {
         s.subagentTails.sync();
         for (const b of blocks) {
           const run = b.type === 'tool_use' ? runOf(b.name, b.input) : null;
-          if (run) s.bgRuns.set(String(b.id), run);
+          if (run) s.bgRuns.set(String(b.id), { ...run, since: s.bgRuns.get(String(b.id))?.since ?? Date.now() });
         }
         if (hasText) s.liveId = null;
         if (blocks.some((b) => b.type === 'tool_use' && b.name === 'SendMessage' && (b.input as { to?: unknown })?.to === masterName())) {
@@ -2665,7 +2681,9 @@ export class SessionManager extends EventEmitter {
           if (ev.isError) s.lastMessage = '';
           else if (ev.result.trim()) s.lastMessage = ev.result;
           this.event(s, 'turn_done');
+          if (s.diagOf) this.diagTurnEnded(s, ev.isError ? '' : ev.result, ev.isError ? s.error || ev.result : '');
         } else {
+          if (s.diagOf) this.diagTurnEnded(s, '', ev.subtype);
           this.notice(s, t('notice.interrupted'), 'info');
           this.event(s, 'interrupted');
         }
@@ -3363,7 +3381,7 @@ export class SessionManager extends EventEmitter {
     }
     this.stop(s.id);
     // A note is only asked of a worker closed for idleness: one the master closes has ended its job.
-    this.notice(s, s.handoffDone ? t('notice.closedIdle', { min: IDLE_CLOSE_MIN }) : t('notice.closedByMaster'), 'info');
+    this.notice(s, s.diagOf ? t('notice.diagClosed') : s.handoffDone ? t('notice.closedIdle', { min: IDLE_CLOSE_MIN }) : t('notice.closedByMaster'), 'info');
     this.tellKept(s);
   }
 
@@ -3622,6 +3640,8 @@ export class SessionManager extends EventEmitter {
       const toLead = this.groupOf(s)
         ? [tool('message_lead', t('tool.messageLead'), { message: z.string().describe(t('tool.messageLead.message')) }, ({ message }, extra) => once(extra, () => this.messageLead(s, message)))]
         : [];
+      // A diagnosis worker reads who does what and reports: no message to a worker, no topic memory to write.
+      if (s.diagOf) return [listWorkers, toMaster];
       return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
@@ -4485,9 +4505,11 @@ export class SessionManager extends EventEmitter {
     const master = this.sessions.get(MASTER_ID);
     if (!master) throw new Error(t('master.unreachable'));
     s.owesReport = false;
+    if (s.diagOf) this.diagReported(s, text);
     const tag = `worker-output-${randomTag()}`;
     const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
-    const topic = this.workerTopic(s);
+    // A diagnosis goes with the topic of the worker it looked into.
+    const topic = this.workerTopic(s.diagOf ? this.sessions.get(s.diagOf.target) ?? s : s);
     this.deliver(master, {
       text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
       images: [],
@@ -4609,10 +4631,136 @@ export class SessionManager extends EventEmitter {
       .join('\n\n');
   }
 
-  private async workerReport(name: string, lead?: Session): Promise<string> {
-    const s = lead ? this.memberNamed(lead, name) : this.findWorker(name);
-    if (!s.inbox && s.started) await this.loadHistory(s);
-    const steps = [...s.items.values()]
+  // ---------- diagnosis of a silent worker ----------
+
+  /**
+   * The user asks why a worker has been silent so long: a short-lived worker looks into it, read-only (no Edit, Write
+   * or SendMessage, the target's folder shared), on sonnet at medium effort. Its report shows under the target's working
+   * line and goes to the master; it closes once done. One at a time per worker. Resolves to the refusal, '' once started.
+   */
+  async analyze(id: string): Promise<string> {
+    const target = this.sessions.get(id);
+    if (!target || target.role !== 'worker' || target.diagOf) return t('diag.notWorker');
+    if (this.diagView(id)?.state === 'running') return t('diag.already', { name: displayName(target) });
+    const startedAt = Date.now();
+    const fail = (error: string) => {
+      this.diagnoses.set(id, { state: 'failed', by: '', startedAt, endedAt: Date.now(), verdict: null, cause: error, text: '' });
+      this.changed();
+      return error;
+    };
+    // Said where the button is: a click that finds every place taken must not fail without a word.
+    if (this.overCap(null)) return fail(t('diag.cap', { max: this.opts.cfg.parallel.maxWorkers }));
+    // Running from now: a second click while the processes are listed finds it.
+    this.diagnoses.set(id, { state: 'running', by: '', startedAt, endedAt: null, verdict: null, cause: '', text: '' });
+    this.changed();
+    try {
+      const children = await this.childrenOf(target);
+      const facts = this.diagFacts(target, children);
+      // The limit again: a worker may have started meanwhile.
+      if (this.overCap(null)) return fail(t('diag.cap', { max: this.opts.cfg.parallel.maxWorkers }));
+      // Its previous diagnosis worker, closed: the new one replaces it in the list.
+      for (const old of [...this.sessions.values()]) if (old.diagOf?.target === id && !old.inbox) this.remove(old.id);
+      const dirs = [...new Set([facts.transcript, ...facts.background.map((b) => b.outputFile)].filter(Boolean).map((f) => dirname(f)))];
+      const name = this.uniqueName(`diag-${displayName(target)}`, 40);
+      const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, diagMission(target.name, lang()), target.cwd, DIAG_MODEL, DIAG_EFFORT);
+      Object.assign(s, { readOnly: true, owesReport: false, diagOf: { target: id, dirs, reported: false } });
+      this.diagnoses.set(id, { state: 'running', by: s.name, startedAt, endedAt: null, verdict: null, cause: '', text: '' });
+      const context = diagContext(facts, lang());
+      void this.launch(s, false, { text: `${tags().mission(s.name)}\n${s.mission}\n\n<hub-note>\n${context}\n</hub-note>`, images: [], from: masterName() });
+      // Set once the launch has begun (it clears the flag): it closes when its report is in and its turn is over.
+      s.closeWhenDone = true;
+      this.changed();
+      return '';
+    } catch (err) {
+      return fail(errorText(err));
+    }
+  }
+
+  /** A worker's last diagnosis; one whose worker is gone without a report has failed. */
+  private diagView(id: string): DiagnosisView | null {
+    const d = this.diagnoses.get(id);
+    if (!d || d.state !== 'running' || !d.by) return d ?? null;
+    const by = [...this.sessions.values()].find((x) => x.name === d.by && x.diagOf?.target === id);
+    if (by?.inbox) return d;
+    const ended = { ...d, state: 'failed' as const, endedAt: Date.now(), cause: by?.error || t('diag.ended') };
+    this.diagnoses.set(id, ended);
+    return ended;
+  }
+
+  /** The diagnosis worker's report came in (by message_master, or as its turn's text): shown under the target. */
+  private diagReported(s: Session, text: string): void {
+    if (!s.diagOf) return;
+    s.diagOf.reported = true;
+    const { verdict, cause } = readReport(text);
+    const startedAt = this.diagnoses.get(s.diagOf.target)?.startedAt ?? s.createdAt;
+    this.diagnoses.set(s.diagOf.target, { state: 'done', by: s.name, startedAt, endedAt: Date.now(), verdict, cause: cause || oneLine(text, 200), text: text.slice(0, 8000) });
+    this.changed();
+  }
+
+  /** Its turn is over: a report written only as the turn's text still reaches the master; none at all is a failure. */
+  private diagTurnEnded(s: Session, result: string, error: string): void {
+    if (!s.diagOf || s.diagOf.reported) return;
+    if (result.trim()) {
+      try {
+        this.messageMaster(s, result);
+      } catch {
+        this.diagReported(s, result); // No master to tell: the user still sees it.
+      }
+      return;
+    }
+    const startedAt = this.diagnoses.get(s.diagOf.target)?.startedAt ?? s.createdAt;
+    const cause = error ? t('diag.failed', { error: oneLine(error, 200) }) : t('diag.empty');
+    this.diagnoses.set(s.diagOf.target, { state: 'failed', by: s.name, startedAt, endedAt: Date.now(), verdict: null, cause, text: '' });
+    s.diagOf.reported = true;
+    this.changed();
+  }
+
+  /** What the hub knows of a worker, for the diagnosis worker that looks into it. */
+  private diagFacts(s: Session, children: DiagFacts['children']): DiagFacts {
+    return {
+      name: s.name,
+      status: s.status,
+      cwd: s.cwd,
+      mission: s.mission,
+      now: Date.now(),
+      signalAt: s.signalAt,
+      busySince: s.busySince,
+      approvedAt: s.approvedAt,
+      limit: s.limit,
+      retrying: s.retrying,
+      compacting: s.compacting,
+      tools: [...s.tools.values()],
+      background: s.background.map((label) => {
+        const run = runFor(label, s.bgRuns.values());
+        return { label, command: run?.command ?? '', outputFile: run?.outputFile ?? '', since: run?.since ?? null };
+      }),
+      subagents: s.subagents.views().filter((a) => a.status === 'running').map((a) => subagentLine(a, 160)),
+      pending: [...s.items.values()].flatMap((i) => (i.kind === 'permission' && i.state === 'pending' ? [{ tool: i.tool, summary: i.summary }] : [])),
+      activity: this.stepLines(s, DIAG_ACTIVITY),
+      transcript: this.transcriptOf(s),
+      procs: s.procs.filter((p) => p.endedAt === undefined).map(({ pid, startedAt }) => ({ pid, startedAt })),
+      children,
+    };
+  }
+
+  /** Claude Code's transcript of its conversation on this PC, if it is there. */
+  private transcriptOf(s: Session): string {
+    if (s.remoteRun || harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) !== 'claude') return '';
+    const file = join(projectsRoot(), projectDirName(s.cwd), `${s.sessionId}.jsonl`);
+    return existsSync(file) ? file : '';
+  }
+
+  /** The processes its program started (Windows only); null when they could not be listed. */
+  private async childrenOf(s: Session): Promise<DiagFacts['children']> {
+    const roots = s.procs.filter((p) => p.endedAt === undefined);
+    if (roots.length === 0) return null;
+    const procs = await listProcs();
+    return procs ? roots.flatMap((root) => leftBehind(procs, root)).slice(0, 40) : null;
+  }
+
+  /** Its last `n` steps, one line each, oldest first: what a report or a diagnosis reads of its conversation. */
+  private stepLines(s: Session, n: number): string[] {
+    return [...s.items.values()]
       .map((i): string | null => {
         switch (i.kind) {
           case 'tool':
@@ -4632,7 +4780,13 @@ export class SessionManager extends EventEmitter {
         }
       })
       .filter((line): line is string => line !== null)
-      .slice(-REPORT_ITEMS);
+      .slice(-n);
+  }
+
+  private async workerReport(name: string, lead?: Session): Promise<string> {
+    const s = lead ? this.memberNamed(lead, name) : this.findWorker(name);
+    if (!s.inbox && s.started) await this.loadHistory(s);
+    const steps = this.stepLines(s, REPORT_ITEMS);
     const subs = s.subagents.views();
     return [
       this.workerLine(s),
@@ -4998,6 +5152,7 @@ export class SessionManager extends EventEmitter {
       reportTo: null,
       tree: null,
       readOnly: false,
+      diagOf: null,
       installing: null,
       installFailed: false,
       retiring: null,
@@ -5140,6 +5295,7 @@ export class SessionManager extends EventEmitter {
       instanceOf: s.instanceOf,
       tree: s.tree,
       readOnly: s.readOnly,
+      diagOf: s.diagOf,
       accountId: s.accountId,
       userAccount: s.userAccount,
       home: s.home,
