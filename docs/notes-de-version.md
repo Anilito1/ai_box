@@ -14,6 +14,8 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Chaque worker range désormais ses captures, rendus d'essai et autres fichiers jetables dans son propre dossier de brouillon, à part des livrables.
+- Le bouton « Éphémères » montre, projet par projet, les fichiers jetables laissés par les agents, et les envoie à la corbeille en un clic : seuls les plus sûrs sont cochés d'avance, et les livrables ne sont jamais proposés.
 - Au survol de « signal il y a … » d'un worker, un bouton « Analyser » lance un court diagnostic qui explique pourquoi il ne donne plus de signal (tâche longue, validation en attente, process bloqué…) : le verdict s'affiche sous le worker, le détail se déplie, et le maître le reçoit aussi.
 
 ## 2026-11-13

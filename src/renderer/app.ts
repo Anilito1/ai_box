@@ -16,6 +16,7 @@ import { effortLabel, LANG, PLATFORM, t, tn, translateDom } from './i18n';
 import { sessionMascot } from './mascot';
 import { isMod, paletteOpen, shortcut, showPalette, type Command } from './palette';
 import { RepoPanel } from './repo';
+import { PurgeView } from './purge';
 import { SetupView } from './setup';
 import { TopicsView } from './topics';
 import './tooltip';
@@ -66,11 +67,14 @@ const capButton = (label: string, path: string): HTMLButtonElement => {
 const forumButton = capButton(t('side.forum'), ICONS.bulb);
 const mcpButton = capButton(t('side.mcp'), ICONS.plug);
 const skillsButton = capButton(t('side.skills'), ICONS.sparkle);
+const purgeButton = capButton(t('side.purge'), ICONS.broom);
+purgeButton.title = t('purge.title');
+purgeButton.classList.add('ph-purge');
 const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
 // "I'm stepping away": only once remote workers are on (the snapshot says so).
 const awayButton = new AwayButton(hub);
-headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, settingsButton);
+headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, purgeButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 // The master's header is the window's top bar: it spans the open worker too, which opens under it.
@@ -79,10 +83,12 @@ const setup = new SetupView(hub, () => snapshot.models, (account) => snapshot.ca
 const topicsView = new TopicsView($('pane-master'), masterView, hub);
 const capsView = new CapsView(hub);
 const forumView = new ForumView(hub);
+const purgeView = new PurgeView(hub);
 forumButton.addEventListener('click', () => void forumView.open());
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 mcpButton.addEventListener('click', () => void capsView.open('mcp'));
 skillsButton.addEventListener('click', () => void capsView.open('skills'));
+purgeButton.addEventListener('click', () => void purgeView.open());
 
 interface Card {
   root: HTMLDivElement;
@@ -502,6 +508,7 @@ function commands(): Command[] {
     { title: t('forum.title'), run: () => void forumView.open() },
     { title: t('caps.mcp'), run: () => void capsView.open('mcp') },
     { title: t('caps.skills'), run: () => void capsView.open('skills') },
+    { title: t('purge.title'), run: () => void purgeView.open() },
     { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
@@ -513,7 +520,7 @@ function commands(): Command[] {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented || e.isComposing || setup.isOpen || capsView.isOpen || forumView.isOpen) return;
+  if (e.defaultPrevented || e.isComposing || setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen) return;
   if (isMod(e) && e.key.toLowerCase() === 'k') {
     e.preventDefault();
     showPalette(commands());
@@ -594,7 +601,7 @@ initNews(hub);
 initCliUpdates(hub);
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
-initUpdates(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
+initUpdates(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {
@@ -603,4 +610,4 @@ if (!setup.resume()) {
   });
 }
 // What changed since the last start (none on a new install): over the window once.
-void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || paletteOpen());
+void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen());
