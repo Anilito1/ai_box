@@ -57,6 +57,8 @@ export class TopicMemory {
     const db = this.database(); db.exec('BEGIN IMMEDIATE');
     try { const out = fn(); db.exec('COMMIT'); return out; } catch (err) { db.exec('ROLLBACK'); throw err; }
   }
+  /** Every topic that has a state, for the search over the memory. */
+  topics(): string[] { return this.database().prepare('SELECT DISTINCT topic FROM states').all().map(r => String(r.topic)); }
   get(topic: string): TopicState | null {
     const row = this.database().prepare('SELECT body FROM states WHERE topic=? ORDER BY version DESC LIMIT 1').get(cleanId(topic));
     return row ? JSON.parse(String(row.body)) : null;

@@ -95,6 +95,15 @@ const en = {
   'tool.listWorkers':
     'Every hub worker, the team (permanent workers) first: status (asleep, ready, working…), folder (cwd), post, mission, model, effort, context, cost, background tasks, preview of its last message.',
   'tool.listRepos': "Local git repositories under {roots} (worktrees included): name, path, remote, current branch. A worker's cwd = the folder's root.",
+  'tool.searchCode':
+    'Local search of a repo by meaning and by exact names (nothing leaves this computer). Ask a question or describe a behaviour, in French or English: answers the best pieces as `path:lines symbol` with a short excerpt. To locate code, cheaper than Grep and reading whole files; then Read only the lines you need. Not exhaustive: Grep lists every occurrence.',
+  'tool.searchCode.query': 'Question or description of what you look for',
+  'tool.searchCode.repo': 'Absolute folder of a checkout (default: your cwd)',
+  'tool.searchCode.k': 'Number of results (default 8, 3 with expand)',
+  'tool.searchCode.path': 'Only under this folder of the repo (e.g. src/main)',
+  'tool.searchCode.expand': 'true: each piece whole instead of an excerpt',
+  'tool.searchCode.budget': 'Size of the answer in tokens (default {budget})',
+  'tool.searchMemory': "Search by meaning in the hub's memory you may read: topics' summaries, decisions and handoff notes. Answers the best passages.",
   'tool.listCapabilities':
     'Read only. MCP servers (connected first, then to connect, then in error) and skills installed on this computer, one line each: name, source, state, who can use it (master+workers, master only, or only sessions whose cwd is a given repo). Use it to name the right skills and connectors in a brief.',
   'tool.spawn': 'Starts a worker in the hub with a self-contained mission: an ad-hoc worker, or with role an extra instance of a post for a parallel job. Returns its name (for message_worker and close_worker). It will send you its final report.',
@@ -396,6 +405,8 @@ const en = {
   'label.skill': 'Skill',
   'label.listWorkers': 'Workers list',
   'label.listRepos': 'Repos list',
+  'label.searchCode': 'Code search',
+  'label.searchMemory': 'Memory search',
   'label.spawnWorker': 'New worker',
   'label.messageWorker': 'Message to a worker',
   'label.messageMaster': 'Message to the master',
@@ -644,6 +655,15 @@ const fr: Record<Key, string> = {
   'tool.listWorkers':
     "Tous les workers du hub, l'équipe (workers permanents) d'abord : statut (endormi, prêt, en cours…), dossier (cwd), poste, mission, modèle, effort, contexte, coût, tâches de fond, aperçu du dernier message.",
   'tool.listRepos': "Dépôts git locaux sous {roots} (worktrees compris) : nom, chemin, remote, branche courante. Le cwd d'un worker = la racine du dossier.",
+  'tool.searchCode':
+    "Recherche locale dans un repo, par le sens et par les noms exacts (rien ne sort de cet ordinateur). Pose une question ou décris un comportement, en français ou en anglais : répond les meilleurs morceaux en `chemin:lignes symbole` avec un court extrait. Pour localiser du code, moins cher que Grep et la lecture de fichiers entiers ; lis ensuite seulement les lignes utiles. Non exhaustif : Grep liste toutes les occurrences.",
+  'tool.searchCode.query': 'Question ou description de ce que tu cherches',
+  'tool.searchCode.repo': "Dossier absolu d'un checkout (défaut : ton cwd)",
+  'tool.searchCode.k': 'Nombre de résultats (défaut 8, 3 avec expand)',
+  'tool.searchCode.path': 'Seulement sous ce dossier du repo (ex. src/main)',
+  'tool.searchCode.expand': "true : chaque morceau entier au lieu d'un extrait",
+  'tool.searchCode.budget': 'Taille de la réponse en tokens (défaut {budget})',
+  'tool.searchMemory': 'Recherche par le sens dans la mémoire du hub que tu peux lire : résumés des sujets, décisions et notes de passation. Répond les meilleurs passages.',
   'tool.listCapabilities':
     "Lecture seule. Serveurs MCP (connectés d'abord, puis à connecter, puis en erreur) et skills installés sur cet ordinateur, une ligne chacun : nom, source, état, qui peut s'en servir (maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné). Sert à citer les bons skills et connecteurs dans un brief.",
   'tool.spawn': 'Lance un worker dans le hub avec une mission autonome : un ponctuel, ou avec role une instance de plus d\'un poste pour un chantier en parallèle. Retourne son nom (pour message_worker et close_worker). Il t\'enverra son rapport final.',
@@ -947,6 +967,8 @@ const fr: Record<Key, string> = {
   'label.skill': 'Skill',
   'label.listWorkers': 'Liste des workers',
   'label.listRepos': 'Liste des repos',
+  'label.searchCode': 'Recherche dans le code',
+  'label.searchMemory': 'Recherche dans la mémoire',
   'label.spawnWorker': 'Nouveau worker',
   'label.messageWorker': 'Message à un worker',
   'label.messageMaster': 'Message au maître',

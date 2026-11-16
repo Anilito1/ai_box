@@ -5,6 +5,7 @@ import type { PurgeLogEntry, PurgeProject, PurgeReport, PurgeRestoreResult, Purg
 import type { DayCost, TurnRecord } from './costs';
 import type { DiagnosisView } from './diagnosis';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
+import type { SearchSettings, SearchState } from './search';
 import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
 import type { NewsToast, ProviderNews } from './news';
@@ -794,6 +795,8 @@ export interface HubSettings {
   /** Background colour of the window ("#rrggbb"), the surfaces derived from it; empty = the system's appearance. */
   background: string;
   dictation: DictationSettings;
+  /** Local search of the code and of the hub's memory (search_code, search_memory); off by default. */
+  search: SearchSettings;
   remoteWorkers: RemoteWorkers;
 }
 
@@ -817,8 +820,9 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation' | 'search'>> & {
   dictation?: Partial<DictationSettings>;
+  search?: Partial<SearchSettings>;
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -1090,4 +1094,11 @@ export interface HubApi {
   /** Keeps (checked with the service first) or, with null, forgets the key of a transcription service. */
   dictationKey(preset: SttPresetId, key: string | null): Promise<SettingsView & Result>;
   onDictation(cb: (event: DictationEvent) => void): void;
+  /** The local search as it is now: installed or not, what is being fetched, each repo's index. */
+  searchState(): Promise<SearchState>;
+  /** Fetches the engine and the models; `error` names what failed. Progress comes through onSearchState. */
+  searchInstall(): Promise<Result>;
+  /** Builds a listed repo's index again. */
+  searchReindex(repo: string): Promise<Result>;
+  onSearchState(cb: () => void): void;
 }

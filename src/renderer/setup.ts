@@ -29,6 +29,7 @@ import {
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
+import { SEARCH_DEVICES, SEARCH_IDLE_MAX, SEARCH_IDLE_MIN, type SearchState } from '../shared/search';
 import { DICTATION_KEYS, DICTATION_LANGUAGES, engineOf, STT_ENGINES, STT_PRESET_IDS, STT_PRESETS, type SttPresetId } from '../shared/dictation';
 import { keyLabel } from './dictation';
 import { copyButton, errorNote, folderName, h, icon, ICONS } from './dom';
@@ -114,6 +115,12 @@ export class SetupView {
   private scanned = false;
   private ghRepos: GithubRepo[] | null = null;
   private repoFilter = '';
+  /** The local search as its process last described it; null until asked. */
+  private searchInfo: SearchState | null = null;
+  private searchBox: HTMLElement | null = null;
+  private searchWatched = false;
+  private searchAsking = false;
+  private searchAgain = false;
   private cloning = '';
   /** Result of checking the saved GitHub sign-in: null = not checked, '' = checking, 'ok' or an error code. */
   private githubHealth: string | null = null;
@@ -936,6 +943,140 @@ export class SetupView {
     fill();
     el.append(box);
     el.append(h('p', 'setup-fine', connected ? t('setup.repos.cloneInto', { dir: folderName(s.workspaces[0] ?? '') }) : t('setup.repos.connect')));
+    this.searchBox = h('div', 'setup-search');
+    el.append(this.searchBox);
+    this.searchBlock(this.searchBox, v);
+    // Asked each time the page is shown: what was true when it was last open may no longer be.
+    if (s.search.enabled) this.refreshSearch();
+  }
+
+  /** Asks the search for its state and redraws its block alone: a download or an index moves without the page jumping. */
+  private refreshSearch(): void {
+    if (this.searchAsking) return void (this.searchAgain = true);
+    this.searchAsking = true;
+    void this.hub.searchState().then((state) => {
+      this.searchAsking = false;
+      const same = JSON.stringify(state) === JSON.stringify(this.searchInfo);
+      this.searchInfo = state;
+      // Someone typing the minutes keeps the field: the block is drawn again when the value is saved.
+      const focus = document.activeElement;
+      const typing = focus instanceof HTMLInputElement && focus.type === 'number' && this.searchBox?.contains(focus) === true;
+      if (!same && !typing && this.searchBox?.isConnected && this.view) this.searchBlock(this.searchBox, this.view);
+      if (this.searchAgain) {
+        this.searchAgain = false;
+        this.refreshSearch();
+      }
+    });
+  }
+
+  /**
+   * The local search: its switch, the one-time install, where the models run, when they leave memory, and which
+   * followed repos are indexed, each with the state of its index as the search itself reports it.
+   */
+  private searchBlock(el: HTMLElement, v: SettingsView): void {
+    const s = v.settings.search;
+    const group = this.field(t('setup.search'), t('setup.search.hint'));
+    const toggle = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = s.enabled;
+    box.addEventListener('change', () => {
+      this.searchInfo = null;
+      void this.save({ search: { enabled: box.checked } });
+    });
+    const label = h('span', 'setup-choice-text');
+    label.append(h('span', 'setup-choice-title', t('setup.search.on')));
+    toggle.append(box, label);
+    group.append(toggle);
+    el.replaceChildren(group);
+    if (!s.enabled) return;
+    if (!this.searchWatched) {
+      this.searchWatched = true;
+      this.hub.onSearchState(() => this.searchBox?.isConnected && this.refreshSearch());
+    }
+    const info = this.searchInfo;
+    if (!info) return;
+    if (!info.installed) {
+      const going = info.installing;
+      const pct = going && going.total > 0 ? Math.floor((100 * going.done) / going.total) : 0;
+      group.append(h('div', 'setup-hint', going ? (going.total > 0 ? t('setup.search.installing', { step: going.step, pct }) : t('setup.search.installing.engine')) : t('setup.search.install.hint')));
+      if (!going) {
+        group.append(
+          this.button(t('setup.search.install', { size: (info.sizeMb / 1024).toFixed(1) }), 'btn small', () => {
+            void this.hub.searchInstall().then((r) => {
+              if (!r.ok && r.error !== 'busy') this.flash(t(r.error === 'no-node' ? 'setup.search.err.node' : r.error === 'unsupported' ? 'setup.search.err.unsupported' : 'setup.search.err'), 'error');
+              this.refreshSearch();
+            });
+            this.refreshSearch();
+          }),
+        );
+      }
+      return;
+    }
+    const device = h('div', 'segmented setup-seg');
+    for (const d of SEARCH_DEVICES) {
+      const b = h('button', d === s.device ? 'seg active' : 'seg', t(`setup.search.device.${d}`));
+      b.addEventListener('click', () => d !== s.device && void this.save({ search: { device: d } }));
+      device.append(b);
+    }
+    const idle = this.input(String(s.idleMinutes), '', 'number');
+    idle.min = String(SEARCH_IDLE_MIN);
+    idle.max = String(SEARCH_IDLE_MAX);
+    idle.setAttribute('aria-label', t('setup.search.idle'));
+    idle.addEventListener('change', () => {
+      const minutes = Math.min(SEARCH_IDLE_MAX, Math.max(SEARCH_IDLE_MIN, Math.round(Number(idle.value) || s.idleMinutes)));
+      void this.save({ search: { idleMinutes: minutes } });
+    });
+    const loaded = info.loaded.embed || info.loaded.rerank;
+    group.append(
+      h('div', 'setup-label', t('setup.search.device')),
+      device,
+      h('div', 'setup-hint', t('setup.search.device.hint')),
+      h('div', 'setup-label', t('setup.search.idle')),
+      idle,
+      h('div', 'setup-hint', t(loaded ? (info.loaded.gpu ? 'setup.search.loaded.gpu' : 'setup.search.loaded.cpu') : 'setup.search.loaded.none')),
+      h('div', 'setup-label', t('setup.search.repos')),
+    );
+    // The followed repos, and any indexed one that is no longer followed (so it can be taken out).
+    const offered = [...new Set([...v.settings.mainRepos, ...s.repos])];
+    if (offered.length === 0) group.append(h('div', 'setup-hint', t('setup.search.repos.none')));
+    const list = h('div', 'setup-repos');
+    for (const path of offered) {
+      const state = info.repos.find((r) => r.path === path);
+      const on = s.repos.includes(path);
+      const row = h('label', 'setup-repo');
+      const check = h('input');
+      check.type = 'checkbox';
+      check.checked = on;
+      check.disabled = this.busy;
+      check.addEventListener('change', () => {
+        this.searchInfo = null;
+        void this.save({ search: { repos: check.checked ? [...s.repos, path] : s.repos.filter((p) => p !== path) } });
+      });
+      const text = h('span', 'setup-repo-text');
+      const status = !on || !state
+        ? ''
+        : state.error
+          ? t('setup.search.repo.error')
+          : state.chunks > 0 && state.vectors >= state.chunks && !state.indexing
+            ? t('setup.search.repo.ready', { files: state.files })
+            : state.indexing || state.vectors > 0
+              ? t('setup.search.repo.building', { pct: state.chunks > 0 ? Math.floor((100 * state.vectors) / state.chunks) : 0 })
+              : t('setup.search.repo.waiting');
+      const title = h('span', 'setup-repo-title');
+      title.append(h('b', '', folderName(path)));
+      text.append(title, h('span', '', status));
+      row.append(check, text);
+      if (on && state && !state.indexing && !state.error) {
+        row.append(
+          this.button(t('setup.search.reindex'), 'btn ghost small', () => {
+            void this.hub.searchReindex(path).then(() => this.refreshSearch());
+          }),
+        );
+      }
+      list.append(row);
+    }
+    group.append(list);
   }
 
   private repoRow(r: Row, pinned: Set<string>, s: HubSettings): HTMLElement {

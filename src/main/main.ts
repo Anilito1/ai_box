@@ -63,6 +63,7 @@ import { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, checkOpe
 import { agentFiles } from './agents';
 import { CapabilityStore } from './capabilities';
 import { Dictation } from './dictation';
+import { SearchClient } from './search/client';
 import { baseUrlOf, isSttPreset, STT_PRESET_IDS } from '../shared/dictation';
 import { Bridge, type BridgeAccount } from './bridge';
 import { McpHub } from './mcpHub';
@@ -116,6 +117,7 @@ let updater: Updater | undefined;
 let bridge: Bridge | undefined;
 let mcpHubRef: McpHub | undefined;
 let dictation: Dictation | undefined;
+let search: SearchClient | undefined;
 /** A restart from the settings: an update left for the close waits, the new hub starts right away. */
 let relaunching = false;
 let repoWatchers: RepoWatcher[] = [];
@@ -305,6 +307,14 @@ class Hub {
   /** The hub's tools for sessions of programs that reach them over HTTP (Codex). */
   readonly mcpHub = new McpHub();
   private readonly device = new DeviceFlow();
+  readonly search = new SearchClient({
+    dataDir: this.dataDir,
+    hostScript: join(here, 'search-host.mjs'),
+    workerScript: join(here, 'search-worker.mjs'),
+    settings: () => this.cfg.search,
+    env: () => this.mgr.toolEnv(),
+    onState: () => send('search:state'),
+  });
   readonly dictation = new Dictation(
     () => this.cfg.dictation,
     (event) => send('dictation:event', event),
@@ -394,6 +404,11 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
       remoteServer: this.remote,
       scratchRoot: join(this.dataDir, 'scratch'),
+      search: {
+        enabled: () => this.cfg.search.enabled,
+        code: (folder, q) => this.search.searchCode(folder, q),
+        memory: (scope, docs, q) => this.search.searchMemory(scope, docs, q),
+      },
       wideFolders: () => this.wideFolders(),
       onActivity: (record) => this.purge.recordActivity(record),
     });
@@ -1148,13 +1163,17 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
 
     handle('settings:get', () => this.view());
     handle('settings:save', (patch) => {
-      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
+      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]), search: JSON.stringify(this.cfg.search) };
       const bad = applyPatch(this.cfg, (patch ?? {}) as SettingsPatch);
       if (bad) return { ...this.view(), ok: false, error: bad };
       this.save();
       setLang(this.cfg.language);
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
+      if (before.search !== JSON.stringify(this.cfg.search)) {
+        this.search.settingsChanged();
+        this.search.prepare();
+      }
       if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
       // The master's or the workers' account may have changed.
       mgr.accountsChanged();
@@ -1430,6 +1449,16 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('dictation:stop', () => this.dictation.stop());
     on('dictation:cancel', () => this.dictation.cancel());
     handle('dictation:key', (preset, key) => this.dictationKey(preset, key));
+    handle('search:state', () => this.search.state());
+    handle('search:install', async () => {
+      const error = this.cfg.search.enabled ? await this.search.install().catch(() => 'install-failed') : 'disabled';
+      if (!error) this.search.prepare();
+      return { ok: !error, error };
+    });
+    handle('search:reindex', async (repo) => {
+      const error = isStr(repo) && this.cfg.search.repos.includes(repo) ? await this.search.reindex(repo).catch(() => 'failed') : 'unknown-repo';
+      return { ok: !error, error };
+    });
     handle('app:busy', () => mgr.busySessions());
     // A click on a restart button: the window said how many sessions it interrupts, no second question.
     on('app:relaunch', () => {
@@ -1468,6 +1497,7 @@ async function start(): Promise<void> {
   }
   const hub = new Hub();
   dictation = hub.dictation;
+  search = hub.search;
   await hub.init();
   hub.warmProviders();
   const mgr = hub.mgr;
@@ -1549,6 +1579,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const repo of repoWatchers) repo.stop();
     manager?.killAll();
     dictation?.cancel();
+    search?.stop();
     bridge?.stop();
     mcpHubRef?.stop();
   });

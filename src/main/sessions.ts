@@ -28,6 +28,8 @@ import type { ActivityRecord } from './purgeIndex';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
+import type { Doc } from './search/indexer';
+import type { SearchQuery } from './search/service';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -388,6 +390,8 @@ export interface ManagerOptions {
   capabilities(): Promise<string>;
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
+  /** The local search (search_code, search_memory): given to sessions launched while it is on. */
+  search?: { enabled(): boolean; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string> };
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
   scratchRoot?: string;
   /** Folders too wide to be a project besides the home folder and the workspaces (the Desktop, Documents…). */
@@ -3611,6 +3615,30 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  /**
+   * What search_memory reads for a session, within what topic_memory already lets it read: the master every topic
+   * and every post's handoff note, a worker its own topic and its own note.
+   */
+  private memoryDocs(s: Session): Doc[] {
+    const docs: Doc[] = [];
+    const own = s.role === 'worker' ? this.topics.linkOf(s.name) : undefined;
+    const list = (title: string, items: string[]) => (items.length ? `\n## ${title}\n${items.map((i) => `- ${i}`).join('\n')}` : '');
+    if (this.contextMemory.status.mode === 'sqlite') {
+      for (const topic of s.role === 'worker' ? (own ? [own] : []) : this.contextMemory.topics()) {
+        const state = this.contextMemory.get(topic);
+        if (!state) continue;
+        docs.push({
+          id: `topic/${topic}`,
+          text: `# ${topic}\n${state.objective}\n## Summary\n${state.summary}${list('Constraints', state.constraints)}${list('Tasks', state.tasks)}${list('Blockers', state.blockers)}${list('Artifacts', state.artifacts)}${state.nextStep ? `\n## Next step\n${state.nextStep}` : ''}`,
+        });
+        const replaced = new Set(state.decisions.map((d) => d.supersedes).filter(Boolean));
+        for (const d of state.decisions) docs.push({ id: `topic/${topic}/decision/${d.id}`, text: `Decision${replaced.has(d.id) ? ' (superseded)' : ''} on ${topic}, ${new Date(d.at).toISOString().slice(0, 10)}, by ${d.provenance.actor}\n${d.text}` });
+      }
+    }
+    for (const other of this.sessions.values()) if (other.note && (s.role !== 'worker' || other === s)) docs.push({ id: `note/${other.name}`, text: other.note });
+    return docs;
+  }
+
   // ---------- hub tools (in-process MCP server) ----------
 
   /**
@@ -3677,6 +3705,28 @@ export class SessionManager extends EventEmitter {
         if (args.state?.summary !== undefined && args.covered_event !== this.contextMemory.lastEvent(args.topic)) throw new Error('Read the packet and supply its lastEvent as covered_event before summarizing');
         return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
       }));
+    const { search } = this.opts;
+    // A worker moved to the remote server works on another checkout: the local index would lie to it.
+    const searchTools = search?.enabled() && !remote
+      ? [
+          tool(
+            'search_code',
+            t('tool.searchCode'),
+            {
+              query: z.string().min(2).max(500).describe(t('tool.searchCode.query')),
+              repo: z.string().max(400).nullish().describe(t('tool.searchCode.repo')),
+              k: z.number().int().min(1).max(20).nullish().describe(t('tool.searchCode.k')),
+              path: z.string().max(300).nullish().describe(t('tool.searchCode.path')),
+              expand: z.boolean().nullish().describe(t('tool.searchCode.expand')),
+              budget: z.number().int().min(300).max(8000).nullish().describe(t('tool.searchCode.budget', { budget: cfg.search.budget })),
+            },
+            (a) => run(() => search.code(a.repo || s.cwd, { query: a.query, k: a.k ?? undefined, expand: a.expand === true, budget: a.budget ?? undefined, under: a.path ?? undefined })),
+          ),
+          tool('search_memory', t('tool.searchMemory'), { query: z.string().min(2).max(500).describe(t('tool.searchCode.query')), k: z.number().int().min(1).max(20).nullish().describe(t('tool.searchCode.k')) }, (a) =>
+            run(() => search.memory(role === 'worker' ? s.name : 'master', this.memoryDocs(s), { query: a.query, k: a.k ?? undefined })),
+          ),
+        ]
+      : [];
     if (role === 'worker') {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }, extra) =>
         once(extra, () => this.messageMaster(s, message)),
@@ -3712,7 +3762,7 @@ export class SessionManager extends EventEmitter {
         : [];
       // A diagnosis worker reads who does what and reports: no message to a worker, no topic memory to write.
       if (s.diagOf) return [listWorkers, toMaster];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
+      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, ...searchTools, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -3789,6 +3839,7 @@ export class SessionManager extends EventEmitter {
         listWorkers,
         listRepos,
         listCapabilities,
+        ...searchTools,
         tool('worker_report', t('tool.report'), { name: byName }, ({ name }) => run(() => this.workerReport(name))),
         tool(
           'close_worker',
