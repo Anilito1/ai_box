@@ -15,7 +15,7 @@ type Internal = any;
 const never = () => new Promise<never>(() => undefined);
 const processStub = () => ({ close: () => undefined, interrupt: async () => undefined, context: never, totals: never, rateLimits: never });
 const prompt = (text: string) => ({ text, images: [] });
-const turn = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: [], usage: { cost: 0, models: {} } };
+const turn = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: {}, usage: { cost: 0, models: {} } };
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'session-resilience-'));
   const work = join(dir, 'work'); mkdirSync(work);

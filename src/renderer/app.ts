@@ -299,7 +299,7 @@ function renderCard(s: SessionView): void {
   c.tree.hidden = s.tree?.state !== 'active';
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
-  setText(c.pct, fmtPct(m?.contextPct));
+  setText(c.pct, fmtPct(m?.contextPct, m?.estimated));
   // A scale on the compositor rather than a width: the meter moves without a layout.
   c.fill.style.transform = `scaleX(${Math.min(100, m?.contextPct ?? 0) / 100})`;
   c.fill.className = `meter-fill ${level(m?.contextPct)}`;

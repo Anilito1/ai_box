@@ -139,7 +139,8 @@ export function openLightbox(src: string): void {
 }
 
 export const fmtCost = (v: number | undefined) => (v === undefined ? '—' : `$${v.toFixed(2)}`);
-export const fmtPct = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v)}%`);
+/** `estimated`: the window is a guess (a Claude model standing in for another provider's), said with a "~". */
+export const fmtPct = (v: number | null | undefined, estimated = false) => (v == null ? '—' : `${estimated ? '~' : ''}${Math.round(v)}%`);
 export const fmtTokens = (v: number) => (v >= 1_000_000 ? `${+(v / 1_000_000).toFixed(1)}M` : `${Math.round(v / 1000)}k`);
 export const level = (pct: number | null | undefined) => (pct == null ? '' : pct >= 85 ? 'danger' : pct >= 65 ? 'warn' : '');
 export const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();

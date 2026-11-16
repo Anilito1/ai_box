@@ -83,7 +83,7 @@ test('a mission past 20k tokens of work: note at sleep, the next mission in a fr
     assert.equal(inner.sleep(s), false, 'it writes its note before falling asleep');
     assert.match(sent().at(-1) ?? '', /Mission over: it writes its handoff note[\s\S]*Recent missions[\s\S]*Pending[\s\S]*40 lines at most/);
     const note = '## Recent missions\n- Fixed the CORS allowlist (commit abc123)';
-    inner.onEvent(s, q, { type: 'turn', subtype: 'success', isError: false, result: note, queued: 0, contextWindows: [], usage: { cost: 0, models: {} } });
+    inner.onEvent(s, q, { type: 'turn', subtype: 'success', isError: false, result: note, queued: 0, contextWindows: {}, usage: { cost: 0, models: {} } });
     assert.equal(s.note, note);
     s.activeAt = Date.now() - 10_000;
     inner.closeIfDone(s, q);

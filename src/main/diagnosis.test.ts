@@ -225,7 +225,7 @@ test('a report written only as the turn text still reaches the master; a turn wi
   const { m, inner, target, view, diags, delivered } = await hub(t);
   await m.analyze(target.id);
   const [d] = diags();
-  const turn = (result: string) => ({ type: 'turn', subtype: 'success', isError: false, result, queued: 0, contextWindows: [], usage: { cost: 0, models: {} } });
+  const turn = (result: string) => ({ type: 'turn', subtype: 'success', isError: false, result, queued: 0, contextWindows: {}, usage: { cost: 0, models: {} } });
   inner.onEvent(d, d.query, turn('Verdict: Normal\nCause: a long build is progressing.'));
   assert.equal(view(target.id).diagnosis?.verdict, 'normal');
   assert.ok(delivered.some((x) => x.to === 'master' && x.text.includes('a long build is progressing.')));

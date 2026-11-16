@@ -103,7 +103,7 @@ test('a result becomes a turn: its outcome, the prompts left in the queue, the c
   assert.equal(ev.isError, false);
   assert.equal(ev.result, 'Fait.');
   assert.equal(ev.queued, 2);
-  assert.deepEqual(ev.contextWindows, [200000]);
+  assert.deepEqual(ev.contextWindows, { 'claude-opus-5': 200000 });
   assert.equal(ev.usage.cost, 0.5);
   assert.equal(ev.usage.models['claude-opus-5'].output, 20);
   const [cut] = translate(msg({ type: 'result', subtype: 'error_during_execution', is_error: true, total_cost_usd: 0 }));

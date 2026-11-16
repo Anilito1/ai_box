@@ -6,6 +6,7 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
+import { ContextWindows } from '../shared/contextWindow';
 import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { pruneFolders } from '../shared/teamFolders';
@@ -580,6 +581,9 @@ export class SessionManager extends EventEmitter {
   private modelInfos: AgentModel[] = [];
   /** The models of each Codex account, as Codex lists them. */
   private readonly catalogs = new Map<string, AgentModel[]>();
+  /** The window each model reported, kept for the next session of that model; the model each session's meter is for. */
+  private readonly windows = new ContextWindows();
+  private readonly windowModel = new Map<string, string>();
   /** Commands of the last session that started: offered to one that has not run yet. */
   private lastCommands: AgentCommand[] = [];
   /** Plan limits by account (the account a process was started on), and when each was last asked. */
@@ -2702,8 +2706,9 @@ export class SessionManager extends EventEmitter {
           this.notice(s, t('notice.interrupted'), 'info');
           this.event(s, 'interrupted');
         }
-        const size = Math.max(s.metrics?.contextSize ?? 0, ...ev.contextWindows);
-        this.setContext(s, s.metrics?.contextTokens ?? 0, size);
+        const model = this.windowModel.get(s.id) ?? '';
+        this.windows.learn(ev.contextWindows);
+        this.setContext(s, s.metrics?.contextTokens ?? 0, this.windows.ofTurn(ev.contextWindows, model));
         this.countTurn(s, ev.usage);
         this.lookAgainSoon(s, q);
         if (s.switchPending || s.ultracodePending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
@@ -2903,9 +2908,10 @@ export class SessionManager extends EventEmitter {
     try {
       const usage = await q.context();
       if (s.query !== q) return;
-      this.setContext(s, usage.tokens, usage.size);
+      this.windows.learn({ [usage.model]: usage.size });
       // Before the first turn this is the only source of the inherited model.
       this.applyModel(s, usage.model);
+      this.setContext(s, usage.tokens, usage.size);
       await this.inheritEffort(s, usage.model);
       if (s.query !== q) return;
       this.changed();
@@ -2914,11 +2920,19 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** Claude Code driving another provider's model (OpenAI's API, DeepSeek, a custom server) through the bridge. */
+  private bridged(s: Session): boolean {
+    const kind = this.kindOf(s.runAccount || this.accountOf(s));
+    return kind === 'openai' || kind === 'anthropic-compatible';
+  }
+
   private setContext(s: Session, tokens: number, size: number): void {
     const metrics: Metrics = s.metrics ?? { contextTokens: 0, contextSize: 0, contextPct: null, costUsd: 0 };
     metrics.contextTokens = tokens;
-    metrics.contextSize = size || metrics.contextSize;
+    metrics.contextSize = size || this.windows.of(this.windowModel.get(s.id) ?? '') || metrics.contextSize;
     metrics.contextPct = metrics.contextSize ? (tokens / metrics.contextSize) * 100 : null;
+    // Through the bridge the program names a Claude model for another provider's: its window is that Claude's, not the real one.
+    metrics.estimated = this.bridged(s) || undefined;
     s.metrics = metrics;
     if (tokens > 0 && s.contextBase?.id !== s.sessionId) s.contextBase = { id: s.sessionId, tokens };
   }
@@ -4637,7 +4651,7 @@ export class SessionManager extends EventEmitter {
 
   private workerLine(s: Session): string {
     const m = s.metrics;
-    const ctx = m?.contextPct != null ? `ctx ${Math.round(m.contextPct)}%` : 'ctx —';
+    const ctx = m?.contextPct != null ? `ctx ${m.estimated ? '~' : ''}${Math.round(m.contextPct)}%` : 'ctx —';
     const cost = m ? `$${m.costUsd.toFixed(2)}` : '$—';
     const model = `${s.modelLabel || s.model || t('spawn.usualModel')}/${s.effort ?? t('spawn.usualEffort')}`;
     const mine = [s.userModel ? t('workers.userModel') : '', s.userEffort ? t('workers.userEffort') : ''].filter(Boolean);
@@ -5114,6 +5128,13 @@ export class SessionManager extends EventEmitter {
   /** Display model: the explicit choice, else what settings.json resolved to (as a picker alias when one matches). */
   private applyModel(s: Session, modelId: string): void {
     if (!modelId) return;
+    // A session moved to another model leaves the previous one's window behind: the new one's, if known, else unknown.
+    const before = this.windowModel.get(s.id);
+    this.windowModel.set(s.id, modelId);
+    if (before && before !== modelId && s.metrics) {
+      s.metrics.contextSize = 0;
+      this.setContext(s, s.metrics.contextTokens, 0);
+    }
     // On a bridged account the model is the account's: shown as it is, the Claude choice kept for the next account.
     if (s.runAccount && this.pinned(s.runAccount)) {
       s.modelLabel = modelId;

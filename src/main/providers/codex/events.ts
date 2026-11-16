@@ -271,7 +271,7 @@ export class CodexStream {
             isError: failed || (status !== 'completed' && status !== 'interrupted'),
             result: status === 'completed' ? this.lastAnswer : '',
             queued: null,
-            contextWindows: this.contextSize > 0 ? [this.contextSize] : [],
+            contextWindows: this.contextSize > 0 ? { [this.model()]: this.contextSize } : {},
             usage: this.usage,
           },
         ];
