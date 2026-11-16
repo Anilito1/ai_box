@@ -14,7 +14,7 @@ export interface SearchSettings {
   budget: number;
 }
 
-export const SEARCH_DEFAULTS: SearchSettings = { enabled: false, idleMinutes: 5, device: 'auto', repos: [], budget: 1500 };
+export const SEARCH_DEFAULTS: SearchSettings = { enabled: false, idleMinutes: 5, device: 'auto', repos: [], budget: 800 };
 export const SEARCH_IDLE_MIN = 1;
 export const SEARCH_IDLE_MAX = 120;
 export const SEARCH_BUDGET_MIN = 300;
@@ -29,6 +29,8 @@ export interface SearchRepoState {
   vectors: number;
   /** A build or an update is running. */
   indexing: boolean;
+  /** Its vectors wait for the graphics card, taken by something else for now. */
+  waiting: boolean;
   error: string;
 }
 

@@ -28,11 +28,10 @@ export const MODELS: SearchModel[] = [
   { id: 'nomic-embed-code', kind: 'embed', label: 'Nomic Embed Code 7B (Q4_K_M)', file: 'nomic-embed-code-q4.gguf', url: hf('nomic-ai/nomic-embed-code-GGUF', 'nomic-embed-code.Q4_K_M.gguf'), bytes: 4_376_511_808, license: 'Apache-2.0', pooling: 'last', query: 'Represent this query for searching relevant code: ' },
   { id: 'qwen3-rerank-0.6b', kind: 'rerank', label: 'Qwen3 Reranker 0.6B (Q8)', file: 'qwen3-rerank-0.6b-q8.gguf', url: hf('ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF', 'qwen3-reranker-0.6b-q8_0.gguf'), bytes: 639_153_184, sha256: '22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48', license: 'Apache-2.0' },
   { id: 'qwen3-rerank-4b', kind: 'rerank', label: 'Qwen3 Reranker 4B (Q4_K_M)', file: 'qwen3-rerank-4b-q4.gguf', url: hf('Voodisss/Qwen3-Reranker-4B-GGUF-llama_cpp', 'Qwen3-Reranker-4B-Q4_K_M.gguf'), bytes: 2_496_717_440, license: 'Apache-2.0' },
-  { id: 'bge-reranker-v2-m3', kind: 'rerank', label: 'BGE Reranker v2 M3 (Q8)', file: 'bge-reranker-v2-m3-q8.gguf', url: hf('gpustack/bge-reranker-v2-m3-GGUF', 'bge-reranker-v2-m3-Q8_0.gguf'), bytes: 635_676_416, license: 'Apache-2.0' },
 ];
 
 /** What the app installs and uses; the others are there for the measures (scripts/search-bench). */
-export const EMBED_MODEL = 'qwen3-embed-4b';
+export const EMBED_MODEL = 'qwen3-embed-0.6b';
 export const RERANK_MODEL = 'qwen3-rerank-0.6b';
 
 export const modelOf = (id: string): SearchModel | undefined => MODELS.find((m) => m.id === id);

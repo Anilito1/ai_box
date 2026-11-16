@@ -74,6 +74,10 @@ export class SearchClient {
     return this.call({ method: 'searchMemory', args: [scope, docs, q] });
   }
 
+  whereIs(folder: string, name: string): Promise<string> {
+    return this.call({ method: 'whereIs', args: [folder, name] });
+  }
+
   reindex(repo: string): Promise<string> {
     return this.call({ method: 'reindex', args: [repo] });
   }

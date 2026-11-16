@@ -408,6 +408,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
         enabled: () => this.cfg.search.enabled,
         code: (folder, q) => this.search.searchCode(folder, q),
         memory: (scope, docs, q) => this.search.searchMemory(scope, docs, q),
+        where: (folder, name) => this.search.whereIs(folder, name),
       },
       wideFolders: () => this.wideFolders(),
       onActivity: (record) => this.purge.recordActivity(record),

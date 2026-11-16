@@ -44,6 +44,7 @@ const LABELS: Record<string, Parameters<typeof t>[0]> = {
   mcp__hub__list_repos: 'label.listRepos',
   mcp__hub__search_code: 'label.searchCode',
   mcp__hub__search_memory: 'label.searchMemory',
+  mcp__hub__where_is: 'label.whereIs',
   mcp__hub__spawn_worker: 'label.spawnWorker',
   mcp__hub__message_worker: 'label.messageWorker',
   mcp__hub__message_master: 'label.messageMaster',

@@ -10,6 +10,7 @@ export interface HostInit { dataDir: string; workerScript: string; settings: Sea
 export type HostCall =
   | { method: 'searchCode'; args: [folder: string, q: SearchQuery] }
   | { method: 'searchMemory'; args: [scope: string, docs: Doc[], q: SearchQuery] }
+  | { method: 'whereIs'; args: [folder: string, name: string] }
   | { method: 'reindex'; args: [repo: string] }
   | { method: 'install'; args: [] }
   | { method: 'prepare'; args: [] }

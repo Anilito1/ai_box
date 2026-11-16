@@ -1,7 +1,12 @@
 import { redact } from './files';
-import { identifierParts, type SearchStore, type StoredChunk } from './store';
+import { identifierParts, type SearchStore, type StoredChunk, type VectorIndex } from './store';
 
-export interface Hit extends StoredChunk { score: number }
+export interface Hit extends StoredChunk {
+  /** How sure the search is, 0 to 1: the reranker's judgement when it ran, else the closeness of meaning; 1 for a definition. */
+  score: number;
+  /** What put it here. */
+  by: 'definition' | 'path' | 'words' | 'meaning' | 'reranker';
+}
 
 export interface Stages {
   /** Exact words (BM25). */
@@ -10,6 +15,14 @@ export interface Stages {
   vectors: boolean;
   /** How many candidates the reranker reads; 0 leaves the fused order as it is. */
   rerank: number;
+  /** What a rank in the exact-words list is worth next to the same rank by meaning (1 when absent). */
+  lexicalWeight?: number;
+  /** Candidates each search gives to the fusion (CANDIDATES when absent). */
+  candidates?: number;
+  /** What the reranker reads of a candidate (RERANK_CHARS when absent). */
+  rerankChars?: number;
+  /** The reranker only runs when the first and the fifth result by meaning are closer than this: an order already clear is kept. */
+  rerankGap?: number;
 }
 
 /** How many candidates each of the two searches gives to the fusion. */
@@ -20,6 +33,38 @@ export const RERANK_CHARS = 2000;
 const STOP = new Set(
   'a an and are as at be by do does for from how in is it of on or that the this to what when where which who why with le la les l un une des du de d et ou où est sont que qui quoi quel quelle quels quelles comment pourquoi dans sur pour par avec au aux ce cet cette ces se sa son ses on y en il elle ne pas plus fait faire gere geree gerer géré gérée gérer code fichier file'.split(' '),
 );
+const FILE_EXT = /\.(?:[cm]?[jt]sx?|py|cs|sql|md|json|ya?ml|toml|html|s?css|vue|go|rs|java|rb|php|sh|ps1)$/i;
+
+export interface Route {
+  /** `symbol`: the question is a name; `path`: a file; `concept`: a behaviour to find by its meaning. */
+  kind: 'symbol' | 'path' | 'concept';
+  /** Names of the code the question holds: looked up as definitions whatever the kind. */
+  names: string[];
+  paths: string[];
+}
+
+/**
+ * What kind of question this is. A name of the code (`hubTools`, `list_repos`, `Orders.refund`, `stripe-webhook`)
+ * or a path is answered from the index of names and files, with no model at all; only a described behaviour needs
+ * the search by meaning.
+ */
+export function routeOf(query: string): Route {
+  const names: string[] = [];
+  const paths: string[] = [];
+  let plain = 0;
+  const alone = query.trim().split(/\s+/).length === 1;
+  for (const raw of query.split(/\s+/)) {
+    const quoted = alone || /^[`'"«(]+.*[`'"»)]+[?.,;:!]*$/.test(raw);
+    // `hubTools()`, `"redact",`: what surrounds a name is not part of it.
+    const token = raw.replace(/^[`'"«(]+|[`'"»()?.,;:!]+$/g, '');
+    if (!token) continue;
+    // A path has a file's ending or reads like folders (`src/main`); `read/write` or `and/or` are words.
+    if (FILE_EXT.test(token) || /^\.?[\w.@-]+(?:\/[\w.@-]+)+\/?$/.test(token) && (token.split('/').length > 2 || /^(?:src|lib|app|apps|scripts|docs|tests?|packages|server|public|supabase|components|content|assets)\//i.test(token))) paths.push(token.replace(/\\/g, '/'));
+    else if (/^[A-Za-z_$][\w$]*(?:(?:[.#-]|::?)[A-Za-z_$][\w$]*)*$/.test(token) && (token.split(/[.#:-]+/).pop()?.length ?? 0) >= 3 && (quoted || /[a-z0-9][A-Z]|_|[A-Za-z](?:[.#-]|::?)[A-Za-z]|^[A-Z]+[a-z]+[A-Z]/.test(token))) names.push(token.replace(/[#:]+/g, '.'));
+    else if (!STOP.has(token.toLowerCase())) plain++;
+  }
+  return { kind: paths.length && plain <= 1 ? 'path' : names.length && plain <= 2 ? 'symbol' : 'concept', names, paths };
+}
 
 /**
  * The question as an FTS5 query: its words, and the parts of its identifiers, any of them. Each is quoted, so no
@@ -36,25 +81,53 @@ export function ftsQuery(query: string): string {
 }
 
 /** Reciprocal rank fusion: a chunk high in several lists beats one that tops a single list. */
-export function rrf(lists: number[][], k = 60): number[] {
+export function rrf(lists: number[][], weights: number[] = [], k = 60): number[] {
   const score = new Map<number, number>();
-  for (const list of lists) list.forEach((id, rank) => score.set(id, (score.get(id) ?? 0) + 1 / (k + rank + 1)));
+  lists.forEach((list, n) => list.forEach((id, rank) => score.set(id, (score.get(id) ?? 0) + (weights[n] ?? 1) / (k + rank + 1))));
   return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
 }
 
-/** The `limit` nearest vectors by cosine (vectors are normalized, a dot product is enough). */
-export function nearest(index: { ids: Int32Array; data: Float32Array; dims: number }, query: Float32Array, limit: number, keep?: (id: number) => boolean): number[] {
+/** The `limit` nearest vectors by cosine, best first, without sorting the whole index. */
+export function nearest(index: VectorIndex, query: Float32Array, limit: number, keep?: (id: number) => boolean): { id: number; score: number }[] {
   const { ids, data, dims } = index;
   const n = Math.min(dims, query.length);
-  const scored: { id: number; s: number }[] = [];
+  const top: { id: number; score: number }[] = [];
+  let floor = -Infinity;
   for (let i = 0; i < ids.length; i++) {
     if (keep && !keep(ids[i])) continue;
     let s = 0;
     const at = i * dims;
     for (let d = 0; d < n; d++) s += data[at + d] * query[d];
-    scored.push({ id: ids[i], s });
+    if (top.length === limit && s <= floor) continue;
+    let pos = top.length;
+    while (pos > 0 && top[pos - 1].score < s) pos--;
+    top.splice(pos, 0, { id: ids[i], score: s });
+    if (top.length > limit) top.pop();
+    floor = top[top.length - 1].score;
   }
-  return scored.sort((a, b) => b.s - a.s).slice(0, limit).map((x) => x.id);
+  for (const t of top) t.score /= 127;
+  return top;
+}
+
+/** Where the names of a question are defined, and the files asked for by path: answers that need no model. */
+export function lookup(store: SearchStore, tree: string, route: Route, limit: number, under = ''): Hit[] {
+  const hits: Hit[] = [];
+  const seen = new Set<string>();
+  const add = (chunk: StoredChunk | null, by: Hit['by']) => {
+    const key = chunk ? `${chunk.path}:${chunk.start}` : '';
+    if (!chunk || seen.has(key) || !chunk.path.startsWith(under) || hits.length >= limit) return;
+    seen.add(key);
+    hits.push({ ...chunk, score: 1, by });
+  };
+  for (const name of route.names) {
+    for (const def of store.definitions(tree, name, limit)) {
+      // The definition with its own extent, which may run past the piece that holds its first lines.
+      const chunk = store.chunkAt(tree, def.path, def.start);
+      if (chunk) add({ ...chunk, start: def.start, end: def.end, symbol: def.name, text: chunk.text.split('\n').slice(def.start - chunk.start, def.end - chunk.start + 1).join('\n') }, 'definition');
+    }
+  }
+  for (const path of route.paths) for (const id of store.byPath(tree, path, limit)) add(store.chunk(id), 'path');
+  return hits;
 }
 
 export interface Searcher {
@@ -63,9 +136,9 @@ export interface Searcher {
 }
 
 /**
- * The best chunks of a checkout for a question: exact words and meaning each give their candidates, the fusion
- * orders them, the reranker reads the top ones against the question. A stage that is off or fails is skipped: the
- * others still answer.
+ * The best chunks of a checkout for a described behaviour: exact words and meaning each give their candidates, the
+ * fusion orders them, the reranker reads the top ones against the question when their order is not already clear.
+ * A stage that is off or fails is skipped: the others still answer.
  */
 export async function search(
   store: SearchStore,
@@ -76,32 +149,45 @@ export async function search(
   stages: Stages,
   engines: Searcher,
   under = '',
-  vectorsOf: () => { ids: Int32Array; data: Float32Array; dims: number } = () => store.vectors(tree, model),
+  vectorsOf: () => VectorIndex = () => store.vectors(tree, model),
 ): Promise<Hit[]> {
   const lists: number[][] = [];
-  if (stages.lexical) lists.push(store.lexical(tree, ftsQuery(query), CANDIDATES, under));
+  const weights: number[] = [];
+  const candidates = stages.candidates ?? CANDIDATES;
+  const cosine = new Map<number, number>();
+  let near: { id: number; score: number }[] = [];
+  if (stages.lexical) {
+    lists.push(store.lexical(tree, ftsQuery(query), candidates, under));
+    weights.push(stages.lexicalWeight ?? 1);
+  }
   if (stages.vectors && engines.embedQuery) {
     const vector = await engines.embedQuery(query).catch(() => null);
     if (vector) {
-      const index = vectorsOf();
-      const paths = under ? store.paths(tree, index.ids) : null;
-      lists.push(nearest(index, vector, CANDIDATES, paths ? (id) => paths.get(id)?.startsWith(under) === true : undefined));
+      const paths = under ? store.paths(tree) : null;
+      near = nearest(vectorsOf(), vector, candidates, paths ? (id) => paths.get(id)?.startsWith(under) === true : undefined);
+      for (const x of near) cosine.set(x.id, x.score);
+      lists.push(near.map((x) => x.id));
+      weights.push(1);
     }
   }
-  let ids = rrf(lists);
-  const hits = (list: number[]): Hit[] => list.flatMap((id, rank) => {
-    const c = store.chunk(id);
-    return c ? [{ ...c, score: 1 / (rank + 1) }] : [];
-  });
-  if (stages.rerank > 0 && engines.rerank && ids.length > 1) {
-    const top = hits(ids.slice(0, stages.rerank));
-    const scores = await engines.rerank(query, top.map((h) => `${h.path}${h.symbol ? ` › ${h.symbol}` : ''}\n${h.text}`.slice(0, RERANK_CHARS))).catch(() => null);
+  let ids = rrf(lists, weights);
+  const judged = new Map<number, number>();
+  // An order by meaning that is already clear is kept: the reranker is for the close calls.
+  const clear = stages.rerankGap !== undefined && near.length >= 5 && near[0].score - near[4].score >= stages.rerankGap;
+  if (stages.rerank > 0 && engines.rerank && ids.length > 1 && !clear) {
+    const top = ids.slice(0, stages.rerank).flatMap((id) => store.chunk(id) ?? []);
+    const scores = await engines.rerank(query, top.map((h) => `${h.path}${h.symbol ? ` › ${h.symbol}` : ''}\n${h.text}`.slice(0, stages.rerankChars ?? RERANK_CHARS))).catch(() => null);
     if (scores) {
-      const order = top.map((h, i) => ({ id: h.id, s: scores[i] })).sort((a, b) => b.s - a.s).map((x) => x.id);
-      ids = [...order, ...ids.slice(stages.rerank)];
+      top.forEach((h, i) => judged.set(h.id, scores[i]));
+      ids = [...top.map((h) => h.id).sort((a, b) => (judged.get(b) ?? 0) - (judged.get(a) ?? 0)), ...ids.slice(stages.rerank)];
     }
   }
-  return hits(ids.slice(0, limit));
+  return ids.slice(0, limit).flatMap((id): Hit[] => {
+    const c = store.chunk(id);
+    if (!c) return [];
+    const rel = judged.get(id);
+    return [{ ...c, score: rel ?? cosine.get(id) ?? 0, by: rel !== undefined ? 'reranker' : cosine.has(id) ? 'meaning' : 'words' }];
+  });
 }
 
 const tokens = (text: string): number => Math.ceil(text.length / 3.6);
@@ -131,16 +217,22 @@ function excerpt(hit: Hit, words: string[], maxLines: number): string {
   return [cut(lines[0]), ...(best > 1 ? ['  …'] : []), ...body, ...(best + span < lines.length ? ['  …'] : [])].join('\n');
 }
 
+/** `path:lines symbol (how sure)`: where to read, and how much to trust it. */
+export function headOf(h: Hit): string {
+  const sure = h.by === 'definition' ? 'definition' : h.by === 'path' ? 'file' : h.by === 'words' ? 'words' : h.score.toFixed(2);
+  return `${h.path}:${h.start}-${h.end}${h.symbol ? ` ${h.symbol}` : ''}${h.kind === 'outline' ? ' (file outline)' : ''} (${sure})`;
+}
+
 /**
- * Results as an agent reads them: `path:lines symbol`, then the fewest lines that show the hit. The budget (in
- * tokens) is shared by the results, the first ones first; `expand` gives each chunk whole instead.
+ * Results as an agent reads them: `path:lines symbol (score)`, then the fewest lines that show the hit. The budget
+ * (in tokens) is shared by the results, the first ones first; `expand` gives each chunk whole instead.
  */
 export function formatHits(hits: Hit[], query: string, budget: number, expand = false): string {
   if (!hits.length) return 'No result.';
   const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}_$]{3,}/gu) ?? []).filter((w) => !STOP.has(w)).flatMap((w) => [w, ...identifierParts(w).split(' ').filter(Boolean)]))];
   const out: string[] = [];
   let left = budget;
-  const heads = hits.map((h) => `${h.path}:${h.start}-${h.end}${h.symbol ? ` ${h.symbol}` : ''}${h.kind === 'outline' ? ' (file outline)' : ''}`);
+  const heads = hits.map(headOf);
   // Every result keeps at least its location: an agent can read the lines itself.
   left -= heads.reduce((n, h) => n + tokens(h) + 2, 0);
   hits.forEach((h, i) => {
@@ -154,4 +246,10 @@ export function formatHits(hits: Hit[], query: string, budget: number, expand = 
   });
   // The index holds no secret already; an answer goes to a model outside this machine, so it is checked again.
   return redact(out.join('\n\n')).text;
+}
+
+/** The answer when nothing is close enough: said plainly, with the nearest places as leads only, and no excerpt to read. */
+export function formatUnsure(hits: Hit[]): string {
+  const leads = hits.slice(0, 3).map(headOf);
+  return redact(`No confident match${leads.length ? `. Nearest, unverified:\n${leads.join('\n')}` : '.'}\nSearch an exact name with Grep, or ask with other words.`).text;
 }

@@ -26,15 +26,18 @@ type Answer = Extract<WorkerReply, { id: number }>;
 const START_TIMEOUT_MS = 240_000;
 const REQUEST_TIMEOUT_MS = 600_000;
 
-/** Free video memory in MiB, or null where `nvidia-smi` does not answer (no NVIDIA card, no driver). */
-export function freeVram(): Promise<number | null> {
+/** Free video memory (MiB) and how busy the card is (%), or null where `nvidia-smi` does not answer (no NVIDIA card, no driver). */
+export function gpuLoad(): Promise<{ freeMiB: number; util: number } | null> {
   return new Promise((resolve) => {
-    execFile('nvidia-smi', ['--query-gpu=memory.free', '--format=csv,noheader,nounits'], { timeout: 4000, windowsHide: true }, (err, out) => {
-      const mib = Number.parseInt(String(out).trim().split('\n')[0] ?? '', 10);
-      resolve(err || !Number.isFinite(mib) ? null : mib);
+    execFile('nvidia-smi', ['--query-gpu=memory.free,utilization.gpu', '--format=csv,noheader,nounits'], { timeout: 4000, windowsHide: true }, (err, out) => {
+      const [freeMiB, util] = String(out).trim().split('\n')[0].split(',').map((x) => Number.parseInt(x, 10));
+      resolve(err || !Number.isFinite(freeMiB) || !Number.isFinite(util) ? null : { freeMiB, util });
     });
   });
 }
+
+/** What a model needs on the card: its weights plus the working buffers. */
+export const vramNeed = (model: SearchModel): number => model.bytes / 1048576 + 700;
 
 /**
  * Which of the machine's graphics devices runs the models: a laptop lists its integrated chip first, and a model
@@ -95,6 +98,11 @@ export class Engine {
     return this.info;
   }
 
+  /** A request is being answered right now. */
+  get busy(): boolean {
+    return this.waiting.size > 0;
+  }
+
   stop(): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
@@ -119,9 +127,9 @@ export class Engine {
   private async wantsGpu(): Promise<boolean> {
     const device = this.opts.device();
     if (device !== 'auto') return device === 'gpu';
-    const free = await freeVram();
-    // The weights plus the working buffers. Unknown card: tried, the worker falls back to the processor by itself.
-    return free === null || free > this.opts.model.bytes / 1048576 + 700;
+    const load = await gpuLoad();
+    // Unknown card: tried, the worker falls back to the processor by itself.
+    return load === null || load.freeMiB > vramNeed(this.opts.model);
   }
 
   private async launch(): Promise<ChildProcess> {

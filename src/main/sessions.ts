@@ -30,6 +30,7 @@ import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
 import type { Doc } from './search/indexer';
 import type { SearchQuery } from './search/service';
+import { SearchTelemetry } from './search/telemetry';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -391,7 +392,7 @@ export interface ManagerOptions {
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
   /** The local search (search_code, search_memory): given to sessions launched while it is on. */
-  search?: { enabled(): boolean; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string> };
+  search?: { enabled(): boolean; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string>; where(folder: string, name: string): Promise<string> };
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
   scratchRoot?: string;
   /** Folders too wide to be a project besides the home folder and the workspaces (the Desktop, Documents…). */
@@ -2618,6 +2619,7 @@ export class SessionManager extends EventEmitter {
         s.subagents.calls(all);
         s.subagentTails.sync();
         for (const b of blocks) {
+          if (b.type === 'tool_use') this.searchLog.used(s.name, String(b.id), String(b.name), b.input);
           const run = b.type === 'tool_use' ? runOf(b.name, b.input) : null;
           if (run) s.bgRuns.set(String(b.id), { ...run, since: s.bgRuns.get(String(b.id))?.since ?? Date.now() });
         }
@@ -2678,6 +2680,7 @@ export class SessionManager extends EventEmitter {
         s.turnOver = true;
         s.tools.clear();
         s.tokens.reset();
+        this.searchLog.settle(s.name);
         if (s.pending.size > 0) s.status = 'attention';
         else this.wentIdle(s);
         // The handoff note, kept for the next conversation. Work that came in while it was written may share its
@@ -3639,6 +3642,11 @@ export class SessionManager extends EventEmitter {
     return docs;
   }
 
+  private searchTelemetry: SearchTelemetry | null = null;
+  private get searchLog(): SearchTelemetry {
+    return (this.searchTelemetry ??= new SearchTelemetry(join(this.opts.dataDir, 'search', 'telemetry.jsonl')));
+  }
+
   // ---------- hub tools (in-process MCP server) ----------
 
   /**
@@ -3706,6 +3714,12 @@ export class SessionManager extends EventEmitter {
         return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
       }));
     const { search } = this.opts;
+    // What the agent does after a search says whether it helped; only Claude Code's calls can be read that way.
+    const searched = async (name: string, answer: Promise<string>) => {
+      const out = await answer;
+      if (harness === 'claude') this.searchLog.searched(s.name, name, out);
+      return out;
+    };
     // A worker moved to the remote server works on another checkout: the local index would lie to it.
     const searchTools = search?.enabled() && !remote
       ? [
@@ -3720,8 +3734,9 @@ export class SessionManager extends EventEmitter {
               expand: z.boolean().nullish().describe(t('tool.searchCode.expand')),
               budget: z.number().int().min(300).max(8000).nullish().describe(t('tool.searchCode.budget', { budget: cfg.search.budget })),
             },
-            (a) => run(() => search.code(a.repo || s.cwd, { query: a.query, k: a.k ?? undefined, expand: a.expand === true, budget: a.budget ?? undefined, under: a.path ?? undefined })),
+            (a) => run(() => searched('search_code', search.code(a.repo || s.cwd, { query: a.query, k: a.k ?? undefined, expand: a.expand === true, budget: a.budget ?? undefined, under: a.path ?? undefined }))),
           ),
+          tool('where_is', t('tool.whereIs'), { name: z.string().min(2).max(200).describe(t('tool.whereIs.name')) }, (a) => run(() => searched('where_is', search.where(s.cwd, a.name)))),
           tool('search_memory', t('tool.searchMemory'), { query: z.string().min(2).max(500).describe(t('tool.searchCode.query')), k: z.number().int().min(1).max(20).nullish().describe(t('tool.searchCode.k')) }, (a) =>
             run(() => search.memory(role === 'worker' ? s.name : 'master', this.memoryDocs(s), { query: a.query, k: a.k ?? undefined })),
           ),

@@ -1060,7 +1060,9 @@ export class SetupView {
           ? t('setup.search.repo.error')
           : state.chunks > 0 && state.vectors >= state.chunks && !state.indexing
             ? t('setup.search.repo.ready', { files: state.files })
-            : state.indexing || state.vectors > 0
+            : state.waiting && !state.indexing
+              ? t('setup.search.repo.deferred', { pct: state.chunks > 0 ? Math.floor((100 * state.vectors) / state.chunks) : 0 })
+              : state.indexing || state.vectors > 0
               ? t('setup.search.repo.building', { pct: state.chunks > 0 ? Math.floor((100 * state.vectors) / state.chunks) : 0 })
               : t('setup.search.repo.waiting');
       const title = h('span', 'setup-repo-title');

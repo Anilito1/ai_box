@@ -5,11 +5,11 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { SearchRepoState, SearchSettings, SearchState } from '../../shared/search';
 import { git } from '../git';
 import { userNpm } from '../providers/tools';
-import { Engine } from './engine';
+import { Engine, gpuLoad, vramNeed } from './engine';
 import { syncDocs, syncFiles, syncVectors, type Doc } from './indexer';
 import { EMBED_MODEL, modelOf, RERANK_MODEL, type SearchModel } from './models';
-import { CANDIDATES, formatHits, search, type Hit } from './search';
-import { SearchStore } from './store';
+import { formatHits, formatUnsure, ftsQuery, lookup, routeOf, search, type Hit } from './search';
+import { leafOf, SearchStore, type StoredSymbol, type VectorIndex } from './store';
 
 /** Pinned: the engine's binaries are the same files for everyone, and a new version is a change to test. */
 const RUNTIME_VERSION = '3.22.3';
@@ -17,13 +17,43 @@ const RUNTIME_VERSION = '3.22.3';
 const INLINE_CHUNKS = 96;
 /** Two searches this close share one look at the files. */
 const FRESH_MS = 8000;
+/** `where_is` reads every listed repo: each is looked at again no more often than this. */
+const CATALOGUE_FRESH_MS = 60_000;
 /** The page that shows the state hears of changes this often at most. */
 const NOTIFY_MS = 1000;
 /** Vectors are kept at this many dimensions (the models are trained so their first dimensions stand alone). */
 export const VECTOR_DIMS = 1024;
+/** With the card taken, up to this many pieces are computed on the processor instead of waiting for it. */
+const CPU_CHUNKS = 200;
+/** A build that waits for the card looks again this often. */
+const RETRY_MS = 120_000;
+/** A card busier than this (%) is someone else's for now: a render, a game, another model. */
+const GPU_BUSY = 40;
+/** Past this size, a model is alone in memory: no second one beside it. */
+const BIG_MODEL = 1_500_000_000;
+
+/**
+ * How the stages are tuned. Measured on the questions of scripts/search-bench (docs/recherche-semantique.md), on a
+ * set kept apart from the one the results are read on.
+ */
+export const TUNING = {
+  /** A rank by exact words next to the same rank by meaning. */
+  lexicalWeight: 0.5,
+  /** The reranker reads this many candidates, this much of each. */
+  rerank: 10,
+  rerankChars: 800,
+  /** …and only when the first and fifth results by meaning are closer than this. */
+  rerankGap: 0.05,
+  /** Under these, the search says it found nothing sure instead of showing code. 0 answers always. */
+  minMeaning: 0,
+  minReranker: 0,
+};
 
 export interface SearchQuery { query: string; k?: number; expand?: boolean; budget?: number; under?: string }
 interface Checkout { tree: string; family: string }
+
+/** Kinds `where_is` shows first: what a project runs on, before what its code merely names. */
+const INFRA = ['edge', 'table', 'view', 'function', 'procedure', 'cron', 'policy', 'trigger', 'index', 'type', 'schema', 'extension', 'sequence'];
 
 function runtimePackages(platform = process.platform, arch = process.arch): string[] | null {
   const own = platform === 'win32' && arch === 'x64' ? ['win-x64', 'win-x64-vulkan'] : platform === 'darwin' && arch === 'arm64' ? ['mac-arm64-metal'] : platform === 'linux' && arch === 'x64' ? ['linux-x64', 'linux-x64-vulkan'] : null;
@@ -45,24 +75,57 @@ export function shorten(vector: Float32Array, dims: number): Float32Array {
 }
 
 /**
+ * An SQL object defined several times (a function replaced by later migrations) is the last one: files of a
+ * migrations folder sort by their date. Other names keep every definition.
+ */
+export function lastDefinitions(defs: StoredSymbol[]): { def: StoredSymbol; earlier: number }[] {
+  const out: { def: StoredSymbol; earlier: number }[] = [];
+  const sql = new Map<string, { def: StoredSymbol; earlier: number }>();
+  for (const def of defs) {
+    if (!def.path.endsWith('.sql')) {
+      out.push({ def, earlier: 0 });
+      continue;
+    }
+    const key = `${def.kind} ${def.name.toLowerCase()}`;
+    const held = sql.get(key);
+    if (!held) sql.set(key, { def, earlier: 0 });
+    else if (def.path > held.def.path || (def.path === held.def.path && def.start > held.def.start)) sql.set(key, { def, earlier: held.earlier + 1 });
+    else held.earlier++;
+  }
+  const rank = (kind: string) => (INFRA.indexOf(kind) + 1 || INFRA.length + 1);
+  return [...sql.values(), ...out].sort((a, b) => rank(a.def.kind) - rank(b.def.kind));
+}
+
+/**
  * Local search over the repos the user chose and over the hub's own memory. Everything stays on this machine: the
  * models are files run by a process of ours, the indexes live in the app's data folder, and no question or code is
  * sent anywhere. The only network use is the one-time download of the engine (npm) and of the models (Hugging Face).
+ *
+ * A question never needs the graphics card. Names and paths are answered from the index alone; a described
+ * behaviour gets its vector from the processor when the card is cold or taken. The card serves to build an index
+ * and to rerank close calls, one model at a time, and only when nobody else is using it.
  */
 export class SearchService {
   private readonly root: string;
   private readonly embedModel: SearchModel;
   private readonly rerankModel: SearchModel | null;
-  private embedder: Engine | null = null;
+  /** Builds the vectors of an index: on the card when it is free. */
+  private indexer: Engine | null = null;
+  /** Turns a question into its vector, on the processor. */
+  private asker: Engine | null = null;
   private reranker: Engine | null = null;
   private readonly stores = new Map<string, SearchStore>();
   private readonly checkouts = new Map<string, Checkout>();
   private readonly running = new Map<string, Promise<void>>();
   private readonly looked = new Map<string, number>();
   private readonly errors = new Map<string, string>();
+  /** Checkouts whose vectors wait for the card to be free. */
+  private readonly deferred = new Set<string>();
   /** A checkout's vectors as last read, and the count of its index's changes when they were. */
-  private readonly vectors = new Map<string, { generation: number; index: ReturnType<SearchStore['vectors']> }>();
+  private readonly vectors = new Map<string, { generation: number; index: VectorIndex }>();
   private readonly generations = new Map<string, number>();
+  /** Model work goes one request at a time, whoever asks: eight agents do not make eight loads. */
+  private line: Promise<unknown> = Promise.resolve();
   private forget: NodeJS.Timeout | null = null;
   private notify: NodeJS.Timeout | null = null;
   private installing: SearchState['installing'] = null;
@@ -78,8 +141,9 @@ export class SearchService {
     },
   ) {
     this.root = join(opts.dataDir, 'search');
-    this.embedModel = modelOf(EMBED_MODEL)!;
-    this.rerankModel = RERANK_MODEL ? modelOf(RERANK_MODEL)! : null;
+    // The measures (scripts/search-bench) run this same service with other models: they name them here.
+    this.embedModel = modelOf(process.env.AIBOX_SEARCH_EMBED ?? '') ?? modelOf(EMBED_MODEL)!;
+    this.rerankModel = process.env.AIBOX_SEARCH_RERANK === 'none' ? null : (modelOf(process.env.AIBOX_SEARCH_RERANK ?? '') ?? (RERANK_MODEL ? modelOf(RERANK_MODEL)! : null));
   }
 
   private get runtime(): string {
@@ -105,8 +169,9 @@ export class SearchService {
       return false;
     }
   }
+  /** The engine and the embedding model are there: meaning can be searched. The reranker is a plus. */
   get installed(): boolean {
-    return this.hasRuntime() && this.models.every((m) => this.hasModel(m));
+    return this.hasRuntime() && this.hasModel(this.embedModel);
   }
 
   /** Tells the page something moved, once for a burst of changes (a download, an index being built). */
@@ -119,6 +184,12 @@ export class SearchService {
 
   private bump(tree: string): void {
     this.generations.set(tree, (this.generations.get(tree) ?? 0) + 1);
+  }
+
+  private queued<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.line.then(fn, fn);
+    this.line = run.catch(() => undefined);
+    return run;
   }
 
   /** Fetches what is missing: the engine with the user's npm, then each model, checked against its known hash. */
@@ -185,24 +256,52 @@ export class SearchService {
     renameSync(part, path);
   }
 
-  private engine(model: SearchModel): Engine {
+  private engine(model: SearchModel, device: () => SearchSettings['device']): Engine {
     const settings = this.opts.settings;
-    return new Engine({ script: this.opts.workerScript, runtime: this.runtime, modelPath: this.modelPath(model), model, device: () => settings().device, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
+    return new Engine({ script: this.opts.workerScript, runtime: this.runtime, modelPath: this.modelPath(model), model, device, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
   }
 
+  /** The card is ours to use: the user did not rule it out, and nothing else is working on it or filling it. */
+  private async cardFree(model: SearchModel): Promise<boolean> {
+    if (this.opts.settings().device === 'cpu') return false;
+    if (this.opts.settings().device === 'gpu') return true;
+    const ours = (this.indexer?.state.running && this.indexer.state.gpu) || (this.reranker?.state.running && this.reranker.state.gpu);
+    if (ours) return true;
+    const load = await gpuLoad();
+    return load === null || (load.util < GPU_BUSY && load.freeMiB > vramNeed(model));
+  }
+
+  /** The vector of a question: from the model already on the card when it is idle there, else on the processor. */
   private async embedQuery(query: string): Promise<Float32Array> {
-    this.embedder ??= this.engine(this.embedModel);
-    return shorten((await this.embedder.embed([(this.embedModel.query ?? '') + query]))[0], VECTOR_DIMS);
+    const text = (this.embedModel.query ?? '') + query;
+    const warm = this.indexer?.state.running && !this.indexer.busy ? this.indexer : null;
+    const engine = warm ?? (this.asker ??= this.engine(this.embedModel, () => 'cpu'));
+    return shorten((await engine.embed([text]))[0], VECTOR_DIMS);
+  }
+
+  private async embedOnProcessor(texts: string[]): Promise<Float32Array[]> {
+    this.asker ??= this.engine(this.embedModel, () => 'cpu');
+    return (await this.asker.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
   }
 
   private async embedDocs(texts: string[]): Promise<Float32Array[]> {
-    this.embedder ??= this.engine(this.embedModel);
-    return (await this.embedder.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
+    // One model on the card at a time.
+    this.reranker?.stop();
+    this.indexer ??= this.engine(this.embedModel, () => this.opts.settings().device);
+    return (await this.indexer.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
   }
 
-  private rerank(query: string, documents: string[]): Promise<number[]> {
-    this.reranker ??= this.engine(this.rerankModel!);
-    return this.reranker.rerank(query, documents);
+  /** The reranker, when it may run: installed, the card free, and no index being built on it. Null otherwise. */
+  private async judge(): Promise<((query: string, documents: string[]) => Promise<number[]>) | null> {
+    const model = this.rerankModel;
+    if (!model || !this.hasModel(model) || this.indexer?.busy || !(await this.cardFree(model))) return null;
+    return (query, documents) => {
+      // One model on the card at a time, and a large reranker never beside a large embedder.
+      if (this.indexer?.state.running && !this.indexer.busy) this.indexer.stop();
+      if (model.bytes > BIG_MODEL && this.embedModel.bytes > BIG_MODEL) this.asker?.stop();
+      this.reranker ??= this.engine(model, () => this.opts.settings().device);
+      return this.reranker.rerank(query, documents);
+    };
   }
 
   private store(name: string): SearchStore {
@@ -231,7 +330,8 @@ export class SearchService {
 
   /**
    * One update at a time per checkout; whoever asks while one runs gets that one. `files` waits until the files
-   * are cut (exact words then find everything), `all` until every vector is computed too.
+   * are cut (names and exact words then find everything), `all` until every vector is computed too. The vectors
+   * wait when the card is taken by something else: the next update tries again.
    */
   private update(tree: string, store: SearchStore, wait: 'files' | 'all'): Promise<void> {
     const pending = this.running.get(tree);
@@ -246,9 +346,23 @@ export class SearchService {
         if (stats.changed || stats.removed) this.bump(tree);
         // A worktree that was removed leaves nothing behind.
         for (const other of store.trees()) if (other !== tree && !other.startsWith('memory:') && !existsSync(other)) store.dropTree(other);
-        if (stats.missing > 0) {
-          await syncVectors(store, tree, model.id, (texts) => this.embedDocs(texts), { root: tree, passage: model.passage, onProgress: () => this.changed() });
-          this.bump(tree);
+        this.deferred.delete(tree);
+        if (stats.missing > 0 && this.installed) {
+          const device = this.opts.settings().device;
+          if (device !== 'cpu' && !(await this.cardFree(model))) {
+            // The card is taken. A few changed pieces go to the processor; a whole index waits and tries again.
+            if (stats.missing <= CPU_CHUNKS) {
+              await syncVectors(store, tree, model.id, (texts) => this.embedOnProcessor(texts), { root: tree, passage: model.passage, onProgress: () => this.changed() });
+              this.bump(tree);
+            } else {
+              this.deferred.add(tree);
+              const again = setTimeout(() => void this.update(tree, store, 'all'), RETRY_MS);
+              again.unref();
+            }
+          } else {
+            await syncVectors(store, tree, model.id, (texts) => this.embedDocs(texts), { root: tree, passage: model.passage, onProgress: () => this.changed() });
+            this.bump(tree);
+          }
         }
         this.errors.delete(tree);
       } catch (err) {
@@ -265,14 +379,13 @@ export class SearchService {
 
   private ready(): void {
     if (!this.opts.settings().enabled) throw new Error('Local search is off (Settings › Repos). Use Grep.');
-    if (!this.installed) throw new Error('Local search is not installed yet (Settings › Repos). Use Grep.');
   }
 
   /**
-   * `search_code`: the best pieces of a checkout for a question. The index follows the files first: what changed
-   * since the last search is cut again, and its vectors are computed before answering when there is little of it.
-   * While vectors are missing (a first build, a large change, a model that does not start), exact words still
-   * answer, and the answer says what it lacks.
+   * `search_code`: the best pieces of a checkout for a question. The index follows the files first. A name or a
+   * path is answered from the index of definitions, with no model; a described behaviour by exact words and by
+   * meaning. While vectors are missing (a first build, a card that is taken, models not installed), exact words
+   * still answer, and the answer says what it lacks.
    */
   async searchCode(folder: string, q: SearchQuery): Promise<string> {
     this.ready();
@@ -286,17 +399,41 @@ export class SearchService {
     const stats = store.stats(tree, model.id);
     const failure = this.errors.get(tree);
     if (stats.chunks === 0) return failure ? `The index of ${basename(tree)} could not be built (${failure}). Use Grep.` : `The index of ${basename(tree)} is being built. Use Grep meanwhile and call search_code again in a minute.`;
+    const limit = Math.min(20, Math.max(1, q.k ?? (q.expand ? 3 : 5)));
+    const budget = q.budget ?? this.opts.settings().budget;
+    const under = (q.under ?? '').replace(/\\/g, '/').replace(/^\.?\//, '');
+    const route = routeOf(q.query);
+    const known = lookup(store, tree, route, limit, under);
+    // A name that is defined, a file that exists: the answer is known, no model is asked.
+    if (route.kind !== 'concept' && known.length) {
+      const pinned = known;
+      const users = route.names.flatMap((n) => store.importers(tree, n)).filter((p, i, all) => all.indexOf(p) === i && !pinned.some((h) => h.path === p));
+      // Then where the name is used: other pieces that hold it, outside the definitions already shown. A path asks for nothing more.
+      const inside = (c: { path: string; start: number; end: number }) => pinned.some((h) => h.path === c.path && c.start >= h.start && c.end <= h.end);
+      const more = route.kind === 'symbol' && pinned.length < limit ? store.lexical(tree, ftsQuery(route.names.join(' ')), limit * 2, under).flatMap((id) => store.chunk(id) ?? []).filter((c) => c.kind !== 'outline' && !inside(c)).map((c): Hit => ({ ...c, score: 0, by: 'words' })) : [];
+      return formatHits([...pinned, ...more].slice(0, limit), q.query, budget, q.expand === true) + (users.length ? `\n\nimported by: ${users.slice(0, 6).join(', ')}${users.length > 6 ? ` (+${users.length - 6})` : ''}` : '');
+    }
     const left = stats.chunks - stats.vectors;
-    const note = failure
-      ? `\n\n(The model could not read the code: ${failure}. These results come from exact words only.)`
-      : left > 0
-        ? `\n\n(${left} of ${stats.chunks} pieces are still being read by the model: for them, only exact words count for now.)`
-        : '';
-    const hits = await this.find(store, tree, q, stats.vectors > 0);
-    return formatHits(hits, q.query, q.budget ?? this.opts.settings().budget, q.expand === true) + note;
+    const note = !this.installed
+      ? '\n\n(The models are not installed: these results come from exact words only.)'
+      : failure
+        ? `\n\n(The model could not read the code: ${failure}. These results come from exact words only.)`
+        : left > 0
+          ? `\n\n(${left} of ${stats.chunks} pieces ${this.deferred.has(tree) ? 'wait for the graphics card to be free' : 'are still being read by the model'}: for them, only exact words count for now.)`
+          : '';
+    // In a described behaviour, a path says where to look and a name is a lead: neither takes the place of the search.
+    const file = known.find((h) => h.by === 'path')?.path ?? '';
+    const within = under || (file && route.paths.some((p) => file.endsWith(p)) ? file : (route.paths.find((p) => known.some((h) => h.by === 'path' && h.path.startsWith(p))) ?? ''));
+    const pinned = known.filter((h) => h.by === 'definition').slice(0, 2);
+    const found = await this.queued(() => this.find(store, tree, q.query, limit, within, this.installed && stats.vectors > 0));
+    const best = found[0];
+    const unsure = !pinned.length && best && ((best.by === 'meaning' && best.score < TUNING.minMeaning) || (best.by === 'reranker' && best.score < TUNING.minReranker));
+    if (unsure) return formatUnsure(found) + note;
+    const hits = [...pinned, ...found.filter((h) => !pinned.some((p) => p.id === h.id))].slice(0, limit);
+    return formatHits(hits, q.query, budget, q.expand === true) + note;
   }
 
-  private async find(store: SearchStore, tree: string, q: SearchQuery, vectors: boolean, cache = true): Promise<Hit[]> {
+  private async find(store: SearchStore, tree: string, query: string, limit: number, under: string, vectors: boolean): Promise<Hit[]> {
     const model = this.embedModel;
     // The vectors read for a search stay in memory as long as the models do, no longer.
     if (this.forget) clearTimeout(this.forget);
@@ -305,26 +442,67 @@ export class SearchService {
     const vectorsOf = () => {
       const generation = this.generations.get(tree) ?? 0;
       const cached = this.vectors.get(tree);
-      if (cache && cached?.generation === generation) return cached.index;
+      if (cached?.generation === generation) return cached.index;
       const index = store.vectors(tree, model.id);
-      if (cache) this.vectors.set(tree, { generation, index });
+      this.vectors.set(tree, { generation, index });
       return index;
     };
-    const limit = Math.min(20, Math.max(1, q.k ?? (q.expand ? 3 : 8)));
-    const engines = { embedQuery: (text: string) => this.embedQuery(text), ...(this.rerankModel ? { rerank: (text: string, docs: string[]) => this.rerank(text, docs) } : {}) };
-    return search(store, tree, model.id, q.query, limit, { lexical: true, vectors, rerank: this.rerankModel ? CANDIDATES : 0 }, engines, (q.under ?? '').replace(/\\/g, '/').replace(/^\.?\//, ''), vectorsOf);
+    const rerank = vectors ? await this.judge() : null;
+    const stages = { lexical: true, vectors, rerank: rerank ? TUNING.rerank : 0, rerankChars: TUNING.rerankChars, rerankGap: TUNING.rerankGap, lexicalWeight: TUNING.lexicalWeight };
+    return search(store, tree, model.id, query, limit, stages, { embedQuery: (text) => this.embedQuery(text), ...(rerank ? { rerank } : {}) }, under, vectorsOf);
   }
 
-  /** `search_memory`: the same search over short texts the hub already holds (topic memory, decisions, notes). */
+  /**
+   * `where_is`: what a name is across every listed repo (an edge function, a table, an SQL function, a scheduled
+   * job, a policy, a function of the code), where its current definition stands and who uses it. Read from the
+   * indexes of names: no model, and one answer for all the repos.
+   */
+  async whereIs(folder: string, name: string): Promise<string> {
+    this.ready();
+    const asked = name.trim().replace(/^[`'"]+|[`'"()]+$/g, '');
+    if (!asked) return 'Give a name: an edge function, a table, an SQL function, a job, a function of the code.';
+    const from = await this.checkout(folder).catch(() => null);
+    const places: (Checkout & { store: SearchStore })[] = [];
+    for (const repo of this.opts.settings().repos) {
+      const main = await this.checkout(repo).catch(() => null);
+      if (main) places.push(from && same(from.family, main.family) ? from : main);
+    }
+    const lines: string[] = [];
+    const users: { where: string; doc: boolean }[] = [];
+    const partial: string[] = [];
+    for (const { tree, store } of places) {
+      if (!this.running.has(tree) && Date.now() - (this.looked.get(tree) ?? 0) > CATALOGUE_FRESH_MS) await this.update(tree, store, 'files');
+      // An index that has never been read to its end cannot say that a name does not exist.
+      if (!this.looked.has(tree) || this.errors.has(tree)) partial.push(basename(tree));
+      const defs = lastDefinitions(store.definitions(tree, asked, 40)).slice(0, 6);
+      const repo = basename(tree);
+      for (const { def, earlier } of defs) lines.push(`${def.kind} ${def.name} — ${repo} ${def.path}:${def.start}-${def.end}${earlier ? ` (current; ${earlier} earlier definition${earlier > 1 ? 's' : ''})` : ''}`);
+      const own = new Set(defs.map((d) => d.def.path));
+      for (const id of store.phrase(tree, leafOf(asked).replace(/[^\p{L}\p{N}]+/gu, ' '), 24)) {
+        const c = store.chunk(id);
+        if (c && !own.has(c.path) && c.kind !== 'outline') users.push({ where: `${repo} ${c.path}:${c.start}-${c.end}`, doc: c.kind === 'doc' });
+      }
+    }
+    const caveat = partial.length ? `\n(The index of ${partial.join(', ')} is not complete yet: a name may be missing from it. Ask again in a minute, or use Grep.)` : '';
+    if (!lines.length && !users.length) return `Nothing is named ${asked} in ${places.map((p) => basename(p.tree)).join(', ') || 'the indexed repos'}.${caveat}`;
+    // Code that uses the name before the notes that mention it.
+    const shown = [...users.filter((u) => !u.doc), ...users.filter((u) => u.doc)].slice(0, 8);
+    return `${lines.length ? lines.join('\n') : `No definition of ${asked}.`}${shown.length ? `\nused in:\n${shown.map((u) => `  ${u.where}`).join('\n')}${users.length > shown.length ? `\n  (+${users.length - shown.length})` : ''}` : ''}${caveat}`;
+  }
+
+  /**
+   * `search_memory`: exact words over short texts the hub already holds (topic memory, decisions, notes). No model:
+   * these texts and the questions about them are written in the same words.
+   */
   async searchMemory(scope: string, docs: Doc[], q: SearchQuery): Promise<string> {
     this.ready();
     if (!docs.length) return 'No memory to search yet.';
     const store = this.store('memory');
     const tree = `memory:${scope}`;
-    const model = this.embedModel;
     await syncDocs(store, tree, docs);
-    await syncVectors(store, tree, model.id, (texts) => this.embedDocs(texts), { passage: model.passage });
-    return formatHits(await this.find(store, tree, q, true, false), q.query, q.budget ?? this.opts.settings().budget, q.expand === true);
+    const limit = Math.min(20, Math.max(1, q.k ?? 5));
+    const hits = store.lexical(tree, ftsQuery(q.query), limit).flatMap((id) => store.chunk(id) ?? []).map((c): Hit => ({ ...c, score: 0, by: 'words' }));
+    return formatHits(hits, q.query, q.budget ?? this.opts.settings().budget, q.expand === true);
   }
 
   /** Builds a checkout's index again from nothing; the vectors of unchanged text are kept. */
@@ -334,6 +512,7 @@ export class SearchService {
       const { tree, store } = await this.checkout(repo);
       await this.running.get(tree);
       store.dropTree(tree);
+      store.setMeta(`head:${tree}`, '');
       this.bump(tree);
       void this.update(tree, store, 'all');
       return '';
@@ -342,9 +521,9 @@ export class SearchService {
     }
   }
 
-  /** The repos of the list not indexed yet get their index now, so the first question does not wait for it. */
+  /** The repos of the list whose index is missing or incomplete get it now, so the first question does not wait. */
   prepare(): void {
-    if (!this.opts.settings().enabled || !this.installed) return;
+    if (!this.opts.settings().enabled) return;
     for (const repo of this.opts.settings().repos) {
       void this.checkout(repo)
         .then(({ tree, store }) => {
@@ -361,18 +540,17 @@ export class SearchService {
       try {
         const { tree, store } = await this.checkout(path);
         const s = store.stats(tree, this.embedModel.id);
-        repos.push({ path, files: s.files, chunks: s.chunks, vectors: s.vectors, indexing: this.running.has(tree), error: this.errors.get(tree) ?? '' });
+        repos.push({ path, files: s.files, chunks: s.chunks, vectors: s.vectors, indexing: this.running.has(tree), waiting: this.deferred.has(tree), error: this.errors.get(tree) ?? '' });
       } catch {
-        repos.push({ path, files: 0, chunks: 0, vectors: 0, indexing: false, error: 'not-a-repo' });
+        repos.push({ path, files: 0, chunks: 0, vectors: 0, indexing: false, waiting: false, error: 'not-a-repo' });
       }
     }
-    const embed = this.embedder?.state;
-    const rerank = this.reranker?.state;
+    const engines = [this.indexer, this.asker, this.reranker].filter((e): e is Engine => e?.state.running === true);
     return {
-      installed: this.installed,
+      installed: this.installed && this.models.every((m) => this.hasModel(m)),
       installing: this.installing,
       error: this.error,
-      loaded: { embed: embed?.running === true, rerank: rerank?.running === true, gpu: (embed?.running && embed.gpu) || (rerank?.running && rerank.gpu) || false },
+      loaded: { embed: this.indexer?.state.running === true || this.asker?.state.running === true, rerank: this.reranker?.state.running === true, gpu: engines.some((e) => e.state.gpu) },
       sizeMb: Math.round(this.models.reduce((n, m) => n + m.bytes, 0) / 1048576) + 160,
       models: this.models.map((m) => m.label),
       repos,
@@ -381,14 +559,13 @@ export class SearchService {
 
   /** Nothing loaded, nothing being built: the process that hosts this can end. */
   get idle(): boolean {
-    return !this.installing && this.running.size === 0 && !this.embedder?.state.running && !this.reranker?.state.running;
+    return !this.installing && this.running.size === 0 && ![this.indexer, this.asker, this.reranker].some((e) => e?.state.running);
   }
 
   /** Ends the model processes now and closes the index files (app closing, feature switched off). */
   stop(): void {
-    this.embedder?.stop();
-    this.reranker?.stop();
-    this.embedder = this.reranker = null;
+    for (const e of [this.indexer, this.asker, this.reranker]) e?.stop();
+    this.indexer = this.asker = this.reranker = null;
     for (const s of this.stores.values()) s.close();
     this.stores.clear();
     this.vectors.clear();

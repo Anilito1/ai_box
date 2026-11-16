@@ -32,6 +32,16 @@ const GRAMMARS: Record<string, string> = {
   '.c': 'cpp', '.h': 'cpp', '.cpp': 'cpp', '.hpp': 'cpp', '.sh': 'bash', '.ps1': 'powershell', '.css': 'css',
 };
 
+/** Something the code defines under a name: where to go when that name is asked for. Lines are 1-based. */
+export interface SymbolDef {
+  /** `Class.method`, `public.orders`. */
+  name: string;
+  /** function, method, class, type, code (a constant), or what an SQL statement creates (table, function, policy…). */
+  kind: string;
+  start: number;
+  end: number;
+}
+
 interface Unit { start: number; end: number; name: string; kind: Chunk['kind'] | 'import' }
 
 /** Where the grammars are: next to the built app, else in the package (tests, scripts). */
@@ -121,34 +131,56 @@ function kindOf(node: Node): Unit['kind'] {
  * class's body, a function's block, the callback of an IIFE or of `describe`), until several children share them.
  */
 function bodyOf(node: Node): Node | null {
+  const own = nameOf(node);
   let n = node;
   for (let depth = 0; depth < 14; depth++) {
     const children = kids(n);
     const main = children.find((c) => linesOf(c) >= 0.6 * linesOf(n));
-    if (main) n = main;
-    else return children.length >= 2 ? n : null;
+    if (!main) return children.length >= 2 ? n : null;
+    // A child that is a definition of its own (a long function inside this one) is a member, not a wrapper to see through.
+    const inner = nameOf(main);
+    if (inner && inner !== own) return n;
+    n = main;
   }
   return null;
 }
 
-function split(node: Node, start: number, prefix: string, out: Unit[], depth: number): void {
+/** A statement that gives something a name to look up: a declaration, or an assignment (`exports.run = …`), not a call. */
+function defines(node: Node): boolean {
+  const n = unwrap(node);
+  if (n.type !== 'expression_statement') return true;
+  const e = n.namedChild(0);
+  return e?.type === 'assignment_expression' || e?.type === 'assignment';
+}
+
+/**
+ * `member`: the node stands at the top of a file, in a class or in an object, where a constant is something to look
+ * up; in the body of a function it is a local, and only what the function defines in turn (a nested function) counts.
+ */
+function split(node: Node, start: number, prefix: string, out: Unit[], depth: number, defs: SymbolDef[], member: boolean): void {
   const end = node.endPosition.row;
   const name = nameOf(node);
   const full = name ? prefix + name : '';
   const unit: Unit = { start, end, name: full || prefix.replace(/\.$/, ''), kind: kindOf(node) };
-  const body = end - start + 1 > MAX_LINES && depth < 8 ? bodyOf(node) : null;
-  if (!body) {
+  // A definition keeps its whole extent here, even when it is cut into several pieces below.
+  if (full && unit.kind !== 'import' && (unit.kind !== 'code' || member) && /^[\w$.]+$/.test(full) && defines(node)) defs.push({ name: full, kind: unit.kind, start: start + 1, end: end + 1 });
+  const long = end - start + 1 > MAX_LINES && depth < 8;
+  const holdsMembers = unit.kind !== 'function' && unit.kind !== 'method';
+  const body = long || unit.kind === 'class' ? bodyOf(node) : null;
+  if (!body || !long) {
     out.push(unit);
+    // A short class is one piece, and its methods are still names to look up.
+    if (body) collect(kids(body), name ? `${full}.` : prefix, [], depth + 1, defs, holdsMembers);
     return;
   }
   const members = kids(body);
   const first = members[0].startPosition.row;
   // The signature above the members stays with the first of them.
   if (first > start) out.push({ ...unit, end: first - 1 });
-  collect(members, name ? `${full}.` : prefix, out, depth + 1);
+  collect(members, name ? `${full}.` : prefix, out, depth + 1, defs, holdsMembers);
 }
 
-function collect(children: Node[], prefix: string, out: Unit[], depth: number): void {
+function collect(children: Node[], prefix: string, out: Unit[], depth: number, defs: SymbolDef[], member: boolean): void {
   let comment: { start: number; end: number } | null = null;
   const flush = () => {
     if (comment) out.push({ ...comment, name: prefix.replace(/\.$/, ''), kind: 'code' });
@@ -167,12 +199,13 @@ function collect(children: Node[], prefix: string, out: Unit[], depth: number): 
     const attached = comment && child.startPosition.row - comment.end <= 1 ? comment.start : child.startPosition.row;
     if (attached === child.startPosition.row) flush();
     comment = null;
-    split(child, attached, prefix, out, depth);
+    split(child, attached, prefix, out, depth, defs, member);
   }
   flush();
 }
 
-const SQL_OBJECT = /^\s*(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:(?:unique|materialized|temp|temporary|recursive|security|definer|invoker)\s+)*(function|procedure|table|view|policy|trigger|index|type|schema|extension|role|publication|sequence)\s+(?:concurrently\s+)?(?:if\s+(?:not\s+)?exists\s+)?("[^"]+"|[\w.]+)/i;
+/** The name may be quoted part by part (`"public"."orders"`, as `pg_dump` and `supabase db pull` write it). */
+const SQL_OBJECT = /^\s*(create|alter|drop)\s+(?:or\s+replace\s+)?(?:(?:unique|materialized|temp|temporary|recursive|security|definer|invoker)\s+)*(function|procedure|table|view|policy|trigger|index|type|schema|extension|role|publication|sequence)\s+(?:concurrently\s+)?(?:if\s+(?:not\s+)?exists\s+)?((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))*)/i;
 
 /** SQL cut at statements: a `;` outside strings, comments and `$tag$ … $tag$` bodies. */
 function sqlUnits(text: string): Unit[] {
@@ -184,7 +217,9 @@ function sqlUnits(text: string): Unit[] {
   const push = () => {
     if (startRow < 0) return;
     const m = SQL_OBJECT.exec(statement.replace(/--[^\n]*\n/g, ''));
-    units.push({ start: startRow, end: row, name: m ? `${m[1].toLowerCase()} ${m[2].replace(/"/g, '')}` : clip(statement.replace(/--[^\n]*/g, ''), 50), kind: 'sql' });
+    // `table public.orders` is where the table is made; a later `alter table` says so in its name.
+    const verb = m && m[1].toLowerCase() !== 'create' ? `${m[1].toLowerCase()} ` : '';
+    units.push({ start: startRow, end: row, name: m ? `${verb}${m[2].toLowerCase()} ${m[3].replace(/"/g, '')}` : clip(statement.replace(/--[^\n]*/g, ''), 50), kind: 'sql' });
     startRow = -1;
     statement = '';
   };
@@ -292,28 +327,40 @@ function outline(chunks: Chunk[], lines: string[], imports: string[]): Chunk | n
 
 /**
  * A file as pieces to search: one function, method, class or type each where a grammar reads the language, SQL by
- * statement, Markdown by section, the rest by windows of lines. A long file also gets its outline.
+ * statement, Markdown by section, the rest by windows of lines. A long file also gets its outline. With them, the
+ * names the file defines, each with its full extent.
  */
-export async function chunkFile(path: string, text: string): Promise<Chunk[]> {
+export async function cutFile(path: string, text: string): Promise<{ chunks: Chunk[]; symbols: SymbolDef[] }> {
   const lines = text.split(/\r?\n/);
   const ext = extname(path).toLowerCase();
   let units: Unit[] | null = null;
+  let symbols: SymbolDef[] = [];
   const grammar = GRAMMARS[ext];
   if (grammar) {
     try {
       const tree = (await parserFor(grammar)).parse(text);
       if (tree) {
         units = [];
-        collect(kids(tree.rootNode), '', units, 0);
+        collect(kids(tree.rootNode), '', units, 0, symbols, true);
         tree.delete();
       }
     } catch {
       units = null; // a grammar that cannot be loaded leaves the file to the windows
+      symbols = [];
     }
-  } else if (ext === '.sql') units = sqlUnits(text);
+  } else if (ext === '.sql') {
+    units = sqlUnits(text);
+    // `table public.orders`: what the statement creates, then its name.
+    for (const u of units) {
+      const made = /^(function|procedure|table|view|policy|trigger|index|type|schema|extension|sequence) (.+)$/.exec(u.name);
+      if (made) symbols.push({ name: made[2], kind: made[1], start: u.start + 1, end: u.end + 1 });
+    }
+  }
   else if (ext === '.md' || ext === '.mdx') units = markdownUnits(lines);
   units ??= [{ start: 0, end: lines.length - 1, name: '', kind: 'code' }];
   const chunks = pack(units, lines);
   const top = outline(chunks, lines, importsOf(text));
-  return top ? [top, ...chunks] : chunks;
+  return { chunks: top ? [top, ...chunks] : chunks, symbols };
 }
+
+export const chunkFile = async (path: string, text: string): Promise<Chunk[]> => (await cutFile(path, text)).chunks;
