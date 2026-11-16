@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les sessions tournent maintenant sur le Claude Code installé sur l'ordinateur quand il est plus récent que celui fourni avec l'app : un nouveau modèle est reconnu tout de suite, avec sa vraie fenêtre de contexte.
 - La jauge « ctx » utilise la vraie fenêtre de contexte du modèle qui tourne, telle que l'outil la déclare : plus de pourcentage faux sur les modèles à grande fenêtre. Elle s'affiche avec un « ~ » quand le modèle passe par un autre fournisseur et que la fenêtre n'est qu'une estimation.
 - Le bouton « Éphémères » s'appelle maintenant « Fichiers éphémères », et son écran est plus lisible : un récapitulatif sobre par catégorie, une liste aux colonnes alignées (dossier, origine, nombre, taille).
 

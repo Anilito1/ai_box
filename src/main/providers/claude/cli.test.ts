@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { claudeLogout } from '../../accounts';
 import { loadConfig } from '../../config';
-import { claudeStatus } from './cli';
+import { claudeExecutable, claudeStatus, newestExecutable } from './cli';
 
 // A fake CLI with its own authentication store; never touches Claude's real credentials.
 test('Claude status and logout use the same folder and ignore inherited authentication', { skip: process.platform === 'win32' }, async () => {
@@ -75,6 +75,38 @@ test('real Claude logout stays signed out when user settings inject an API key',
     assert.equal(checked.error, '');
     assert.equal(checked.account?.ready, false, 'the panel checks saved CLI authentication, without reloading settings credentials');
     assert.equal(readFileSync(join(dir, 'settings.json'), 'utf8'), settings, 'user settings stay intact');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const fakeClaude = (dir: string, version: string) => {
+  const path = join(dir, `claude-${version}`);
+  writeFileSync(path, `#!/bin/sh\necho "${version} (Claude Code)"\n`, { mode: 0o700 });
+  return path;
+};
+
+test('the newest runtime wins; a tie or an unknown version keeps the earlier one', () => {
+  const at = (path: string, version: string) => ({ path, version });
+  assert.equal(newestExecutable([at('sdk', '2.1.308'), at('user', '2.1.325')]), 'user');
+  assert.equal(newestExecutable([at('sdk', '2.1.308'), at('user', '2.1.99')]), 'sdk', 'compared as numbers, not as text');
+  assert.equal(newestExecutable([at('sdk', '2.1.308'), at('user', '2.1.308')]), 'sdk');
+  assert.equal(newestExecutable([at('sdk', ''), at('user', '2.1.1')]), 'user');
+  assert.equal(newestExecutable([at('sdk', '2.1.308'), at('user', '')]), 'sdk');
+  assert.equal(newestExecutable([]), '');
+});
+
+test('the user\'s Claude Code runs the sessions when newer than the SDK\'s, else the SDK\'s; the configured path always wins', { skip: process.platform === 'win32' }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hub-claude-exe-'));
+  try {
+    const cfg = loadConfig(dir, 'en');
+    const bundled = await claudeExecutable(cfg, '');
+    assert.equal(await claudeExecutable(cfg, fakeClaude(dir, '99.0.0')), fakeClaude(dir, '99.0.0'), 'installed and newer');
+    if (bundled) {
+      assert.equal(await claudeExecutable(cfg, fakeClaude(dir, '0.0.1')), bundled, 'installed and older');
+      assert.equal(await claudeExecutable({ ...cfg, claudePath: fakeClaude(dir, '0.0.1') }, fakeClaude(dir, '99.0.0')), fakeClaude(dir, '0.0.1'));
+    }
+    assert.equal(await claudeExecutable(cfg, ''), bundled, 'absent: the SDK\'s own, or none');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
