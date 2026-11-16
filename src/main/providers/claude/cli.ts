@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { ClaudeStatus } from '../../../shared/types';
+import { versionAtLeast } from '../../../shared/version';
 import type { HubConfig } from '../../config';
 import { errorCode, httpCode } from '../../errors';
 import { localTool } from '../tools';
@@ -31,6 +32,7 @@ function bundledExecutable(): string {
 
 /** Claude Code installed by the user: on the PATH, else in the native installer's folder. */
 function installedExecutable(): Promise<string> {
+  // The login shell's PATH is merged in at start (shellPath.ts); these are the usual places when it has none.
   const fallback = join(homedir(), '.local', 'bin', EXE);
   return new Promise((resolve) => {
     execFile(process.platform === 'win32' ? 'where' : 'which', ['claude'], { timeout: 5000, windowsHide: true }, (err, stdout) => {
@@ -39,7 +41,7 @@ function installedExecutable(): Promise<string> {
       const real = (l: string) =>
         process.platform !== 'win32' || /\.exe$/i.test(l) ? l : join(dirname(l), 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
       const found = lines.map(real).find((p) => existsSync(p));
-      resolve(found ?? (existsSync(fallback) ? fallback : ''));
+      resolve(found ?? [fallback, `/opt/homebrew/bin/${EXE}`, `/usr/local/bin/${EXE}`].find((f) => existsSync(f)) ?? '');
     });
   });
 }
@@ -52,10 +54,39 @@ export function claudeVersion(executable: string, env: Record<string, string>): 
   });
 }
 
-/** Executable the sessions run: the configured one, else the SDK's own binary, else the app's own copy, else the user's install. */
+const versions = new Map<string, string>();
+
+/** The version of a binary, asked once per file and modification date: an update of the install changes both. */
+async function versionOf(executable: string): Promise<string> {
+  let key = executable;
+  try {
+    key = `${executable}:${statSync(executable).mtimeMs}`;
+  } catch {
+    return '';
+  }
+  const known = versions.get(key);
+  if (known) return known;
+  const version = await claudeVersion(executable, process.env as Record<string, string>);
+  if (version) versions.set(key, version);
+  return version;
+}
+
+/** The newest of the candidates, the earlier one on a tie; one whose version is unknown never beats one that is known. */
+export function newestExecutable(candidates: { path: string; version: string }[]): string {
+  let best: { path: string; version: string } | undefined;
+  for (const c of candidates) if (!best || (c.version && (!best.version || (versionAtLeast(c.version, best.version) && !versionAtLeast(best.version, c.version))))) best = c;
+  return best?.path ?? '';
+}
+
+/**
+ * Executable the sessions run: the configured one, else the newest of the SDK's own binary, the app's own copy and the
+ * user's install (which updates itself): a model newer than the SDK's binary would get a window and a behaviour it does not know.
+ */
 export async function claudeExecutable(cfg: HubConfig, installed?: string): Promise<string> {
   if (cfg.claudePath && existsSync(cfg.claudePath)) return cfg.claudePath;
-  return bundledExecutable() || localTool('claude') || (installed ?? (await installedExecutable()));
+  const paths = [...new Set([bundledExecutable(), localTool('claude'), installed ?? (await installedExecutable())].filter(Boolean))];
+  if (paths.length < 2) return paths[0] ?? '';
+  return newestExecutable(await Promise.all(paths.map(async (path) => ({ path, version: await versionOf(path) }))));
 }
 
 /**
