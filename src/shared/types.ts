@@ -60,6 +60,8 @@ export interface Metrics {
   contextTokens: number;
   contextSize: number;
   contextPct: number | null;
+  /** The window is the runtime's for a Claude model standing in for another provider's: shown as an estimate. */
+  estimated?: boolean;
   costUsd: number;
 }
 

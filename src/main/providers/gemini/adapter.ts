@@ -251,7 +251,7 @@ export class GeminiProcess implements AgentProcess {
     const limit = limitOfError(code, message, Date.now());
     if (limit) events.push({ type: 'limit', signal: limit });
     events.push({ type: 'assistant', id: `error-${Date.now()}`, blocks: [], error: errorCodeOf(code, message), contextTokens: 0 });
-    events.push({ type: 'turn', subtype: 'error_during_execution', isError: true, result: '', queued: null, contextWindows: [], usage: this.stream.usage });
+    events.push({ type: 'turn', subtype: 'error_during_execution', isError: true, result: '', queued: null, contextWindows: {}, usage: this.stream.usage });
     return events;
   }
 
@@ -307,7 +307,7 @@ export class GeminiProcess implements AgentProcess {
     if (!op || !this.lifecycle.finish(op, terminal)) return;
     for (const event of this.stream.flush()) this.queue.push(event);
     this.queue.push({ type: 'turn', subtype: terminal === 'failed' ? 'error_during_execution' : terminal,
-      isError: terminal === 'failed', result: '', queued: this.pending.length, contextWindows: [], usage: this.stream.usage });
+      isError: terminal === 'failed', result: '', queued: this.pending.length, contextWindows: {}, usage: this.stream.usage });
   }
 
   async setModel(model: string): Promise<void> {

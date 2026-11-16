@@ -522,7 +522,7 @@ export class ChatView {
     const circumference = 2 * Math.PI * 7;
     this.ctx.arc.setAttribute('stroke-dasharray', `${(circumference * Math.min(100, pct ?? 0)) / 100} ${circumference}`);
     this.ctx.root.className = `ctx ${level(pct)}`;
-    this.ctx.text.textContent = fmtPct(pct);
+    this.ctx.text.textContent = fmtPct(pct, m?.estimated);
     this.ctx.root.title = m && m.contextSize ? t('chat.context', { used: fmtTokens(m.contextTokens), size: fmtTokens(m.contextSize) }) : t('chat.contextShort');
     this.syncSend();
   }

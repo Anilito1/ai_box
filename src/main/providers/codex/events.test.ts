@@ -62,7 +62,7 @@ test('token usage: cached tokens are counted apart from the input, the context i
   assert.equal(s.contextSize, 258400);
   const [turn] = s.handle('turn/completed', { turn: { status: 'interrupted' } });
   assert.equal(turn.type === 'turn' && turn.subtype, 'interrupted');
-  assert.deepEqual(turn.type === 'turn' && turn.contextWindows, [258400]);
+  assert.deepEqual(turn.type === 'turn' && turn.contextWindows, { 'gpt-5.6-luna': 258400 });
 });
 
 test('an error that will be retried is a retry; a usage limit is a limit signal with its reset, then an error frame', () => {
