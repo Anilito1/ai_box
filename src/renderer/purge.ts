@@ -259,6 +259,7 @@ export class PurgeView {
   }
 
   private tabs(el: HTMLElement): void {
+    const bar = h('div', 'purge-bar');
     const chips = h('div', 'caps-chips');
     chips.setAttribute('role', 'tablist');
     for (const tab of ['scan', 'history', 'rules', 'help'] as const) {
@@ -273,7 +274,17 @@ export class PurgeView {
       });
       chips.append(c);
     }
-    el.append(chips);
+    bar.append(chips);
+    // What the scan saw, beside the tabs: a fact about the folder, not a fourth block above the list.
+    const r = this.report;
+    if (this.tab === 'scan' && r && !this.failed) {
+      const facts = [tn('purge.seen', r.files, { size: size(r.bytes) }), t('purge.scannedAgo', { ago: ago(r.scannedAt) })];
+      if (r.partial) facts.push(t(`purge.partial.${r.partial}`));
+      const line = h('span', 'setup-hint purge-facts', facts.join(' · '));
+      line.title = line.textContent ?? '';
+      bar.append(line);
+    }
+    el.append(bar);
   }
 
   private scanTab(el: HTMLElement): void {
@@ -305,18 +316,17 @@ export class PurgeView {
       el.append(e);
       return;
     }
-    // The four totals.
+    // The four totals: one strip, the category's colour reduced to its dot.
     const sum = h('div', 'purge-sum');
     for (const c of PURGE_CATEGORIES) {
-      const tile = h('div', `purge-tile ${c}`);
-      tile.append(h('span', 'purge-tile-label', t(`purge.cat.${c}`)), h('span', 'purge-tile-n', tn('purge.files', r.totals[c].count)), h('span', 'purge-tile-size', size(r.totals[c].bytes)));
-      tile.title = t(`purge.cat.${c}.hint`);
-      sum.append(tile);
+      const stat = h('div', `purge-stat${r.totals[c].count ? '' : ' none'}`);
+      const label = h('span', 'purge-stat-label');
+      label.append(h('span', `caps-dot purge-dot ${c}`), h('span', '', t(`purge.cat.${c}`)));
+      stat.append(label, h('span', 'purge-stat-n', tn('purge.files', r.totals[c].count)), h('span', 'purge-stat-size', size(r.totals[c].bytes)));
+      stat.title = t(`purge.cat.${c}.hint`);
+      sum.append(stat);
     }
     el.append(sum);
-    const facts = [tn('purge.seen', r.files, { size: size(r.bytes) }), t('purge.scannedAgo', { ago: ago(r.scannedAt) })];
-    if (r.partial) facts.push(t(`purge.partial.${r.partial}`));
-    el.append(h('div', 'setup-hint purge-facts', facts.join(' · ')));
     if (!r.entries.length) {
       const e = h('div', 'caps-empty');
       e.append(h('p', '', t('purge.nothing')));
@@ -385,8 +395,11 @@ export class PurgeView {
   private categoryRow(c: PurgeCategory, entries: PurgeEntry[]): HTMLElement {
     const row = h('div', `caps-group purge-group ${c}`);
     if (c !== 'protected') row.append(this.box(entries, t(`purge.cat.${c}`)));
+    else row.append(h('span', 'purge-box-gap'));
     const bytes = entries.reduce((n, e) => n + e.size, 0);
-    row.append(h('span', '', t(`purge.cat.${c}`)), h('span', 'caps-group-n', `${tn('purge.files', entries.length)} · ${size(bytes)}`), h('span', 'purge-group-hint', t(`purge.cat.${c}.hint`)));
+    const label = h('span', 'purge-group-label');
+    label.append(h('span', `caps-dot purge-dot ${c}`), h('span', '', t(`purge.cat.${c}`)), h('span', 'purge-group-hint', t(`purge.cat.${c}.hint`)));
+    row.append(label, h('span', 'purge-num', tn('purge.files', entries.length)), h('span', 'purge-num', size(bytes)));
     return row;
   }
 
@@ -400,12 +413,17 @@ export class PurgeView {
     if (f.category !== 'protected') row.append(this.box(f.entries, f.dir || t('purge.rootFolder')));
     else row.append(h('span', 'purge-box-gap'));
     const name = h('span', 'caps-name');
-    name.append(chevron, h('span', 'caps-name-text', f.dir ? `${f.dir}/` : t('purge.rootFolder')));
+    const dir = h('span', 'caps-name-text', f.dir ? `${f.dir}/` : t('purge.rootFolder'));
+    dir.title = dir.textContent ?? '';
+    name.append(chevron, dir);
     if (inScratch(`${f.dir}/x`)) name.append(h('span', 'purge-tag scratch', t('purge.sig.scratch')));
+    const from = h('span', 'caps-desc', f.sessions.length ? t('purge.from', { sessions: f.sessions.join(', ') }) : '');
+    from.title = from.textContent ?? '';
     row.append(
       name,
-      h('span', 'caps-desc', f.sessions.length ? t('purge.from', { sessions: f.sessions.join(', ') }) : ''),
-      h('span', 'caps-src', `${tn('purge.files', f.entries.length)} · ${size(f.bytes)}`),
+      from,
+      h('span', 'purge-num', tn('purge.files', f.entries.length)),
+      h('span', 'purge-num', size(f.bytes)),
     );
     const toggle = () => {
       if (open) this.openFolders.delete(f.key);
@@ -437,7 +455,9 @@ export class PurgeView {
       ev.stopPropagation();
       if (this.report) void this.hub.purgeReveal(this.report.scanId, e.id);
     });
-    row.append(name, h('span', `caps-desc${e.block ? ' purge-block' : ''}`, why), h('span', 'caps-src', `${size(e.size)} · ${ago(e.mtime)}`), reveal);
+    const desc = h('span', `caps-desc${e.block ? ' purge-block' : ''}`, why);
+    desc.title = why;
+    row.append(name, desc, h('span', 'purge-num', ago(e.mtime)), h('span', 'purge-num', size(e.size)), reveal);
     return row;
   }
 
@@ -520,7 +540,7 @@ export class PurgeView {
         queueMicrotask(() => go.focus());
         return foot;
       }
-      foot.append(h('span', 'setup-hint', chosen.length ? tn('purge.selected', chosen.length, { size: size(bytes) }) : t('purge.noneSelected')), h('span', 'spacer'));
+      foot.append(h('span', 'setup-hint purge-sel', chosen.length ? tn('purge.selected', chosen.length, { size: size(bytes) }) : t('purge.noneSelected')), h('span', 'spacer'));
       const scratch = r.entries.filter((e) => e.category !== 'protected' && (e.signals.includes('scratch') || inScratch(e.rel)));
       if (scratch.length) {
         const all = h('button', 'btn ghost', t('purge.emptyScratch'));

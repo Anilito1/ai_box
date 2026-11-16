@@ -5343,6 +5343,15 @@ kbd,
 .ph-cap:hover .ico {
   transform: none;
 }
+/* A small window: the header's shortcuts keep their icon and tooltip, so that Settings stays in view. */
+@media (max-width: 1100px) {
+  .ph-cap {
+    padding: 0 var(--sp-2);
+  }
+  .ph-cap > span {
+    display: none;
+  }
+}
 .caps-card .setup-nav-item .ico {
   flex: none;
   width: 14px;
@@ -7726,59 +7735,124 @@ input[type='radio']:focus-visible {
   margin-top: calc(-1 * var(--sp-2));
   text-align: left;
 }
+/* tabs, then what the scan saw on the same line */
+.purge-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.purge-bar .caps-chips {
+  flex: none;
+}
+.purge-facts {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* the four totals: one quiet strip, the category's colour reduced to a dot */
 .purge-sum {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
 }
-.purge-tile {
+.purge-stat {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  padding: 10px 14px;
 }
-.purge-tile-label {
+.purge-stat + .purge-stat {
+  border-left: 1px solid var(--line);
+}
+.purge-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-2);
   font-size: var(--fs-sm);
-  font-weight: 600;
 }
-.purge-tile-n {
-  font-size: var(--fs-lg);
+.purge-stat-n {
+  color: var(--text);
+  font-size: var(--fs-xl);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.purge-tile-size {
+.purge-stat-size {
   color: var(--text-3);
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
-.purge-tile.safe {
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
-  background: var(--ok-soft);
+.purge-stat.none .purge-stat-n {
+  color: var(--text-3);
+  font-weight: 500;
 }
-.purge-tile.likely {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
-  background: var(--accent-soft);
+.caps-dot.purge-dot {
+  opacity: 1;
 }
-.purge-tile.check {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
-  background: var(--warn-soft);
+.purge-dot.safe {
+  background: var(--ok);
 }
-.purge-facts {
-  margin-top: calc(-1 * var(--sp-1));
+.purge-dot.likely {
+  background: var(--accent);
 }
-.purge-group {
-  gap: var(--sp-2);
+.purge-dot.check {
+  background: var(--warn);
+}
+.purge-dot.protected {
+  background: var(--text-3);
+  opacity: 0.55;
+}
+/* the list: categories, folders and files share one set of columns (box, name, origin, count or age, size, reveal) */
+.purge-list {
+  --purge-cols: 14px minmax(0, 1fr) minmax(0, 30%) 84px 64px 24px;
+}
+.caps-group.purge-group {
+  display: grid;
+  grid-template-columns: var(--purge-cols);
+  gap: 10px;
+  height: 32px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.purge-group-label {
+  display: flex;
+  grid-column: span 2;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
 }
 .purge-group-hint {
   min-width: 0;
+  margin-left: 4px;
   overflow: hidden;
   color: var(--text-3);
   font-weight: 400;
   text-overflow: ellipsis;
+}
+.purge-num {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.purge-group .purge-num {
+  color: var(--text-2);
+  font-weight: 500;
 }
 .purge-box {
   flex: none;
@@ -7792,13 +7866,10 @@ input[type='radio']:focus-visible {
   width: 14px;
 }
 .caps-row.purge-row {
-  grid-template-columns: 14px minmax(0, 1fr) minmax(0, auto) auto;
-}
-.caps-row.purge-row.file {
-  grid-template-columns: 14px minmax(0, 32%) minmax(0, 1fr) auto 24px;
-  padding-left: 30px;
+  grid-template-columns: var(--purge-cols);
 }
 .caps-row.purge-row.history {
+  font-variant-numeric: tabular-nums;
   grid-template-columns: minmax(0, 220px) minmax(0, 1fr) auto;
   cursor: default;
 }
@@ -7810,17 +7881,26 @@ input[type='radio']:focus-visible {
 .purge-row.folder.open .caps-chevron {
   transform: none;
 }
+/* a file sits under its folder's name, past the chevron */
 .purge-row.file .caps-name {
+  padding-left: 20px;
   font-weight: 400;
 }
-.purge-row .caps-src {
-  max-width: none;
+.purge-sel {
+  font-variant-numeric: tabular-nums;
+}
+/* in a narrow pane the folder's name keeps a few letters before its tag gives way */
+.purge-row.folder .caps-name-text {
+  min-width: 6ch;
 }
 .purge-tag {
-  flex: none;
+  min-width: 0;
+  overflow: hidden;
   padding: 1px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border-radius: var(--r-xs);
-  background: var(--ok-soft);
+  background: var(--hover-strong);
   color: var(--text-2);
   font-size: var(--fs-xs);
   font-weight: 500;

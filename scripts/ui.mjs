@@ -19,6 +19,7 @@ Options: --config <json|@file>  settings merged over {"onboarded":true,"language
          --keep                 keep the temporary data folder (its path is printed)
          --data <dir>           run again on a folder an earlier --keep printed (a restart), never removed
          --show                 leave the window where it opens (default: moved off screen)
+         --dark                 dark theme, whatever the system's (light otherwise follows the system)
 Steps (separated by "+"; the app starts once, whatever the number of steps):
   shot <file> [--width W --height H] [--selector S] [--scale device]   capture at CSS size (a resize stays)
   size <W> <H>                                         resize the window content (the sidebar takes ~380px of it)
@@ -48,8 +49,8 @@ const jsonArg = (v) => JSON.parse(v.startsWith('@') ? readFileSync(v.slice(1), '
 
 // ---------- arguments ----------
 const argv = process.argv.slice(2);
-const opts = { config: {}, keep: false, show: false, data: '' };
-while (argv[0]?.startsWith('--') && ['--config', '--keep', '--show', '--data'].includes(argv[0])) {
+const opts = { config: {}, keep: false, show: false, dark: false, data: '' };
+while (argv[0]?.startsWith('--') && ['--config', '--keep', '--show', '--dark', '--data'].includes(argv[0])) {
   const o = argv.shift();
   if (o === '--config') Object.assign(opts.config, jsonArg(argv.shift() ?? '{}'));
   else if (o === '--data') opts.data = argv.shift() ?? '';
@@ -116,6 +117,7 @@ try {
       a.dock?.hide();
     }
   }, opts.show);
+  if (opts.dark) await page.emulateMedia({ colorScheme: 'dark' });
   // The real snapshot, kept by the page to merge a fake state into it.
   await page.evaluate(() => {
     window.__uiSnap = null;

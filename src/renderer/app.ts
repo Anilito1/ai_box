@@ -60,6 +60,7 @@ settingsButton.append(icon(ICONS.gear), h('span', '', t('side.settings')));
 const capButton = (label: string, path: string): HTMLButtonElement => {
   const b = h('button', 'ph-settings ph-cap');
   b.title = label;
+  b.setAttribute('aria-label', label);
   b.setAttribute('aria-haspopup', 'dialog');
   b.append(icon(path), h('span', '', label));
   return b;
