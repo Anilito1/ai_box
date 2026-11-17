@@ -30,6 +30,12 @@ const FULL_WINDOW = 1_000_000;
  */
 const WORKER_SKILL_LIST_CHARS = '8000';
 
+/**
+ * The model as Claude Code is asked for it: a Fable id goes with its 1M variant. A Claude Code older than the model (the
+ * SDK's own binary did not know Fable 5.2) otherwise gives it a 200k window and compacts it near 170k; Fable's window
+ * is 1M wherever the model is available. Any other model, and a variant already chosen, go as they are.
+ */
+export const fullWindow = (model: string) => (/^claude-fable-\d/i.test(model) && !model.includes('[') ? `${model}[1m]` : model);
 
 
 /**
@@ -106,7 +112,7 @@ export class ClaudeProcess implements AgentProcess {
 
   interrupt = async (): Promise<void> => void (await this.q.interrupt());
   close = () => this.q.close();
-  setModel = (model: string) => this.q.setModel(model);
+  setModel = (model: string) => this.q.setModel(fullWindow(model));
   // An effortLevel sent alone to a session in Ultracode turns it off: both keys go together.
   setEffort = (effort: Effort, ultracode = false) => this.q.applyFlagSettings({ effortLevel: effort, ...(ultracode ? { ultracode: true } : {}) });
   setUltracode = (on: boolean) => this.q.applyFlagSettings({ ultracode: on });
@@ -175,7 +181,7 @@ export const claudeAdapter: ProviderAdapter = {
       ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, spec.remote) } : {}),
       ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
-      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.model ? { model: fullWindow(spec.model) } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
       ...(spec.mode ? { permissionMode: spec.mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
