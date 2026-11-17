@@ -1,4 +1,6 @@
 import { execFile, fork, type ChildProcess } from 'node:child_process';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { SearchModel } from './models';
 import type { WorkerInit, WorkerReply, WorkerRequest } from './worker';
 
@@ -16,6 +18,8 @@ export interface EngineOptions {
   idleMs: () => number;
   /** Tokens one text may take. */
   slotTokens?: number;
+  /** Processor threads one request may use; llama.cpp's own choice when absent. */
+  threads?: number;
   onState?: (state: EngineState) => void;
 }
 
@@ -61,22 +65,48 @@ function start(script: string, init: WorkerInit, device: number): ChildProcess {
   });
 }
 
-let devices: Promise<number> | null = null;
+interface Devices { index: number; name: string }
+let devices: Promise<Devices> | null = null;
+const devicesFile = (runtime: string): string => join(runtime, 'gpu-devices.json');
 
-/** Asked once per run of the app: the list of graphics devices does not change under it. */
-function deviceIndex(script: string, runtime: string): Promise<number> {
-  return (devices ??= new Promise<number>((resolve) => {
+function listDevices(script: string, runtime: string): Promise<Devices> {
+  return new Promise<Devices>((resolve) => {
     const child = start(script, { runtime, modelPath: '', kind: 'devices', gpu: true, slotTokens: 0 }, -1);
     const timer = setTimeout(() => child.kill(), 30_000);
     child.on('message', (m: WorkerReply) => {
-      if ('devices' in m) resolve(pickDevice(m.devices));
+      if (!('devices' in m)) return;
+      const index = pickDevice(m.devices);
+      const found = { index, name: m.devices[index] ?? '' };
+      if (index >= 0) writeFileSync(devicesFile(runtime), JSON.stringify(found));
+      resolve(found);
     });
-    child.once('error', () => resolve(-1));
+    child.once('error', () => resolve({ index: -1, name: '' }));
     child.once('exit', () => {
       clearTimeout(timer);
-      resolve(-1);
+      resolve({ index: -1, name: '' });
     });
-  }));
+  });
+}
+
+/**
+ * Which graphics device to use. Listing them takes a process of its own and seconds, so the answer is kept on disk
+ * beside the runtime; a worker that finds another device than the one kept has it listed again (see `launch`).
+ */
+function deviceOf(script: string, runtime: string): Promise<Devices> {
+  return (devices ??= (async () => {
+    try {
+      const kept = JSON.parse(readFileSync(devicesFile(runtime), 'utf8')) as Devices;
+      if (Number.isInteger(kept.index) && kept.index >= 0 && typeof kept.name === 'string') return kept;
+    } catch {
+      // Never listed, or unreadable: listed now.
+    }
+    return listDevices(script, runtime);
+  })());
+}
+
+function forgetDevice(runtime: string): void {
+  devices = null;
+  rmSync(devicesFile(runtime), { force: true });
 }
 
 /**
@@ -135,9 +165,10 @@ export class Engine {
   private async launch(): Promise<ChildProcess> {
     const { script, runtime, modelPath, model } = this.opts;
     const gpu = await this.wantsGpu();
-    const device = gpu ? await deviceIndex(script, runtime) : -1;
+    const chosen = gpu ? await deviceOf(script, runtime) : null;
+    const device = chosen?.index ?? -1;
     return new Promise<ChildProcess>((resolve, reject) => {
-      const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048 }, device);
+      const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads }, device);
       let ready = false;
       const fail = (reason: string) => {
         if (this.child === child) this.stop();
@@ -151,6 +182,8 @@ export class Engine {
           clearTimeout(timer);
           this.child = child;
           this.info = { running: true, gpu: m.gpu, loadMs: m.loadMs, dims: m.dims };
+          // The device kept on disk is no longer the one found (another card, a driver gone): listed again next time.
+          if (chosen && chosen.name !== m.device) forgetDevice(runtime);
           this.opts.onState?.(this.info);
           resolve(child);
         } else if ('fatal' in m) fail(m.fatal);

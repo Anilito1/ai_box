@@ -25,6 +25,8 @@ const NOTIFY_MS = 1000;
 export const VECTOR_DIMS = 1024;
 /** With the card taken, up to this many pieces are computed on the processor instead of waiting for it. */
 const CPU_CHUNKS = 200;
+/** Question vectors kept in memory, the most recent ones. */
+const QUERY_CACHE = 256;
 /** A build that waits for the card looks again this often. */
 const RETRY_MS = 120_000;
 /** A card busier than this (%) is someone else's for now: a render, a game, another model. */
@@ -126,6 +128,9 @@ export class SearchService {
   private readonly generations = new Map<string, number>();
   /** Model work goes one request at a time, whoever asks: eight agents do not make eight loads. */
   private line: Promise<unknown> = Promise.resolve();
+  private memoryLine: Promise<unknown> = Promise.resolve();
+  /** The vectors of the last questions: an agent often asks the same one again (more results, whole pieces). */
+  private readonly queryVectors = new Map<string, Float32Array>();
   private forget: NodeJS.Timeout | null = null;
   private notify: NodeJS.Timeout | null = null;
   private installing: SearchState['installing'] = null;
@@ -273,10 +278,20 @@ export class SearchService {
 
   /** The vector of a question: from the model already on the card when it is idle there, else on the processor. */
   private async embedQuery(query: string): Promise<Float32Array> {
+    const known = this.queryVectors.get(query);
+    if (known) {
+      // Most recently used last: the first entry is the one to drop.
+      this.queryVectors.delete(query);
+      this.queryVectors.set(query, known);
+      return known;
+    }
     const text = (this.embedModel.query ?? '') + query;
     const warm = this.indexer?.state.running && !this.indexer.busy ? this.indexer : null;
     const engine = warm ?? (this.asker ??= this.engine(this.embedModel, () => 'cpu'));
-    return shorten((await engine.embed([text]))[0], VECTOR_DIMS);
+    const vector = shorten((await engine.embed([text]))[0], VECTOR_DIMS);
+    this.queryVectors.set(query, vector);
+    if (this.queryVectors.size > QUERY_CACHE) this.queryVectors.delete(this.queryVectors.keys().next().value!);
+    return vector;
   }
 
   private async embedOnProcessor(texts: string[]): Promise<Float32Array[]> {
@@ -499,7 +514,10 @@ export class SearchService {
     if (!docs.length) return 'No memory to search yet.';
     const store = this.store('memory');
     const tree = `memory:${scope}`;
-    await syncDocs(store, tree, docs);
+    // Two sessions asking at once would read and write the same texts twice: one sync after the other.
+    const sync = this.memoryLine.then(() => syncDocs(store, tree, docs));
+    this.memoryLine = sync.catch(() => undefined);
+    await sync;
     const limit = Math.min(20, Math.max(1, q.k ?? 5));
     const hits = store.lexical(tree, ftsQuery(q.query), limit).flatMap((id) => store.chunk(id) ?? []).map((c): Hit => ({ ...c, score: 0, by: 'words' }));
     return formatHits(hits, q.query, q.budget ?? this.opts.settings().budget, q.expand === true);
@@ -511,8 +529,8 @@ export class SearchService {
       this.ready();
       const { tree, store } = await this.checkout(repo);
       await this.running.get(tree);
-      store.dropTree(tree);
-      store.setMeta(`head:${tree}`, '');
+      // Under other rules, the next pass reads every file again and replaces each one whole: the index is never empty meanwhile.
+      store.setMeta(`rules:${tree}`, '');
       this.bump(tree);
       void this.update(tree, store, 'all');
       return '';
