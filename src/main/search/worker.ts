@@ -13,10 +13,12 @@ export interface WorkerInit {
   gpu: boolean;
   /** Tokens one text may take. */
   slotTokens: number;
+  /** Processor threads one request may use; llama.cpp's own choice when absent. */
+  threads?: number;
 }
 export type WorkerRequest = { id: number; op: 'embed'; texts: string[] } | { id: number; op: 'rerank'; query: string; documents: string[] };
 export type WorkerReply =
-  | { ready: true; gpu: boolean; loadMs: number; dims: number }
+  | { ready: true; gpu: boolean; loadMs: number; dims: number; /** The graphics device the runtime found, '' without one. */ device: string }
   | { devices: string[] }
   | { fatal: string }
   | { id: number; vectors?: Float32Array[]; scores?: number[]; error?: string };
@@ -24,8 +26,8 @@ export type WorkerReply =
 interface LlamaModel {
   embeddingVectorSize: number;
   tokenize(text: string): number[];
-  createEmbeddingContext(o: { contextSize: number; batchSize: number }): Promise<{ getEmbeddingFor(input: number[]): Promise<{ vector: readonly number[] }> }>;
-  createRankingContext(o: { contextSize: number; batchSize: number }): Promise<{ rankAll(query: string, documents: string[]): Promise<number[]> }>;
+  createEmbeddingContext(o: { contextSize: number; batchSize: number; threads?: number }): Promise<{ getEmbeddingFor(input: number[]): Promise<{ vector: readonly number[] }> }>;
+  createRankingContext(o: { contextSize: number; batchSize: number; threads?: number }): Promise<{ rankAll(query: string, documents: string[]): Promise<number[]> }>;
 }
 interface Llama {
   gpu: string | false;
@@ -61,6 +63,7 @@ async function main(): Promise<void> {
   }
   const t0 = Date.now();
   let llama = await open(init.gpu);
+  const device = llama.gpu ? ((await llama.getGpuDeviceNames())[0] ?? '') : '';
   let model: LlamaModel;
   try {
     model = await llama.loadModel({ modelPath: init.modelPath, gpuLayers: llama.gpu ? 'max' : 0 });
@@ -71,10 +74,10 @@ async function main(): Promise<void> {
     llama = await open(false);
     model = await llama.loadModel({ modelPath: init.modelPath, gpuLayers: 0 });
   }
-  const size = { contextSize: init.slotTokens, batchSize: init.slotTokens };
+  const size = { contextSize: init.slotTokens, batchSize: init.slotTokens, ...(init.threads ? { threads: init.threads } : {}) };
   const embedder = init.kind === 'embed' ? await model.createEmbeddingContext(size) : null;
   const ranker = init.kind === 'rerank' ? await model.createRankingContext(size) : null;
-  send({ ready: true, gpu: llama.gpu !== false, loadMs: Date.now() - t0, dims: model.embeddingVectorSize });
+  send({ ready: true, gpu: llama.gpu !== false, loadMs: Date.now() - t0, dims: model.embeddingVectorSize, device });
 
   let queue: Promise<void> = Promise.resolve();
   process.on('message', (req: WorkerRequest) => {
