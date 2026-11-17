@@ -32,11 +32,12 @@ test('plan-limit readings: one line per change, per account, in a file of their 
     const l = { fiveHourPct: 12, fiveHourResetsAt: 100, sevenDayPct: 40, sevenDayResetsAt: 200 };
     log.limits(at, 'a-1', l);
     log.limits(at + 60_000, 'a-1', l); // nothing changed
+    log.limits(at + 90_000, 'a-1', { ...l, sevenDayResetsAt: 200.4 }); // the same reset, read a few tenths later
     log.limits(at + 120_000, 'a-1', { ...l, sevenDayPct: 41, fablePct: 7 });
     log.limits(at + 120_000, 'a-2', l); // another account
     await log.read(0, at + 1); // waits for the writes
     const lines = readFileSync(join(dir, 'usage', 'limits-2026-11.jsonl'), 'utf8').trim().split('\n').map((x) => JSON.parse(x));
-    assert.deepEqual(lines.map((x) => [x.a, x.d7, x.fb]), [['a-1', 40, undefined], ['a-1', 41, 7], ['a-2', 40, undefined]]);
+    assert.deepEqual(lines.map((x) => [x.a, x.d7, x.fb, x.r7]), [['a-1', 40, undefined, 180], ['a-1', 41, 7, 180], ['a-2', 40, undefined, 180]]);
     assert.deepEqual(await log.read(0, at + 1e9), []); // not taken for turns
   } finally {
     rmSync(dir, { recursive: true, force: true });

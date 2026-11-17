@@ -10,6 +10,8 @@ const monthFile = (at: number, kind = 'turns') => {
   const d = new Date(at);
   return `${kind}-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}.jsonl`;
 };
+/** A reset time (epoch seconds) to the nearest minute. */
+const minute = (s: number | null) => (s === null ? null : Math.round(s / 60) * 60);
 
 /**
  * What every turn of every session spent, one JSON line per turn appended to a file per month (UTC) in
@@ -95,10 +97,13 @@ export class CostLog {
    * writes included), which the plan's own pages do not say.
    */
   limits(at: number, account: string, l: RateLimits): void {
-    const key = JSON.stringify([l.fiveHourPct, l.sevenDayPct, l.fablePct ?? null, l.fiveHourResetsAt, l.sevenDayResetsAt]);
+    // The server gives the same reset a few tenths of a second apart from one reading to the next (06:59:59.8, 07:00:00.3).
+    const r5 = minute(l.fiveHourResetsAt);
+    const r7 = minute(l.sevenDayResetsAt);
+    const key = JSON.stringify([l.fiveHourPct, l.sevenDayPct, l.fablePct ?? null, r5, r7]);
     if (this.lastLimits.get(account) === key) return;
     this.lastLimits.set(account, key);
-    const line = `${JSON.stringify({ t: at, a: account, h5: l.fiveHourPct, r5: l.fiveHourResetsAt, d7: l.sevenDayPct, r7: l.sevenDayResetsAt, ...(l.fablePct == null ? {} : { fb: l.fablePct }) })}\n`;
+    const line = `${JSON.stringify({ t: at, a: account, h5: l.fiveHourPct, r5, d7: l.sevenDayPct, r7, ...(l.fablePct == null ? {} : { fb: l.fablePct }) })}\n`;
     this.tail = this.tail
       .then(async () => {
         await mkdir(this.dir, { recursive: true });
