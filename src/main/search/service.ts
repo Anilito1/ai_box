@@ -13,6 +13,8 @@ import { leafOf, SearchStore, type StoredSymbol, type VectorIndex } from './stor
 
 /** Pinned: the engine's binaries are the same files for everyone, and a new version is a change to test. */
 const RUNTIME_VERSION = '3.22.3';
+/** ONNX Runtime (every Windows binary signed by Microsoft, DirectML included) and a tokenizer without native code. */
+const ONNX_RUNTIME = { 'onnxruntime-node': '1.31.1', '@huggingface/tokenizers': '0.2.0' };
 /** A search waits for the vectors of this many changed chunks; past it they are computed behind it. */
 const INLINE_CHUNKS = 96;
 /** Two searches this close share one look at the files. */
@@ -44,7 +46,8 @@ class NotListed extends Error {}
 /** Kinds `where_is` shows first: what a project runs on, before what its code merely names. */
 const INFRA = ['edge', 'table', 'view', 'function', 'procedure', 'cron', 'policy', 'trigger', 'index', 'type', 'schema', 'extension', 'sequence'];
 
-function runtimePackages(platform = process.platform, arch = process.arch): string[] | null {
+function runtimePackages(engine: SearchModel['engine'], platform = process.platform, arch = process.arch): string[] | null {
+  if (engine === 'onnx') return Object.entries(ONNX_RUNTIME).map(([name, version]) => `${name}@${version}`);
   const own = platform === 'win32' && arch === 'x64' ? ['win-x64', 'win-x64-vulkan'] : platform === 'darwin' && arch === 'arm64' ? ['mac-arm64-metal'] : platform === 'linux' && arch === 'x64' ? ['linux-x64', 'linux-x64-vulkan'] : null;
   return own && [`node-llama-cpp@${RUNTIME_VERSION}`, ...own.map((p) => `@node-llama-cpp/${p}@${RUNTIME_VERSION}`)];
 }
@@ -158,8 +161,9 @@ export class SearchService {
     this.rerankModel = process.env.AIBOX_SEARCH_RERANK === 'none' ? null : (modelOf(process.env.AIBOX_SEARCH_RERANK ?? '') ?? (RERANK_MODEL ? modelOf(RERANK_MODEL)! : null));
   }
 
+  /** Where the engine lives: llama.cpp and ONNX Runtime each in a folder of their own. */
   private get runtime(): string {
-    return join(this.root, 'runtime');
+    return join(this.root, this.embedModel.engine === 'onnx' ? 'runtime-onnx' : 'runtime');
   }
   private modelPath(m: SearchModel): string {
     return join(this.root, 'models', m.file);
@@ -169,6 +173,7 @@ export class SearchService {
   }
   private hasModel(m: SearchModel): boolean {
     try {
+      if (m.files) return m.files.every((f) => statSync(join(this.modelPath(m), f.name)).size === f.bytes);
       return statSync(this.modelPath(m)).size === m.bytes;
     } catch {
       return false;
@@ -176,7 +181,9 @@ export class SearchService {
   }
   private hasRuntime(): boolean {
     try {
-      return (JSON.parse(readFileSync(join(this.runtime, 'node_modules', 'node-llama-cpp', 'package.json'), 'utf8')) as { version?: string }).version === RUNTIME_VERSION;
+      const version = (name: string) => (JSON.parse(readFileSync(join(this.runtime, 'node_modules', name, 'package.json'), 'utf8')) as { version?: string }).version;
+      if (this.embedModel.engine === 'onnx') return Object.entries(ONNX_RUNTIME).every(([name, v]) => version(name) === v);
+      return version('node-llama-cpp') === RUNTIME_VERSION;
     } catch {
       return false;
     }
@@ -209,7 +216,7 @@ export class SearchService {
     if (this.installing) return 'busy';
     this.error = '';
     try {
-      const packages = runtimePackages();
+      const packages = runtimePackages(this.embedModel.engine);
       if (!packages) throw new Error('unsupported');
       if (!this.hasRuntime()) {
         this.installing = { step: 'engine', done: 0, total: 0 };
@@ -236,12 +243,28 @@ export class SearchService {
   }
 
   private async download(m: SearchModel): Promise<void> {
-    const path = this.modelPath(m);
+    if (!m.files) return this.fetchFile(m.label, this.modelPath(m), m, 0, m.bytes);
+    // A model in several files (ONNX): each one checked, the progress over all of them.
+    let before = 0;
+    for (const f of m.files) {
+      const path = join(this.modelPath(m), f.name);
+      let there = false;
+      try {
+        there = statSync(path).size === f.bytes;
+      } catch {
+        // Missing: fetched below.
+      }
+      if (!there) await this.fetchFile(m.label, path, f, before, m.bytes);
+      before += f.bytes;
+    }
+  }
+
+  private async fetchFile(label: string, path: string, f: { url: string; bytes: number; sha256?: string }, before: number, total: number): Promise<void> {
     const part = `${path}.part`;
     mkdirSync(dirname(path), { recursive: true });
-    this.installing = { step: m.label, done: 0, total: m.bytes };
+    this.installing = { step: label, done: before, total };
     this.changed();
-    const res = await fetch(m.url, { redirect: 'follow' });
+    const res = await fetch(f.url, { redirect: 'follow' });
     if (!res.ok || !res.body) throw new Error('download-failed');
     const hash = createHash('sha256');
     const file = createWriteStream(part);
@@ -254,14 +277,14 @@ export class SearchService {
         hash.update(piece);
         if (!file.write(piece)) await new Promise<void>((r) => file.once('drain', () => r()));
         done += piece.byteLength;
-        this.installing = { step: m.label, done, total: m.bytes };
+        this.installing = { step: label, done: before + done, total };
         this.changed();
       }
     } finally {
       await new Promise<void>((r) => file.end(() => r()));
     }
     // A file that is not the one this version was measured with is not loaded.
-    if (done !== m.bytes || (m.sha256 && hash.digest('hex') !== m.sha256)) {
+    if (done !== f.bytes || (f.sha256 && hash.digest('hex') !== f.sha256)) {
       rmSync(part, { force: true });
       throw new Error('download-failed');
     }

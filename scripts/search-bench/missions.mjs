@@ -13,7 +13,7 @@
 import { fork, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const [missionsFile, outFile, runs = '3', model = 'sonnet', arms = 'current,bounded,brief,tool'] = process.argv.slice(2);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,25 +58,38 @@ function briefOf(mission) {
   });
 }
 
+/** A modification mission works in a throwaway worktree of the bench repo, removed after its check. */
+function worktreeOf(mission, arm) {
+  const dir = join(process.env.BENCH_WORKTREES ?? join(scratch, 'wt'), `${mission.id}-${arm}`);
+  spawnSync('git', ['-C', mission.cwd, 'worktree', 'remove', '--force', dir]);
+  const r = spawnSync('git', ['-C', mission.cwd, 'worktree', 'add', '--detach', dir], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error(`worktree ${dir}: ${r.stderr}`);
+  return dir;
+}
+const checker = process.env.BENCH_CHECK ? (await import(pathToFileURL(resolve(process.env.BENCH_CHECK)).href)).check : null;
+
 async function run(mission, arm) {
   const tool = arm.startsWith('tool');
+  const modify = mission.kind === 'modify';
+  const work = modify ? worktreeOf(mission, arm) : mission.cwd;
   const brief = arm.includes('brief') ? await briefOf(mission) : '';
   const ruled = tool && arm !== 'tool-bare';
   const rules = [arm === 'bounded' || ruled ? BOUNDED_RULE : '', ruled ? SEARCH_RULE : ''].filter(Boolean).join('\n');
   const expose = process.env.AIBOX_SEARCH_EXPOSE ? { AIBOX_SEARCH_EXPOSE: process.env.AIBOX_SEARCH_EXPOSE } : {};
-  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, ...expose } } } }));
+  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, AIBOX_SEARCH_CWD: mission.cwd, ...expose } } } }));
   const args = [
     '-p', mission.prompt + brief,
     '--model', model,
     '--output-format', 'stream-json', '--verbose',
     ...(process.env.BENCH_MAX_TURNS ? ['--max-turns', process.env.BENCH_MAX_TURNS] : []),
     '--strict-mcp-config', '--mcp-config', tool ? mcpWith : mcpWithout,
-    '--tools', 'Read,Grep,Glob,Bash,ToolSearch',
-    '--allowedTools', tool ? 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__search__search_code,mcp__search__where_is' : 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*)',
+    ...(process.env.BENCH_SESSION_USD ? ['--max-budget-usd', process.env.BENCH_SESSION_USD] : []),
+    '--tools', `Read,Grep,Glob,Bash,ToolSearch${modify ? ',Edit,Write' : ''}`,
+    '--allowedTools', (modify ? 'Edit,Write,' : '') + (tool ? 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__search__search_code,mcp__search__where_is' : 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*)'),
     ...(rules ? ['--append-system-prompt', rules] : []),
   ];
   const t0 = Date.now();
-  const r = spawnSync(CLAUDE, args, { cwd: mission.cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_200_000 });
+  const r = spawnSync(CLAUDE, args, { cwd: work, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_200_000 });
   const wallMs = Date.now() - t0;
   try {
     // The calls the session made, in order: what it explored with, and whether it took up the search.
@@ -102,19 +115,35 @@ async function run(mission, arm) {
       input: u.input_tokens, cacheCreation: u.cache_creation_input_tokens, cacheRead: u.cache_read_input_tokens, output: u.output_tokens, briefTokens: Math.ceil(brief.length / 2.25),
       // Success, where the mission says what a right answer cites: one of the expected files is named.
       ...(mission.expect ? { success: mission.expect.some((p) => answer.includes(p) || answer.includes(p.split('/').pop())) } : {}),
+      // A modification: its check on the worktree (expected change in the expected files), and the diff for a look.
+      ...(modify && checker ? (({ ok, why }) => ({ success: ok, why }))(checker(mission, work)) : {}),
+      ...(modify ? { diff: String(spawnSync('git', ['-C', work, 'diff'], { encoding: 'utf8' }).stdout).slice(0, 4000) } : {}),
       answer: answer.slice(0, 6000),
     };
   } catch {
     return { mission: mission.id, arm, model, wallMs, error: true, answer: `${r.stdout}`.slice(0, 300) + `${r.stderr}`.slice(0, 300) };
+  } finally {
+    if (modify) spawnSync('git', ['-C', mission.cwd, 'worktree', 'remove', '--force', work]);
   }
 }
 
 const order = arms.split(',');
-for (let n = 0; n < Number(runs); n++) {
-  for (const mission of missions) {
-    // The order turns at each round so no arm always runs first, on a cold prompt cache.
-    for (const arm of [...order.slice(n % order.length), ...order.slice(0, n % order.length)]) {
+// A ceiling at API prices (BENCH_BUDGET_USD): no session starts once the spend plus one session's ceiling
+// (BENCH_SESSION_USD, passed to Claude Code as --max-budget-usd) could pass it.
+const budget = Number(process.env.BENCH_BUDGET_USD ?? Infinity);
+const reserve = Number(process.env.BENCH_SESSION_USD ?? 1);
+let spent = 0;
+rounds: for (let n = 0; n < Number(runs); n++) {
+  for (const [m, mission] of missions.entries()) {
+    // The order turns from one mission to the next so no arm always runs first, on a cold prompt cache.
+    const k = (n + m) % order.length;
+    for (const arm of [...order.slice(k), ...order.slice(0, k)]) {
+      if (spent + reserve > budget) {
+        console.log(JSON.stringify({ stopped: 'budget', spent: Number(spent.toFixed(2)), budget }));
+        break rounds;
+      }
       const row = await run(mission, arm);
+      spent += row.costUsd ?? reserve;
       appendFileSync(outFile, `${JSON.stringify({ at: new Date().toISOString(), run: n, ...row })}\n`);
       const { answer: _answer, ...shown } = row;
       console.log(JSON.stringify(shown));

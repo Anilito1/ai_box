@@ -11,7 +11,10 @@ import { z } from 'zod';
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const dataDir = resolve(process.env.AIBOX_SEARCH_DATA ?? '');
-const repos = (process.env.AIBOX_SEARCH_REPOS ?? process.cwd()).split(';').filter(Boolean).map((p) => resolve(p));
+// The folder the session works in; AIBOX_SEARCH_CWD when that is a throwaway worktree of an indexed repo (the A/B's
+// modification missions): its paths are the repo's.
+const here = process.env.AIBOX_SEARCH_CWD ?? process.cwd();
+const repos = (process.env.AIBOX_SEARCH_REPOS ?? here).split(';').filter(Boolean).map((p) => resolve(p));
 const settings = { enabled: true, idleMinutes: 5, device: process.env.AIBOX_SEARCH_DEVICE ?? 'auto', repos, budget: 800 };
 
 let host = null;
@@ -70,7 +73,7 @@ server.registerTool(
     },
     _meta: ALWAYS,
   },
-  (a) => answer(() => call('searchCode', process.cwd(), { query: a.query, k: a.k, expand: a.expand === true, budget: a.budget, under: a.path })),
+  (a) => answer(() => call('searchCode', here, { query: a.query, k: a.k, expand: a.expand === true, budget: a.budget, under: a.path })),
 );
 server.registerTool(
   'where_is',
@@ -79,7 +82,7 @@ server.registerTool(
       'What a name is across the indexed repos (edge function, table, SQL function, scheduled job, policy, function of the code): its current definition as `repo path:lines`, and where it is used. Use it instead of grepping several repos or the migrations for a name. Instant, no model, a few lines.',
     inputSchema: { name: z.string().min(2).max(200).describe('The exact name (e.g. a table, an RPC, an edge function slug)') },
   },
-  (a) => answer(() => call('whereIs', process.cwd(), a.name)),
+  (a) => answer(() => call('whereIs', here, a.name)),
 );
 process.on('exit', () => host?.kill());
 await server.connect(new StdioServerTransport());

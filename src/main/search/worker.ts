@@ -1,6 +1,7 @@
 import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { openOnnx } from './onnx';
 
 /**
  * One model in a process of its own (llama.cpp through node-llama-cpp). The hub starts it for a first request and
@@ -21,6 +22,8 @@ export interface WorkerInit {
    * (building an index), which gives way to everything else.
    */
   priority?: 'above' | 'below';
+  /** ONNX Runtime instead of llama.cpp; `modelPath` is then the model's folder. */
+  engine?: 'onnx';
 }
 export type WorkerRequest = { id: number; op: 'embed'; texts: string[] } | { id: number; op: 'rerank'; query: string; documents: string[] };
 export type WorkerReply =
@@ -71,6 +74,7 @@ async function main(): Promise<void> {
   process.on('disconnect', () => process.exit(0));
   const raised = init.priority === 'above' && prioritize('above');
   if (init.priority === 'below') prioritize('below');
+  if (init.engine === 'onnx') return serveOnnx(init, raised);
   const lib = (await import(pathToFileURL(join(init.runtime, 'node_modules', 'node-llama-cpp', 'dist', 'index.js')).href)) as { getLlama: GetLlama };
   const open = (gpu: boolean) => lib.getLlama({ gpu: gpu ? 'auto' : false, build: 'never', skipDownload: true, logLevel: 'error' });
   if (init.kind === 'devices') {
@@ -112,6 +116,29 @@ async function main(): Promise<void> {
           for (const text of req.texts) vectors.push(normalized((await embedder.getEmbeddingFor(model.tokenize(text).slice(0, init.slotTokens - 4))).vector));
           send({ id: req.id, vectors });
         } else if (req.op === 'rerank' && ranker) send({ id: req.id, scores: await ranker.rankAll(req.query, req.documents) });
+        else send({ id: req.id, error: 'Unsupported request' });
+      } catch (err) {
+        send({ id: req.id, error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        if (batch) prioritize('above');
+      }
+    });
+  });
+}
+
+/** The same protocol over an ONNX model (embedding only). */
+async function serveOnnx(init: WorkerInit, raised: boolean): Promise<void> {
+  const t0 = Date.now();
+  // Four tokens kept for the markers, as with llama.cpp below.
+  const model = await openOnnx({ runtime: init.runtime, folder: init.modelPath, gpu: init.gpu, maxTokens: init.slotTokens - 4, threads: init.threads });
+  send({ ready: true, gpu: model.gpu, loadMs: Date.now() - t0, dims: model.dims, device: model.device });
+  let queue: Promise<void> = Promise.resolve();
+  process.on('message', (req: WorkerRequest) => {
+    queue = queue.then(async () => {
+      const batch = raised && req.op === 'embed' && req.texts.length > 1;
+      if (batch) prioritize('below');
+      try {
+        if (req.op === 'embed') send({ id: req.id, vectors: await model.embed(req.texts) });
         else send({ id: req.id, error: 'Unsupported request' });
       } catch (err) {
         send({ id: req.id, error: err instanceof Error ? err.message : String(err) });

@@ -178,10 +178,11 @@ export class Engine {
     const gpu = await this.wantsGpu();
     const last = this.failure;
     if (last?.gpu === gpu && Date.now() - last.at < retryAfter(last.count)) throw new Error(last.reason);
-    const chosen = gpu ? await deviceOf(script, runtime) : null;
+    // DirectML picks its adapter itself (see onnx.ts); the device list is llama.cpp's.
+    const chosen = gpu && model.engine !== 'onnx' ? await deviceOf(script, runtime) : null;
     const device = chosen?.index ?? -1;
     return new Promise<ChildProcess>((resolve, reject) => {
-      const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads, priority: this.opts.priority }, device);
+      const child = start(script, { runtime, modelPath, kind: model.kind, engine: model.engine, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads, priority: this.opts.priority }, device);
       let ready = false;
       let failed = false;
       const fail = (reason: string) => {
