@@ -41,6 +41,8 @@
       "messages": ["Paiements : passe maintenant à la partie tests, couvre les remises cumulées."],
       "expect": { "anyCall": [{ "tool": "message_worker", "input": { "name": "paiements" } }], "allCalls": [{ "tool": "message_worker", "input": { "model": "^$|sonnet" } }] } },
     { "id": "S10", "role": "master", "title": "close_worker après livraison",
+      "workers": [{ "name": "paiements", "folder": "comptes-pwa", "mission": "Corriger le calcul des remises dans le panier de comptes-pwa, pousser le correctif sur main et vérifier en prod.", "lastMessage": "Correctif en cours." }],
+      "replies": { "worker_report": "hub-paiements, rapport final : correctif poussé sur main (commit abc1234), npm test vert (42 tests), page panier vérifiée en prod avec deux remises cumulées. Mission terminée, aucune suite prévue." },
       "messages": ["[Message de hub-paiements] Rapport final : correctif poussé sur main (commit abc1234), tests verts, vérifié sur la prod. Rien d'autre à faire de mon côté."],
       "expect": { "anyCall": [{ "tool": "close_worker", "input": { "name": "paiements" } }] } },
     { "id": "W1", "role": "worker", "self": "rapport", "title": "rapport final par message au maître",

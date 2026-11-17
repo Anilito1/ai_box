@@ -113,7 +113,7 @@ async function evaluate(h, tag) {
       const r = await h.runScenario(sc, { lang: 'fr' });
       const failed = check(sc, r);
       const briefs = judge ? await Promise.all(callsOf(r, 'spawn_worker').map((c) => scoreBrief(String(c.input.mission ?? '')))) : [];
-      results.push({ id: sc.id, run: i, ok: failed.length === 0, failed, requests: r.requests.length, topicAlone: topicAlone(r), cost: r.costUsd, ms: Date.now() - t0, briefs, calls: r.calls.map((c) => `${short(c.tool)}${c.refused ? '(refused)' : ''}`), inputs: r.calls.map((c) => JSON.stringify(c.input).slice(0, 300)), text: r.text.slice(-1500) });
+      results.push({ id: sc.id, run: i, ok: failed.length === 0, failed, requests: r.requests.length, prefix: r.prefix, topicAlone: topicAlone(r), cost: r.costUsd, ms: Date.now() - t0, briefs, calls: r.calls.map((c) => `${short(c.tool)}${c.refused ? '(refused)' : ''}`), inputs: r.calls.map((c) => JSON.stringify(c.input).slice(0, 300)), text: r.text.slice(-1500) });
       process.stdout.write(`${tag} ${sc.id}#${i + 1} ${failed.length ? `FAIL ${failed.join(' | ').slice(0, 160)}` : 'ok'}\n`);
     }
   };
@@ -124,7 +124,8 @@ async function evaluate(h, tag) {
 function summary(res) {
   const by = new Map();
   for (const r of res.results) {
-    const g = by.get(r.id) ?? { pass: 0, n: 0, requests: 0, topicAlone: 0, cost: 0, briefs: [] };
+    const g = by.get(r.id) ?? { pass: 0, n: 0, requests: 0, prefix: 0, topicAlone: 0, cost: 0, briefs: [] };
+    g.prefix += r.prefix ?? 0;
     g.pass += r.ok ? 1 : 0;
     g.n++;
     g.requests += r.requests;
@@ -149,13 +150,13 @@ try {
   const cur = summary(current);
   const base = ref ? summary(ref) : null;
   const avg = (a) => (a.length ? (a.reduce((s, x) => s + x, 0) / a.length).toFixed(1) : '-');
-  const lines = [`scenario  current ${ref ? `${(baselineFile ? 'baseline' : refName).padEnd(12)}` : ''} requests  topic-alone  cost$  title`];
+  const lines = [`scenario  current ${ref ? `${(baselineFile ? 'baseline' : refName).padEnd(12)}` : ''} requests  prefix K  topic-alone  cost$  title`];
   let regressions = 0;
   for (const sc of scenarios) {
     const c = cur.get(sc.id);
     const b = base?.get(sc.id);
     if (b && c.pass < b.pass) regressions++;
-    lines.push(`${sc.id.padEnd(9)} ${`${c.pass}/${c.n}`.padEnd(7)} ${b ? `${b.pass}/${b.n}`.padEnd(12) : ''} ${(c.requests / c.n).toFixed(1).padStart(8)}${b ? `/${(b.requests / b.n).toFixed(1)}` : ''}  ${String(c.topicAlone).padStart(5)}${b ? `/${b.topicAlone}` : ''}  ${c.cost.toFixed(2)}  ${sc.title}${judge ? ` (brief ${avg(c.briefs)}${b ? `/${avg(b.briefs)}` : ''})` : ''}`);
+    lines.push(`${sc.id.padEnd(9)} ${`${c.pass}/${c.n}`.padEnd(7)} ${b ? `${b.pass}/${b.n}`.padEnd(12) : ''} ${(c.requests / c.n).toFixed(1).padStart(8)}${b ? `/${(b.requests / b.n).toFixed(1)}` : ''}  ${(c.prefix / c.n / 1e3).toFixed(1)}${b ? `/${(b.prefix / b.n / 1e3).toFixed(1)}` : ''}  ${String(c.topicAlone).padStart(5)}${b ? `/${b.topicAlone}` : ''}  ${c.cost.toFixed(2)}  ${sc.title}${judge ? ` (brief ${avg(c.briefs)}${b ? `/${avg(b.briefs)}` : ''})` : ''}`);
   }
   lines.push(`S11 (static) current ${current.static.length ? `FAIL ${current.static.join('; ')}` : 'ok'}${ref ? ` · ${refName} ${ref.static.length ? `FAIL ${ref.static.join('; ')}` : 'ok'}` : ''}`);
   const totalCost = [...current.results, ...(ref?.results ?? [])].reduce((s, r) => s + r.cost, 0);

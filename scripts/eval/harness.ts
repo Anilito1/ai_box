@@ -64,6 +64,8 @@ export interface RunResult {
   turns: number;
   error: string;
   scratch: string;
+  /** Tokens of the first request's prompt: the fixed prefix and the first message. */
+  prefix: number;
 }
 
 /** Claude Code tools that only read: they run. Every other one is recorded and refused. */
@@ -119,7 +121,7 @@ export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signa
     capabilities: async () => '',
   } as ConstructorParameters<typeof SessionManager>[0]);
   const inner = m as unknown as Inner;
-  const result: RunResult = { calls: [], requests: [], text: '', costUsd: 0, turns: 0, error: '', scratch: '' };
+  const result: RunResult = { calls: [], requests: [], text: '', costUsd: 0, turns: 0, error: '', scratch: '', prefix: 0 };
   try {
     const signal = opts.signal ?? new AbortController().signal;
     for (const p of sc.posts ?? []) {
@@ -165,7 +167,7 @@ export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signa
           if (REAL.has(d.name)) return d.handler(input as never, extra as never);
           const text = sc.replies?.[d.name] ?? (d.name === 'list_repos' && repos ? repos : defaultReply(d.name, input));
           return { content: [{ type: 'text' as const, text }] };
-        }) as any),
+        }) as any, (d as { alwaysLoad?: boolean }).alwaysLoad ? { alwaysLoad: true } : undefined),
       ),
     });
     const guard: HookCallback = async (input) => {
@@ -209,6 +211,8 @@ export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signa
         if (id !== request) {
           request = id;
           result.requests.push([]);
+          const u = msg.message.usage;
+          if (!result.prefix && u) result.prefix = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
         }
         for (const b of msg.message.content) {
           if (b.type === 'tool_use') {
