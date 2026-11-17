@@ -30,6 +30,7 @@ import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './ba
 import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
+import { searchShownFor } from './search/client';
 import type { Doc } from './search/indexer';
 import type { SearchQuery } from './search/service';
 import { SearchTelemetry } from './search/telemetry';
@@ -170,6 +171,11 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   fallbackModel: string;
   /** The conversation of each account it ran on, to take up again when it goes back. */
   convs: Record<string, string>;
+  /**
+   * The conversations given search_code whole from their start (see `searchShownFor`), the latest last: only they keep
+   * it so, since a tool block that changes under a resumed conversation makes it write its whole prompt cache again.
+   */
+  searchShown: string[];
   /** A limit was hit during a turn: it goes on with this step once the turn is over. */
   fallbackPending: { step: FallbackStep; signal: LimitSignal } | null;
   /** What happened on the account it was away on, told with its next message once it is back. */
@@ -362,6 +368,7 @@ type Persisted = {
   | 'fallbackMark'
   | 'fallbackModel'
   | 'convs'
+  | 'searchShown'
   | 'procs'
   | 'remoteRun'
   | 'away'
@@ -396,7 +403,7 @@ export interface ManagerOptions {
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
   /** The local search (search_code, search_memory): given to sessions launched while it is on. */
-  search?: { enabled(): boolean; warm(folder: string): void; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string>; where(folder: string, name: string): Promise<string> };
+  search?: { enabled(): boolean; indexed(folder: string): boolean; warm(folder: string): void; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string>; where(folder: string, name: string): Promise<string> };
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
   scratchRoot?: string;
   /** Folders too wide to be a project besides the home folder and the workspaces (the Desktop, Documents…). */
@@ -427,6 +434,8 @@ const MASTER_ID = 'master';
 const WORKER_EFFORT: Effort = 'medium';
 /** A handoff note longer than this is cut: it goes into every later prompt of the post. */
 const NOTE_MAX = 6000;
+/** Conversations of a session remembered as given search_code whole (see `searchShownFor`). */
+const SEARCH_SHOWN_KEPT = 20;
 const ITEMS_MAX = 1500;
 const ITEMS_TRIM = 300;
 const HISTORY_MAX = 400;
@@ -1836,7 +1845,10 @@ export class SessionManager extends EventEmitter {
     const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + scratchRules + memoryRules + (s.diagOf ? `\n${diagPrompt(lang())}\n` : '');
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
-    const tools = this.hubTools(s, harness, !!remote);
+    // search_code whole in the tools a new conversation starts with, when its folder is indexed; a resumed one keeps what it had.
+    const searchShown = searchShownFor(s.sessionId, resume, s.searchShown, () => !remote && this.opts.search?.indexed(s.cwd) === true);
+    if (searchShown && !s.searchShown.includes(s.sessionId)) s.searchShown = [...s.searchShown, s.sessionId].slice(-SEARCH_SHOWN_KEPT);
+    const tools = this.hubTools(s, harness, !!remote, searchShown);
     // Ultracode where the program and the plan have it; a choice the plan no longer allows stays asked, but off.
     const ultracode = s.ultracode && harness === 'claude' && this.ultracodeAccessOf(account) === 'allowed';
     s.runUltracode = ultracode;
@@ -2533,6 +2545,8 @@ export class SessionManager extends EventEmitter {
         if (s.usageSeen && ev.id !== s.sessionId) Object.assign(s, { usageSeen: null, usageBase: Promise.resolve(null) });
         // Its first reading may predate the id the program gives the conversation: it stays this conversation's.
         if (s.contextBase?.id === s.sessionId) s.contextBase.id = ev.id;
+        // A conversation begun in the same process (/clear) has the same tools as the one before it.
+        if (s.searchShown.includes(s.sessionId) && !s.searchShown.includes(ev.id)) s.searchShown = [...s.searchShown, ev.id].slice(-SEARCH_SHOWN_KEPT);
         s.sessionId = ev.id;
         s.mode = ev.mode;
         if (ev.effort) s.effort = ev.effort;
@@ -3703,7 +3717,7 @@ export class SessionManager extends EventEmitter {
    * a session name is shared by every Claude Code session of the machine (another hub may run a "hub-maitre"), the
    * hub's own channel always reaches this hub's master.
    */
-  private hubTools(s: Session, harness: HarnessId = 'claude', remote = false): HubTool[] {
+  private hubTools(s: Session, harness: HarnessId = 'claude', remote = false, searchShown = false): HubTool[] {
     const role = s.role;
     const { cfg } = this.opts;
     const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] });
@@ -3774,7 +3788,7 @@ export class SessionManager extends EventEmitter {
       ? [
           tool(
             'search_code',
-            t('tool.searchCode'),
+            t('tool.searchCode', { budget: cfg.search.budget }),
             {
               query: z.string().min(2).max(500).describe(t('tool.searchCode.query')),
               repo: z.string().max(400).nullish().describe(t('tool.searchCode.repo')),
@@ -3786,11 +3800,13 @@ export class SessionManager extends EventEmitter {
             (a) => run(() => searched('search_code', search.code(a.repo || s.cwd, { query: a.query, k: a.k ?? undefined, expand: a.expand === true, budget: a.budget ?? undefined, under: a.path ?? undefined }))),
           ),
           tool('where_is', t('tool.whereIs'), { name: z.string().min(2).max(200).describe(t('tool.whereIs.name')) }, (a) => run(() => searched('where_is', search.where(s.cwd, a.name)))),
-          tool('search_memory', t('tool.searchMemory'), { query: z.string().min(2).max(500).describe(t('tool.searchCode.query')), k: z.number().int().min(1).max(20).nullish().describe(t('tool.searchCode.k')) }, (a) =>
+          tool('search_memory', t('tool.searchMemory'), { query: z.string().min(2).max(500).describe(t('tool.searchMemory.query')), k: z.number().int().min(1).max(20).nullish().describe(t('tool.searchMemory.k')) }, (a) =>
             run(() => search.memory(role === 'worker' ? s.name : 'master', this.memoryDocs(s), { query: a.query, k: a.k ?? undefined })),
           ),
         ]
       : [];
+    // Whole for a conversation that had it so from its start; the others find it with the tool search.
+    if (searchShown) for (const def of searchTools) if (def.name === 'search_code') def.alwaysLoad = true;
     if (searchTools.length) this.searchers.add(s);
     else this.searchers.delete(s);
     if (role === 'worker') {
@@ -5369,6 +5385,7 @@ export class SessionManager extends EventEmitter {
       fallbackMark: 0,
       fallbackModel: '',
       convs: {},
+      searchShown: [],
       fallbackPending: null,
       backNote: '',
       userAccount: false,
@@ -5501,6 +5518,7 @@ export class SessionManager extends EventEmitter {
       fallbackMark: s.fallbackMark,
       fallbackModel: s.fallbackModel,
       convs: s.convs,
+      searchShown: s.searchShown,
       procs: s.procs,
       reportTo: s.reportTo,
       remoteRun: s.remoteRun,

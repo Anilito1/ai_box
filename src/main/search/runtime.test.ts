@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { SEARCH_DEFAULTS } from '../../shared/search';
-import { SearchClient } from './client';
+import { SearchClient, searchShownFor } from './client';
 import { Engine } from './engine';
 import { modelOf } from './models';
 import { misplaced, queryEngine } from './service';
@@ -64,6 +64,37 @@ test('the graphics device is listed once, kept on disk, and listed again when a 
     delete process.env.FAKE_DEVICE;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a folder of a listed repo, or of a worktree made from it, is indexed; another folder is not', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aibox-family-'));
+  try {
+    const repo = join(dir, 'claude-hub');
+    mkdirSync(join(repo, '.git', 'worktrees', 'side'), { recursive: true });
+    mkdirSync(join(repo, 'src', 'main'), { recursive: true });
+    const side = join(dir, 'claude-hub-side');
+    mkdirSync(join(side, 'src'), { recursive: true });
+    writeFileSync(join(side, '.git'), `gitdir: ${join(repo, '.git', 'worktrees', 'side')}\n`);
+    writeFileSync(join(repo, '.git', 'worktrees', 'side', 'commondir'), '../..\n');
+    const elsewhere = join(dir, 'notes');
+    mkdirSync(elsewhere);
+    const client = new SearchClient({ dataDir: dir, hostScript: '', workerScript: '', settings: () => ({ ...SEARCH_DEFAULTS, enabled: true, repos: [repo] }), env: () => ({}) });
+    assert.equal(client.indexed(join(repo, 'src', 'main')), true);
+    assert.equal(client.indexed(join(side, 'src')), true);
+    assert.equal(client.indexed(elsewhere), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('search_code is shown whole to a new conversation in an indexed folder, and a resumed one keeps what it had', () => {
+  assert.equal(searchShownFor('c1', false, [], () => true), true);
+  assert.equal(searchShownFor('c1', false, ['c0'], () => false), false);
+  // Started before the tool was shown, or in a folder indexed since: it stays behind the tool search.
+  assert.equal(searchShownFor('c1', true, [], () => true), false);
+  assert.equal(searchShownFor('c1', true, ['c0'], () => true), false);
+  // Started with it: kept, even if the folder left the list since.
+  assert.equal(searchShownFor('c1', true, ['c0', 'c1'], () => false), true);
 });
 
 /** A stand-in for search-host.mjs: writes down each call and answers `warm` with whether the folder is read. */

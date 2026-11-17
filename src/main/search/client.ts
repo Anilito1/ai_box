@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import type { SearchSettings, SearchState } from '../../shared/search';
+import { repoOf, samePath } from '../repos';
 import type { HostCall, HostInit, HostReply, HostRequest } from './host';
 import type { Doc } from './indexer';
 import type { SearchQuery } from './service';
@@ -20,6 +21,15 @@ const WARM_EVERY_MS = 60_000;
 /** …and one outside the listed repos, no sooner than this. */
 const NOT_READ_MS = 15 * 60_000;
 const NOTHING: SearchState = { installed: false, installing: null, error: '', loaded: { embed: false, rerank: false, gpu: false }, sizeMb: 0, models: [], repos: [] };
+
+/**
+ * Whether a conversation gets search_code whole (not behind Claude Code's tool search). A new one gets it
+ * when its folder is indexed; a resumed one keeps what it started with, whatever changed since: the tools head the
+ * prompt, and a tool that appears or goes under a resumed conversation makes it write its whole cache again.
+ */
+export function searchShownFor(conversation: string, resume: boolean, shown: string[], indexed: () => boolean): boolean {
+  return resume ? shown.includes(conversation) : indexed();
+}
 
 /**
  * The app's side of the local search: it starts the search process for a request and talks to it. Off, the feature
@@ -90,6 +100,13 @@ export class SearchClient {
 
   install(): Promise<string> {
     return this.call({ method: 'install', args: [] });
+  }
+
+  /** The folder is in a repo of the user's list, or one of its worktrees: read from the files, nothing started. */
+  indexed(folder: string): boolean {
+    const { enabled, repos } = this.opts.settings();
+    const repo = enabled ? repoOf(folder) : null;
+    return repo !== null && repos.some((r) => samePath(r, repo.main) || samePath(r, repo.checkout));
   }
 
   /**

@@ -406,6 +406,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       scratchRoot: join(this.dataDir, 'scratch'),
       search: {
         enabled: () => this.cfg.search.enabled,
+        indexed: (folder) => this.search.indexed(folder),
         warm: (folder) => this.search.warm(folder),
         code: (folder, q) => this.search.searchCode(folder, q),
         memory: (scope, docs, q) => this.search.searchMemory(scope, docs, q),

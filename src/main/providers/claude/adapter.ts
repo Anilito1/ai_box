@@ -192,7 +192,7 @@ export const claudeAdapter: ProviderAdapter = {
           name: 'hub',
           version: '0.6.0',
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tools: spec.tools.map((def) => tool(def.name, def.description, def.shape, def.handler as any)),
+          tools: spec.tools.map((def) => tool(def.name, def.description, def.shape, def.handler as any, def.alwaysLoad ? { alwaysLoad: true } : undefined)),
         }),
       },
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
