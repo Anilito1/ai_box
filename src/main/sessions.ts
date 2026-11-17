@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { ContextWindows } from '../shared/contextWindow';
-import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
+import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type MissionEvent, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { pruneFolders } from '../shared/teamFolders';
 import { resolveTopicRepo } from '../shared/topicGroups';
@@ -30,11 +30,14 @@ import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './ba
 import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
 import { memoryTopicOf, TopicMemory, type Provenance } from './topicMemory';
+import { git } from './git';
 import { HookFailures } from './hookFailures';
 import { searchShownFor } from './search/client';
 import type { Doc } from './search/indexer';
 import type { SearchQuery } from './search/service';
 import { SearchTelemetry } from './search/telemetry';
+import { fetchRemote } from './scm';
+import { announcedCommits } from '../shared/pushCheck';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -641,6 +644,8 @@ export class SessionManager extends EventEmitter {
   private readonly hookFailures = new HookFailures();
   /** Per session and topic, the memory version and event it last saw: what an omitted version or covered_event means. */
   private readonly memorySeen = new Map<string, { version: number; event: number }>();
+  /** Per worker, its current mission (missions log) and the tool calls and failures of its turn in progress. */
+  private readonly missions = new Map<string, { id: string; tools: number; errors: number; since: number }>();
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -662,6 +667,8 @@ export class SessionManager extends EventEmitter {
     this.attachDir = join(opts.dataDir, 'attachments');
     this.contextMemory = new TopicMemory(join(opts.dataDir, 'context-memory.sqlite'));
     this.restore();
+    // Each session's current mission, from the log: a restart keeps adding its turns to it.
+    for (const [id, mission] of opts.costLog.lastMissions?.() ?? []) if (this.sessions.has(id)) this.missions.set(id, { id: mission, tools: 0, errors: 0, since: 0 });
     this.syncTeam();
     // The figure follows the user's other uses of the account too (a terminal, claude.ai): asked now and then, turn or not.
     setInterval(() => this.pollUsage(), USAGE_POLL_MS).unref();
@@ -829,6 +836,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
+    this.missions.delete(id);
     s.subagentTails.stop();
     if (!s.instanceOf) this.dropFromGroups(s.name);
     this.changed();
@@ -2641,6 +2649,11 @@ export class SessionManager extends EventEmitter {
         // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
         if (!ev.error) s.limit = null;
         this.markBusy(s, true);
+        const mission = this.missions.get(s.id);
+        if (mission) {
+          mission.since ||= Date.now();
+          mission.tools += ev.blocks.filter((b) => b.type === 'tool_use').length;
+        }
         // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
         const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
@@ -2710,6 +2723,8 @@ export class SessionManager extends EventEmitter {
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
           const isError = b.is_error === true;
+          const mission = isError ? this.missions.get(s.id) : undefined;
+          if (mission) mission.errors++;
           this.upsert(s, { ...item, result, isError });
           const outcome = item.name === 'Bash' || item.name === 'PowerShell' ? commandOutcome(item.detail, isError, result) : null;
           if (outcome) this.event(s, outcome);
@@ -3020,11 +3035,15 @@ export class SessionManager extends EventEmitter {
     if (harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'gemini') s.geminiUsage = totals;
     const at = Date.now();
     const role = this.costRole(s);
+    // What the turn did, for the missions in the cost panel: counted since the last turn, then started over.
+    const m = this.missions.get(s.id);
+    const work = { ...(m ? { mission: m.id, tools: m.tools, errors: m.errors, ...(m.since ? { ms: at - m.since } : {}) } : {}), ...(s.effort ? { effort: s.effort } : {}) };
+    if (m) Object.assign(m, { tools: 0, errors: 0, since: 0 });
     void (prev ? Promise.resolve(prev) : s.usageBase).then((before) => {
       if (before === 'unknown') return;
       const models = turnDelta(before, totals);
       if (!models) return;
-      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '' });
+      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '', ...work });
       if (!s.metrics) return;
       const costBefore = s.metrics.costUsd;
       s.metrics.costUsd += sumUsage(models).cost;
@@ -4138,6 +4157,7 @@ export class SessionManager extends EventEmitter {
     const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
     if (plan && byHub) this.install(s, plan);
     void this.launch(s, false, this.missionPrompt(s, made?.stale));
+    this.openMission(s, 'start', post?.model ? 'post' : args.model ? 'master' : 'auto');
 
     // Other workers of the same repo, in any of its checkouts: worth naming in the briefs.
     const repoKey = (dir: string) => (repoOf(dir)?.main ?? resolve(dir)).toLowerCase();
@@ -4213,6 +4233,7 @@ export class SessionManager extends EventEmitter {
     if (newMission) s.mission = message;
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
+    this.openMission(s, newMission ? 'start' : 'follow', s.userModel ? 'user' : this.postOf(s)?.model ? 'post' : args.model ? 'master' : 'auto');
     let ultracodeNote = '';
     if (args.ultracode != null && args.ultracode !== s.ultracode) {
       ultracodeNote = s.userUltracode ? t('ultracode.locked', { name: s.name }) : this.setUltracode(s.id, args.ultracode, false);
@@ -4238,6 +4259,17 @@ export class SessionManager extends EventEmitter {
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
     return [state, ...runs, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
+  }
+
+  /**
+   * A mission handed to a worker: a new one (spawn_worker, or a post given work while it had none), or more work on its
+   * current one, a relaunch. Logged for the cost panel, which adds up its turns.
+   */
+  private openMission(s: Session, kind: MissionEvent['kind'], by: MissionEvent['by']): void {
+    const current = kind === 'follow' ? this.missions.get(s.id) : undefined;
+    const id = current?.id ?? `m-${randomUUID().slice(0, 8)}`;
+    if (!current) this.missions.set(s.id, { id, tools: 0, errors: 0, since: 0 });
+    this.opts.costLog.mission?.({ at: Date.now(), mission: id, id: s.id, name: s.name, kind: current ? 'follow' : 'start', model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '', by });
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
@@ -4745,7 +4777,33 @@ export class SessionManager extends EventEmitter {
       shown: text,
       ...(topic ? { topic: topic.id } : {}),
     });
+    // Commits the report says are pushed are checked on the remote afterwards (a few seconds): only a claim that does
+    // not hold reaches the master, as a hub note of its own, to whatever master session runs then.
+    const shas = announcedCommits(text);
+    if (shas.length > 0) {
+      void this.pushCheck(s, shas)
+        .then((missing) => {
+          const now = this.sessions.get(MASTER_ID);
+          if (!missing || !now || this.quitting) return;
+          this.deliver(now, { text: `${tags().hub}\n<hub-note>\n${missing}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`, images: [], from: 'hub', shown: missing, ...(topic ? { topic: topic.id } : {}) });
+        })
+        .catch(() => undefined); // The check could not run (offline, no remote): nothing is claimed either way.
+    }
     return t('master.delivered');
+  }
+
+  /**
+   * The commits a report says are pushed that no remote branch holds (fetched first, the hub's sign-in, no hook): what
+   * the master is told with the report. Empty when all are there, or when the check cannot run (no remote, offline).
+   */
+  private async pushCheck(s: Session, shas: string[]): Promise<string> {
+    if (!(await fetchRemote(s.cwd, { quiet: true, timeout: 20_000 }))) return '';
+    const missing: string[] = [];
+    for (const sha of shas) {
+      const held = await git(s.cwd, ['branch', '-r', '--contains', sha], { hooks: false }).catch(() => null);
+      if (held !== null && !held.trim()) missing.push(sha);
+    }
+    return missing.length ? t('hub.pushUnverified', { list: missing.join(', ') }) : '';
   }
 
   /** A worker writes to another session (the master, or a worker) through the hub, as Claude Code's SendMessage does. */

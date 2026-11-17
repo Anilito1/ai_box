@@ -1138,7 +1138,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       if (!ok(from) || !ok(to) || from >= to) throw new Error(t('cost.badRange'));
       // Turns logged before their repo was kept: the repo of their session, when it is still known.
       const records = (await this.costLog.read(from, to)).map((r) => (r.repo !== undefined ? r : { ...r, repo: mgr.costRepoOf(r.id) ?? '' }));
-      return { records, since: this.costLog.since };
+      return { records, since: this.costLog.since, missions: await this.costLog.readMissions(from, to) };
     });
     handle('repo:graph', (path, filter, limit) => {
       const c = checkout(path);

@@ -1,13 +1,32 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { test } from 'node:test';
 import type { ElectronApplication } from 'playwright-core';
 import type { HubApi } from '../shared/types';
 
-test('final-message local links use the real preload/IPC with workspace validation', { timeout: 60_000 }, async () => {
+/** Its own Electron, always ended: closed if it answers within 5 s, else its process tree killed by the PID it got. */
+async function end(app: ElectronApplication | undefined): Promise<void> {
+  if (!app) return;
+  const proc = app.process();
+  await Promise.race([app.close().catch(() => undefined), new Promise((r) => setTimeout(r, 5_000))]);
+  if (proc.exitCode !== null || proc.signalCode !== null || !proc.pid) return;
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/F', '/T', '/PID', String(proc.pid)], { stdio: 'ignore' });
+    else proc.kill('SIGKILL');
+  } catch {
+    // Already gone between the check and the kill.
+  }
+}
+
+/** The test body's own deadline, under node:test's: a stuck step fails here, and the teardown still runs. */
+const within = <T>(ms: number, work: Promise<T>) =>
+  Promise.race([work, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`UI test stuck for ${ms / 1000} s`)), ms).unref())]);
+
+test('final-message local links use the real preload/IPC with workspace validation', { timeout: 120_000 }, async () => {
   const root = resolve('.');
   const load = createRequire(join(root, 'package.json'));
   const data = mkdtempSync(join(tmpdir(), 'hub-files-ui-'));
@@ -22,8 +41,11 @@ test('final-message local links use the real preload/IPC with workspace validati
   const env = { ...process.env, HOME: data, CODEX_HOME: join(data, 'codex'), CLAUDE_CONFIG_DIR: join(data, 'claude'), AI_BOX_REBUILT: '1' } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE;
   let app: ElectronApplication | undefined;
+  let launching: Promise<ElectronApplication> | undefined;
   try {
-    app = await (load('playwright-core') as typeof import('playwright-core'))._electron.launch({ executablePath: load('electron') as unknown as string, args: ['scripts/ui-entry.cjs', `--user-data-dir=${data}`], cwd: root, env, timeout: 30_000 });
+    await within(90_000, (async () => {
+    launching = (load('playwright-core') as typeof import('playwright-core'))._electron.launch({ executablePath: load('electron') as unknown as string, args: ['scripts/ui-entry.cjs', `--user-data-dir=${data}`], cwd: root, env, timeout: 30_000 });
+    app = await launching;
     const page = await app.firstWindow();
     page.setDefaultTimeout(10_000);
     await page.waitForSelector('.composer-input');
@@ -61,7 +83,7 @@ test('final-message local links use the real preload/IPC with workspace validati
     assert.equal(calls.length, 8);
     assert.deepEqual(calls.map((c) => c[0]), ['open', 'open', 'open', 'open', 'open', 'reveal', 'open', 'reveal']);
     assert.deepEqual(calls.slice(-2).map((c) => c[1]), [realpathSync(correction), realpathSync(correction)]);
-    assert.ok(calls.every((c) => c[1].startsWith(realpathSync(workspace) + '/')));
+    assert.ok(calls.every((c) => c[1].startsWith(realpathSync(workspace) + sep)));
     // A foreign sender frame cannot invoke the registered secure handler, even with a valid workspace path.
     const untrusted = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
       const handler = (ipcMain as unknown as { _invokeHandlers: Map<string, (e: unknown, ...args: unknown[]) => unknown> })._invokeHandlers.get('session:open-file')!;
@@ -76,8 +98,11 @@ test('final-message local links use the real preload/IPC with workspace validati
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('hub:items', 'master', [{ id: 'missing-final', kind: 'assistant', live: false, text: '[Supprimé](gone.pdf)' }], true));
     await page.locator('.msg-assistant a').click();
     await page.getByText('Ce fichier ou dossier n’existe plus.', { exact: true }).waitFor();
+    })());
   } finally {
-    await app?.close();
-    rmSync(data, { recursive: true, force: true });
+    // Stuck before the launch answered: the app it is still starting is ended too, once it answers (30 s at most).
+    await end(app ?? (await launching?.catch(() => undefined)));
+    // Its helper processes may hold the data folder a moment after it ends (Windows).
+    rmSync(data, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });

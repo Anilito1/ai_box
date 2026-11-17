@@ -5,13 +5,18 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { CodexClient } from './client';
 
-function fake(script: string, run: (client: CodexClient, exits: number[]) => Promise<void>) {
+/** `node`: the same server for Windows, which cannot run a shell script: node runs it as `app-server`, the client's first argument. */
+function fake(script: string, run: (client: CodexClient, exits: number[]) => Promise<void>, node?: string) {
   return async () => {
     const dir = mkdtempSync(join(tmpdir(), 'codex-client-'));
-    const executable = join(dir, 'codex');
-    writeFileSync(executable, `#!/bin/sh\n${script}\n`);
-    chmodSync(executable, 0o755);
-    const client = new CodexClient({ executable, env: { PATH: process.env.PATH ?? '' }, version: 'test' });
+    const windows = process.platform === 'win32' && node !== undefined;
+    const executable = windows ? process.execPath : join(dir, 'codex');
+    if (windows) writeFileSync(join(dir, 'app-server'), node);
+    else {
+      writeFileSync(executable, `#!/bin/sh\n${script}\n`);
+      chmodSync(executable, 0o755);
+    }
+    const client = new CodexClient({ executable, cwd: dir, env: { PATH: process.env.PATH ?? '' }, version: 'test' });
     const exits: number[] = [];
     client.onExit = () => exits.push(1);
     const uncaught: Error[] = [];
@@ -32,7 +37,7 @@ function fake(script: string, run: (client: CodexClient, exits: number[]) => Pro
 test('a server that exits before the handshake rejects start() with its message', fake('echo "not signed in" >&2; exit 1', async (client, exits) => {
   await assert.rejects(client.start(), /not signed in/);
   assert.equal(exits.length, 1);
-}));
+}, "process.stderr.write('not signed in\\n'); process.exit(1);"));
 
 test('a broken pipe under a write rejects start() instead of an uncaught EPIPE', fake('cat >/dev/null', async (client, exits) => {
   const started = client.start();

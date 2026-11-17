@@ -4,7 +4,7 @@ import { test } from 'node:test';
 // The periods follow the computer's time zone: these tests pin one with a change of time (25 Oct 2026, 03:00 → 02:00).
 process.env.TZ = 'Europe/Paris';
 
-const { decodeRecord, encodeRecord, modelName, periodRange, summarize, totalsOf, turnDelta } = await import('./costs');
+const { decodeMission, decodeRecord, encodeMission, encodeRecord, missionRows, modelName, periodRange, summarize, totalsOf, turnDelta } = await import('./costs');
 type TurnRecord = import('./costs').TurnRecord;
 
 const u = (cost: number, input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({ cost, input, output, cacheRead, cacheWrite });
@@ -130,4 +130,16 @@ test('modelName', () => {
   assert.equal(modelName('claude-sonnet-4-5-20250929[1m]'), 'Sonnet 4.5 (1M)');
   assert.equal(modelName('claude-haiku-4-20250101'), 'Haiku 4');
   assert.equal(modelName('gpt-x'), 'gpt-x');
+});
+test('a turn keeps its mission, effort, length and tool counts; a mission adds up its turns and relaunches', () => {
+  const usage = (cost: number) => ({ cost, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  const turn = { at: 10, id: 'w', name: 'hub-w', role: 'worker' as const, models: { a: usage(1.5) }, mission: 'm-1', effort: 'high', ms: 60_000, tools: 4, errors: 1 };
+  assert.deepEqual(decodeRecord(encodeRecord(turn)), turn);
+  const old = decodeRecord(encodeRecord({ at: 1, id: 'w', name: 'hub-w', role: 'worker', models: { a: usage(1) } }));
+  assert.equal(old?.mission, undefined); // turns logged before missions
+  const ev = (at: number, kind: 'start' | 'follow') => ({ at, mission: 'm-1', id: 'w', name: 'hub-w', kind, model: 'sonnet', effort: 'high', by: 'master' as const });
+  assert.deepEqual(decodeMission(encodeMission(ev(5, 'start'))), ev(5, 'start'));
+  const rows = missionRows([turn, { ...turn, at: 20, models: { a: usage(0.5) }, errors: 0 }, { ...turn, mission: 'm-other' }], [ev(5, 'start'), ev(15, 'follow')]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ cost: rows[0].cost, turns: rows[0].turns, follows: rows[0].follows, errors: rows[0].errors, tools: rows[0].tools, by: rows[0].by }, { cost: 2, turns: 2, follows: 1, errors: 1, tools: 8, by: 'master' });
 });

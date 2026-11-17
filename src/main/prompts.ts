@@ -257,12 +257,14 @@ Tu choisis le modèle et l'effort de chaque mission (ponctuel, ou permanent en a
 Niveau → modèle · effort :
 ${gridText(cfg, l)}
 - Ponctuel : passe \`model\` et \`effort\` à \`spawn_worker\`. Permanent en auto : passe-les à \`message_worker\` avec la mission ; sans eux, il garde ceux de sa mission précédente.
-- Au moindre doute sur le risque prod ou la sécurité, monte d'un niveau ; sinon prends le plus bas qui convient.
+- Monte d'un niveau pour un risque prod ou sécurité réel, pas par simple prudence ; sinon prends le plus bas qui convient.
+- Analyse, audit en lecture, rapport : Sonnet · high, même long ; Opus seulement s'il couvre plusieurs repos ou touche la sécurité.
+- Fable : seulement quand l'utilisateur le demande pour cette mission.
 - Effort par défaut : medium. high est réservé au code standard ou difficile et à la sécurité.
-- Poste en auto : Sonnet · medium pour l'analyse et les rapports, Sonnet · high pour le code courant ; Opus pour la conception, la sécurité critique et l'UI.
+- Poste en auto : Sonnet · high pour l'analyse, les rapports et le code courant ; Opus pour la conception, la sécurité critique et l'UI.
 - Annonce ton choix en une ligne quand tu délègues, ex. « → backend · opus / high : cause inconnue, prod touchée ».
 - Un worker qui patine (deux échecs, boucle, rapport faible) : envoie-lui la suite un niveau plus haut. Suite simple d'une mission difficile : redescends.
-- Changer de modèle ou d'effort vide le cache de sa conversation : pour un permanent, ne change que si le niveau change.
+- Changer de modèle fait relire toute sa conversation sans cache ; changer d'effort, non. Sur un worker au contexte déjà grand, garde son modèle et ajuste l'effort.
 - Le choix de l'utilisateur prime : un modèle ou un effort fixé sur un poste, ou choisi à la main sur un worker, est gardé ; le hub te le dit.
 - ${allowedText(cfg, l)}`;
   }
@@ -277,12 +279,14 @@ You pick the model and effort of each mission (ad-hoc worker, or permanent one i
 Level → model · effort:
 ${gridText(cfg, l)}
 - Ad-hoc worker: pass \`model\` and \`effort\` to \`spawn_worker\`. Permanent worker in auto: pass them to \`message_worker\` with the mission; without them, it keeps those of its previous mission.
-- At the slightest doubt about production risk or security, go one level up; otherwise take the lowest level that fits.
+- Go one level up for a real production or security risk, not out of mere caution; otherwise take the lowest level that fits.
+- Analysis, read-only audit, report: Sonnet · high, even a long one; Opus only when it spans several repos or touches security.
+- Fable: only when the user asks for it for that mission.
 - Default effort: medium. high is reserved for standard or hard code and for security.
-- Post in auto: Sonnet · medium for analysis and reports, Sonnet · high for routine code; Opus for design, critical security and UI.
+- Post in auto: Sonnet · high for analysis, reports and routine code; Opus for design, critical security and UI.
 - Announce your choice in one line when you delegate, e.g. "→ backend · opus / high: unknown cause, production touched".
 - A worker that struggles (two failures, a loop, a weak report): send it the follow-up one level higher. A simple follow-up of a hard mission: go back down.
-- Changing a model or effort empties its conversation's cache: for a permanent worker, only change when the level changes.
+- Changing a model makes its whole conversation reread without cache; changing effort does not. On a worker whose context is already large, keep its model and adjust the effort.
 - The user's choice comes first: a model or effort set on a post, or picked by hand on a worker, is kept; the hub tells you.
 - ${allowedText(cfg, l)}`;
 }

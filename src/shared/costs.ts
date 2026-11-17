@@ -30,6 +30,29 @@ export interface TurnRecord {
    * logged before it was kept.
    */
   repo?: string;
+  /** The mission the turn belongs to (missions log), when the hub knows it. */
+  mission?: string;
+  /** Effort it ran at, its length from the start of the work to the end of the turn, its tool calls and failed ones. */
+  effort?: string;
+  ms?: number;
+  tools?: number;
+  errors?: number;
+}
+
+/**
+ * A mission as the hub hands it out: a worker's first task (`start`) or more work on the same one (`follow`, a
+ * relaunch). `by`: who chose its model, the user (on the worker), its post, the master, or nobody (it kept its own).
+ */
+export interface MissionEvent {
+  at: number;
+  mission: string;
+  /** Hub session id and name of the worker. */
+  id: string;
+  name: string;
+  kind: 'start' | 'follow';
+  model: string;
+  effort: string;
+  by: 'user' | 'post' | 'master' | 'auto';
 }
 
 export const ZERO: Usage = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -84,7 +107,8 @@ export function turnDelta(prev: Totals | null, cur: Totals): Record<string, Usag
 /** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo}` */
 export function encodeRecord(r: TurnRecord): string {
   const m = Object.fromEntries(Object.entries(r.models).map(([model, u]) => [model, FIELDS.map((f) => (f === 'cost' ? +u[f].toFixed(8) : u[f]))]));
-  return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }) });
+  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors };
+  return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) });
 }
 
 /** A line written by encodeRecord(), or null for anything else (a torn last line, a hand-edited file). */
@@ -103,7 +127,67 @@ export function decodeRecord(line: string): TurnRecord | null {
     if (!Array.isArray(arr) || arr.length !== FIELDS.length) return null;
     models[model] = Object.fromEntries(FIELDS.map((f, i) => [f, num(arr[i])])) as unknown as Usage;
   }
-  return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}) };
+  const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x) };
+  return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) };
+}
+
+const BY: MissionEvent['by'][] = ['user', 'post', 'master', 'auto'];
+
+export const encodeMission = (e: MissionEvent) => JSON.stringify({ t: e.at, mi: e.mission, id: e.id, n: e.name, k: e.kind, m: e.model, e: e.effort, by: e.by });
+
+/** A line written by encodeMission(), or null. */
+export function decodeMission(line: string): MissionEvent | null {
+  let o: Record<string, unknown> | null;
+  try {
+    o = JSON.parse(line) as Record<string, unknown> | null;
+  } catch {
+    return null;
+  }
+  if (!o || typeof o.t !== 'number' || typeof o.mi !== 'string' || typeof o.id !== 'string' || typeof o.n !== 'string') return null;
+  if ((o.k !== 'start' && o.k !== 'follow') || !BY.includes(o.by as MissionEvent['by'])) return null;
+  return { at: o.t, mission: o.mi, id: o.id, name: o.n, kind: o.k, model: String(o.m ?? ''), effort: String(o.e ?? ''), by: o.by as MissionEvent['by'] };
+}
+
+/** One mission in the cost panel: who ran it, how, what it cost with its subagents, and how it went. */
+export interface MissionRow {
+  mission: string;
+  name: string;
+  model: string;
+  effort: string;
+  by: MissionEvent['by'];
+  cost: number;
+  turns: number;
+  /** More work sent after the first task. */
+  follows: number;
+  ms: number;
+  tools: number;
+  errors: number;
+  lastAt: number;
+}
+
+/** The missions of a period, costliest first: their turns (subagents included in a turn's cost) and their events. */
+export function missionRows(records: TurnRecord[], events: MissionEvent[]): MissionRow[] {
+  const rows = new Map<string, MissionRow>();
+  for (const e of [...events].sort((a, b) => a.at - b.at)) {
+    const row = rows.get(e.mission) ?? { mission: e.mission, name: e.name, model: e.model, effort: e.effort, by: e.by, cost: 0, turns: 0, follows: 0, ms: 0, tools: 0, errors: 0, lastAt: e.at };
+    if (e.kind === 'follow') row.follows++;
+    if (e.model) row.model = e.model;
+    if (e.effort) row.effort = e.effort;
+    rows.set(e.mission, row);
+  }
+  for (const r of records) {
+    const row = r.mission ? rows.get(r.mission) : undefined;
+    if (!row) continue;
+    row.cost += sumUsage(r.models).cost;
+    row.turns++;
+    row.ms += r.ms ?? 0;
+    row.tools += r.tools ?? 0;
+    row.errors += r.errors ?? 0;
+    row.lastAt = Math.max(row.lastAt, r.at);
+    if (!row.effort && r.effort) row.effort = r.effort;
+  }
+  return [...rows.values()].filter((r) => r.turns > 0).sort((a, b) => b.cost - a.cost);
 }
 
 // ---------- periods, in the computer's own time zone ----------
