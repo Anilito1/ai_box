@@ -7,7 +7,7 @@ import { SEARCH_DEFAULTS } from '../../shared/search';
 import { SearchClient } from './client';
 import { Engine } from './engine';
 import { modelOf } from './models';
-import { queryEngine } from './service';
+import { misplaced, queryEngine } from './service';
 
 test('a question goes to the model building an index when it is on the card or idle, else to its own process', () => {
   assert.equal(queryEngine({ gpu: true, busy: true }, false), 'indexer');
@@ -16,6 +16,15 @@ test('a question goes to the model building an index when it is on the card or i
   assert.equal(queryEngine({ gpu: false, busy: true }, true), 'asker');
   assert.equal(queryEngine({ gpu: false, busy: true }, false), 'start');
   assert.equal(queryEngine(null, false), 'start');
+});
+
+test('models kept warm leave a card another program works on, and come back to it once it is free', () => {
+  assert.deepEqual(misplaced(90, true, 'card', 'card'), ['asker', 'reranker']);
+  assert.deepEqual(misplaced(90, true, 'processor', null), []);
+  assert.deepEqual(misplaced(5, true, 'processor', 'card'), ['asker']);
+  // No room for the model on the card: it stays on the processor.
+  assert.deepEqual(misplaced(5, false, 'processor', null), []);
+  assert.deepEqual(misplaced(5, true, 'card', 'card'), []);
 });
 
 /** A stand-in for search-worker.mjs: lists two devices, then says which one it found and which one it was given. */

@@ -77,6 +77,16 @@ export function queryEngine(indexer: { gpu: boolean; busy: boolean } | null, ask
   return askerRunning ? 'asker' : 'start';
 }
 
+/**
+ * The loaded models that should leave their place, to start again elsewhere at the next question: on the card while
+ * something else works there (a render, a game: `util` is then not ours, nothing of ours being busy); the questions'
+ * process on the processor while the card is free again with `room` for it.
+ */
+export function misplaced(util: number, room: boolean, asker: 'card' | 'processor' | null, reranker: 'card' | 'processor' | null): ('asker' | 'reranker')[] {
+  if (util >= GPU_BUSY) return [...(asker === 'card' ? ['asker' as const] : []), ...(reranker === 'card' ? ['reranker' as const] : [])];
+  return asker === 'processor' && room ? ['asker'] : [];
+}
+
 /** The first `dims` dimensions of a vector, at length 1 again. */
 export function shorten(vector: Float32Array, dims: number): Float32Array {
   if (vector.length <= dims) return vector;
@@ -301,6 +311,19 @@ export class SearchService {
     if (pick === 'indexer') return this.indexer!;
     if (pick === 'start') this.askOn = (this.rerankModel?.bytes ?? 0) <= BIG_MODEL && this.embedModel.bytes <= BIG_MODEL && (await this.cardFree(this.embedModel)) ? 'gpu' : 'cpu';
     return (this.asker ??= this.engine(this.embedModel, () => this.askOn, 'above'));
+  }
+
+  /** Models kept warm turn after turn would never move: see `misplaced`. Only between questions. */
+  private async rebalance(): Promise<void> {
+    const engines = [this.indexer, this.asker, this.reranker];
+    if (this.opts.settings().device !== 'auto' || engines.some((e) => e?.busy)) return;
+    const load = await gpuLoad();
+    if (!load) return;
+    const where = (e: Engine | null) => (e?.state.running ? (e.state.gpu ? 'card' : 'processor') : null);
+    const room = this.embedModel.bytes <= BIG_MODEL && load.freeMiB > vramNeed(this.embedModel);
+    const out = misplaced(load.util, room, where(this.asker), where(this.reranker));
+    if (out.includes('asker')) this.asker?.stop();
+    if (out.includes('reranker')) this.reranker?.stop();
   }
 
   /** The vector of a question. */
@@ -580,6 +603,7 @@ export class SearchService {
     if (found instanceof Error) throw found;
     const { tree, store } = found as Checkout & { store: SearchStore };
     if (store.stats(tree, this.embedModel.id).vectors === 0) return true;
+    await this.rebalance();
     // One after the other, as a search does: the reranker may need the card to itself.
     await (await this.asking()).embed(['warm']);
     await (await this.judge())?.('warm', ['up']);
