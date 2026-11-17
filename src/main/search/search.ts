@@ -23,6 +23,8 @@ export interface Stages {
   rerankChars?: number;
   /** The reranker only runs when the first and the fifth result by meaning are closer than this: an order already clear is kept. */
   rerankGap?: number;
+  /** The fusion's constant: lower, the first ranks of each list count more (60 when absent). */
+  rrfK?: number;
 }
 
 /** How many candidates each of the two searches gives to the fusion. */
@@ -170,7 +172,7 @@ export async function search(
       weights.push(1);
     }
   }
-  let ids = rrf(lists, weights);
+  let ids = rrf(lists, weights, stages.rrfK);
   const judged = new Map<number, number>();
   // An order by meaning that is already clear is kept: the reranker is for the close calls.
   const clear = stages.rerankGap !== undefined && near.length >= 5 && near[0].score - near[4].score >= stages.rerankGap;
@@ -188,6 +190,64 @@ export async function search(
     const rel = judged.get(id);
     return [{ ...c, score: rel ?? cosine.get(id) ?? 0, by: rel !== undefined ? 'reranker' : cosine.has(id) ? 'meaning' : 'words' }];
   });
+}
+
+/**
+ * How the stages are tuned, on the dev half of the questions of scripts/search-bench (docs/recherche-semantique.md);
+ * the test half is read once, at the end, with nothing tuned after.
+ */
+export const TUNING = {
+  /** A rank by exact words next to the same rank by meaning. */
+  lexicalWeight: 0.5,
+  /** The reranker reads this many candidates, this much of each. */
+  rerank: 10,
+  rerankChars: 800,
+  /** …and only when the first and fifth results by meaning are closer than this. */
+  rerankGap: 0.05,
+  /** Under these, the search says it found nothing sure instead of showing code. 0 answers always. */
+  minMeaning: 0,
+  minReranker: 0,
+  /** Definitions of the names a described behaviour holds, shown before what the search finds. */
+  pinned: 2,
+};
+export type Tuning = typeof TUNING;
+
+/** The stages of a search for a described behaviour, as tuned. */
+export const stagesOf = (vectors: boolean, rerank: boolean, tuning: Tuning = TUNING): Stages => ({ lexical: true, vectors, rerank: rerank ? tuning.rerank : 0, rerankChars: tuning.rerankChars, rerankGap: tuning.rerankGap, lexicalWeight: tuning.lexicalWeight });
+
+export interface Answer {
+  hits: Hit[];
+  /** A name or a path the index knows: no model was asked. */
+  known: boolean;
+  /** Nothing is close enough: the hits are leads only. */
+  unsure: boolean;
+  /** Files that import the names asked for. */
+  users: string[];
+}
+
+/**
+ * What `search_code` answers. A name that is defined or a file that exists comes from the index alone, with where
+ * the name is used; a described behaviour from `find` (the search by words and meaning), within the file or folder
+ * it names, after the definitions of the names it holds.
+ */
+export async function answer(store: SearchStore, tree: string, query: string, limit: number, under: string, find: (within: string) => Promise<Hit[]>, tuning: Tuning = TUNING): Promise<Answer> {
+  const route = routeOf(query);
+  const known = lookup(store, tree, route, limit, under);
+  if (route.kind !== 'concept' && known.length) {
+    const users = route.names.flatMap((n) => store.importers(tree, n)).filter((p, i, all) => all.indexOf(p) === i && !known.some((h) => h.path === p));
+    // Then where the name is used: other pieces that hold it, outside the definitions already shown. A path asks for nothing more.
+    const inside = (c: { path: string; start: number; end: number }) => known.some((h) => h.path === c.path && c.start >= h.start && c.end <= h.end);
+    const more = route.kind === 'symbol' && known.length < limit ? store.lexical(tree, ftsQuery(route.names.join(' ')), limit * 2, under).flatMap((id) => store.chunk(id) ?? []).filter((c) => c.kind !== 'outline' && !inside(c)).map((c): Hit => ({ ...c, score: 0, by: 'words' })) : [];
+    return { hits: [...known, ...more].slice(0, limit), known: true, unsure: false, users };
+  }
+  // In a described behaviour, a path says where to look and a name is a lead: neither takes the place of the search.
+  const file = known.find((h) => h.by === 'path')?.path ?? '';
+  const within = under || (file && route.paths.some((p) => file.endsWith(p)) ? file : (route.paths.find((p) => known.some((h) => h.by === 'path' && h.path.startsWith(p))) ?? ''));
+  const pinned = known.filter((h) => h.by === 'definition').slice(0, tuning.pinned);
+  const found = await find(within);
+  const best = found[0];
+  if (!pinned.length && best && ((best.by === 'meaning' && best.score < tuning.minMeaning) || (best.by === 'reranker' && best.score < tuning.minReranker))) return { hits: found, known: false, unsure: true, users: [] };
+  return { hits: [...pinned, ...found.filter((h) => !pinned.some((p) => p.id === h.id))].slice(0, limit), known: false, unsure: false, users: [] };
 }
 
 const tokens = (text: string): number => Math.ceil(text.length / 3.6);

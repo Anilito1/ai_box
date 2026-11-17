@@ -17,7 +17,7 @@ const opt = (name, fallback) => (rest.includes(name) ? rest[rest.indexOf(name) +
 const git = (...args) => execFileSync('git', ['-C', clone, ...args], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
 
 const CODE = /\.(?:[cm]?[jt]sx?|py|cs|sql|css|html|vue|go|rs)$/i;
-const NOT_AN_ANSWER = /(^|\/)(docs?|node_modules|dist|build|vendor|fixtures?|__tests__|tests?)\/|\.(test|spec)\.[a-z]+$|(^|\/)test[-_][^/]*$|\.min\.|\.d\.ts$|(^|\/)i18n\.ts$/i;
+const NOT_AN_ANSWER = /(^|\/)(docs?|node_modules|dist|build|vendor|fixtures?|__tests__|tests?)\/|[._](test|spec)\.[a-z]+$|(^|\/)test[-_][^/]*$|\.min\.|\.d\.ts$|(^|\/)i18n\.ts$/i;
 const tracked = new Set(git('ls-files').split('\n').filter(Boolean));
 /** Files someone would be sent to: code that still exists, not a test, a doc, a translation table or a bundle. */
 const answers = (paths) => [...new Set(paths)].filter((p) => tracked.has(p) && CODE.test(p) && !NOT_AN_ANSWER.test(p) && statSync(join(clone, p)).size < 400_000);

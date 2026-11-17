@@ -11,7 +11,7 @@ import { chunkFile, cutFile, MAX_LINES } from './chunker';
 import { pickDevice } from './engine';
 import { looksWritten, redact, skipReason } from './files';
 import { importRefs, infraOf, statusPaths, syncDocs, syncFiles, syncVectors, usesOf } from './indexer';
-import { formatHits, formatUnsure, ftsQuery, lookup, nearest, routeOf, rrf, search, type Hit } from './search';
+import { answer, formatHits, formatUnsure, ftsQuery, lookup, nearest, routeOf, rrf, search, TUNING, type Hit } from './search';
 import { lastDefinitions, shorten } from './service';
 import { identifierParts, quantize, SearchStore } from './store';
 import { rangesOf, SearchTelemetry, type SearchRecord } from './telemetry';
@@ -438,6 +438,33 @@ test('index: one writer at a time across processes, no hole while files are cut 
     b.close();
     rmSync(root, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('answer: a name from the index alone, a behaviour by the search after the definitions it names', async () => {
+  const store = new SearchStore(':memory:');
+  try {
+    const put = async (path: string, text: string, imports: { source: string; names: string[] }[] = []) => {
+      const { chunks, symbols } = await cutFile(path, text);
+      store.transaction(() => store.putFile('t', path, { size: text.length, mtime: 1, skipped: '' }, { chunks: chunks.map((c) => ({ ...c, hash: `${path}:${c.start}` })), symbols, imports }));
+    };
+    await put('src/billing.ts', 'export function makeInvoice(order: Order): Invoice {\n  return build(order);\n}\n');
+    await put('src/cart.ts', "import { makeInvoice } from './billing';\nexport function pay(cart: Cart): void {\n  makeInvoice(cart.order);\n}\n", [{ source: './billing', names: ['makeInvoice'] }]);
+    const cart = store.chunk(store.byPath('t', 'src/cart.ts', 1)[0])!;
+    const within: string[] = [];
+    const find = async (under: string) => (within.push(under), [{ ...cart, score: 0.2, by: 'meaning' as const }]);
+
+    const byName = await answer(store, 't', 'makeInvoice', 5, '', find);
+    assert.deepEqual([byName.known, byName.hits[0].symbol, byName.hits[0].by, byName.users, within], [true, 'makeInvoice', 'definition', ['src/cart.ts'], []]);
+    const byBehaviour = await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find);
+    assert.deepEqual([byBehaviour.known, byBehaviour.unsure, byBehaviour.hits.map((h) => h.by)], [false, false, ['definition', 'meaning']]);
+    // A file the question names is where the search looks; a weak best result is said to be unsure, unless a definition answers.
+    await answer(store, 't', 'how does src/cart.ts pay a cart and send the order', 5, '', find);
+    assert.equal(within.at(-1), 'src/cart.ts');
+    assert.ok((await answer(store, 't', 'how are refunds paid back to the customer', 5, '', find, { ...TUNING, minMeaning: 0.5 })).unsure);
+    assert.ok(!(await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find, { ...TUNING, minMeaning: 0.5 })).unsure);
+  } finally {
+    store.close();
   }
 });
 

@@ -8,7 +8,7 @@ import { userNpm } from '../providers/tools';
 import { Engine, gpuLoad, vramNeed } from './engine';
 import { syncDocs, syncFiles, syncVectors, type Doc } from './indexer';
 import { EMBED_MODEL, modelOf, RERANK_MODEL, type SearchModel } from './models';
-import { formatHits, formatUnsure, ftsQuery, lookup, routeOf, search, type Hit } from './search';
+import { answer, formatHits, formatUnsure, ftsQuery, search, stagesOf, type Hit } from './search';
 import { leafOf, SearchStore, type StoredSymbol, type VectorIndex } from './store';
 
 /** Pinned: the engine's binaries are the same files for everyone, and a new version is a change to test. */
@@ -34,22 +34,6 @@ const GPU_BUSY = 40;
 /** Past this size, a model is alone in memory: no second one beside it. */
 const BIG_MODEL = 1_500_000_000;
 
-/**
- * How the stages are tuned. Measured on the questions of scripts/search-bench (docs/recherche-semantique.md), on a
- * set kept apart from the one the results are read on.
- */
-export const TUNING = {
-  /** A rank by exact words next to the same rank by meaning. */
-  lexicalWeight: 0.5,
-  /** The reranker reads this many candidates, this much of each. */
-  rerank: 10,
-  rerankChars: 800,
-  /** …and only when the first and fifth results by meaning are closer than this. */
-  rerankGap: 0.05,
-  /** Under these, the search says it found nothing sure instead of showing code. 0 answers always. */
-  minMeaning: 0,
-  minReranker: 0,
-};
 
 export interface SearchQuery { query: string; k?: number; expand?: boolean; budget?: number; under?: string }
 interface Checkout { tree: string; family: string }
@@ -417,17 +401,9 @@ export class SearchService {
     const limit = Math.min(20, Math.max(1, q.k ?? (q.expand ? 3 : 5)));
     const budget = q.budget ?? this.opts.settings().budget;
     const under = (q.under ?? '').replace(/\\/g, '/').replace(/^\.?\//, '');
-    const route = routeOf(q.query);
-    const known = lookup(store, tree, route, limit, under);
-    // A name that is defined, a file that exists: the answer is known, no model is asked.
-    if (route.kind !== 'concept' && known.length) {
-      const pinned = known;
-      const users = route.names.flatMap((n) => store.importers(tree, n)).filter((p, i, all) => all.indexOf(p) === i && !pinned.some((h) => h.path === p));
-      // Then where the name is used: other pieces that hold it, outside the definitions already shown. A path asks for nothing more.
-      const inside = (c: { path: string; start: number; end: number }) => pinned.some((h) => h.path === c.path && c.start >= h.start && c.end <= h.end);
-      const more = route.kind === 'symbol' && pinned.length < limit ? store.lexical(tree, ftsQuery(route.names.join(' ')), limit * 2, under).flatMap((id) => store.chunk(id) ?? []).filter((c) => c.kind !== 'outline' && !inside(c)).map((c): Hit => ({ ...c, score: 0, by: 'words' })) : [];
-      return formatHits([...pinned, ...more].slice(0, limit), q.query, budget, q.expand === true) + (users.length ? `\n\nimported by: ${users.slice(0, 6).join(', ')}${users.length > 6 ? ` (+${users.length - 6})` : ''}` : '');
-    }
+    const found = await answer(store, tree, q.query, limit, under, (within) => this.queued(() => this.find(store, tree, q.query, limit, within, this.installed && stats.vectors > 0)));
+    // A name that is defined, a file that exists: the answer is known, no model was asked.
+    if (found.known) return formatHits(found.hits, q.query, budget, q.expand === true) + (found.users.length ? `\n\nimported by: ${found.users.slice(0, 6).join(', ')}${found.users.length > 6 ? ` (+${found.users.length - 6})` : ''}` : '');
     const left = stats.chunks - stats.vectors;
     const note = !this.installed
       ? '\n\n(The models are not installed: these results come from exact words only.)'
@@ -436,16 +412,7 @@ export class SearchService {
         : left > 0
           ? `\n\n(${left} of ${stats.chunks} pieces ${this.deferred.has(tree) ? 'wait for the graphics card to be free' : 'are still being read by the model'}: for them, only exact words count for now.)`
           : '';
-    // In a described behaviour, a path says where to look and a name is a lead: neither takes the place of the search.
-    const file = known.find((h) => h.by === 'path')?.path ?? '';
-    const within = under || (file && route.paths.some((p) => file.endsWith(p)) ? file : (route.paths.find((p) => known.some((h) => h.by === 'path' && h.path.startsWith(p))) ?? ''));
-    const pinned = known.filter((h) => h.by === 'definition').slice(0, 2);
-    const found = await this.queued(() => this.find(store, tree, q.query, limit, within, this.installed && stats.vectors > 0));
-    const best = found[0];
-    const unsure = !pinned.length && best && ((best.by === 'meaning' && best.score < TUNING.minMeaning) || (best.by === 'reranker' && best.score < TUNING.minReranker));
-    if (unsure) return formatUnsure(found) + note;
-    const hits = [...pinned, ...found.filter((h) => !pinned.some((p) => p.id === h.id))].slice(0, limit);
-    return formatHits(hits, q.query, budget, q.expand === true) + note;
+    return (found.unsure ? formatUnsure(found.hits) : formatHits(found.hits, q.query, budget, q.expand === true)) + note;
   }
 
   private async find(store: SearchStore, tree: string, query: string, limit: number, under: string, vectors: boolean): Promise<Hit[]> {
@@ -463,8 +430,7 @@ export class SearchService {
       return index;
     };
     const rerank = vectors ? await this.judge() : null;
-    const stages = { lexical: true, vectors, rerank: rerank ? TUNING.rerank : 0, rerankChars: TUNING.rerankChars, rerankGap: TUNING.rerankGap, lexicalWeight: TUNING.lexicalWeight };
-    return search(store, tree, model.id, query, limit, stages, { embedQuery: (text) => this.embedQuery(text), ...(rerank ? { rerank } : {}) }, under, vectorsOf);
+    return search(store, tree, model.id, query, limit, stagesOf(vectors, rerank !== null),{ embedQuery: (text) => this.embedQuery(text), ...(rerank ? { rerank } : {}) }, under, vectorsOf);
   }
 
   /**

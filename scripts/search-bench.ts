@@ -1,11 +1,12 @@
 // The measures behind docs/recherche-semantique.md. Everything it writes goes to the lab folder (AIBOX_SEARCH_LAB).
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Engine } from '../src/main/search/engine';
 import { syncFiles, syncVectors } from '../src/main/search/indexer';
 import { MODELS, modelOf, type SearchModel } from '../src/main/search/models';
-import { formatHits, formatUnsure, ftsQuery, lookup, routeOf, search, type Hit, type Stages } from '../src/main/search/search';
+import { answer, formatHits, formatUnsure, ftsQuery, lookup, routeOf, search, stagesOf, TUNING, type Hit, type Stages, type Tuning } from '../src/main/search/search';
 import { quantize, SearchStore, type VectorIndex } from '../src/main/search/store';
 
 const LAB = resolve(process.env.AIBOX_SEARCH_LAB ?? '.aibox/scratch/hub-ai-box/lab');
@@ -22,7 +23,7 @@ const TOP = 30;
  * A question and where its answer is. `expect` without lines is a file to find (questions drawn from commits and
  * missions); an empty `expect` is a question the repo has no answer to: the right result is to say so.
  */
-interface Question { repo: string; type: string; q: string; expect: { path: string; start?: number; end?: number; symbol?: string }[]; set?: 'dev' | 'test'; source?: string }
+interface Question { repo: string; type: string; q: string; expect: { path: string; start?: number; end?: number; symbol?: string }[]; set?: 'dev' | 'test'; source?: string; /** Why the question was taken out of the dev half (lab/questions/CORRECTIONS.md). */ drop?: string }
 
 const vramUsed = (): number => {
   try {
@@ -55,7 +56,7 @@ function questions(set = 'all'): Question[] {
       if (repo) all.push(...(JSON.parse(readFileSync(join(dir, file), 'utf8')) as Question[]));
     }
   }
-  return all.filter((q) => set === 'all' || (q.set ?? 'test') === set);
+  return all.filter((q) => !q.drop && (set === 'all' || (q.set ?? 'test') === set));
 }
 const median = (xs: number[]): number => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 
@@ -103,41 +104,71 @@ function truncated(index: VectorIndex, dims: number): VectorIndex {
   return { ids: index.ids, data, dims };
 }
 
-interface Config { name: string; stages: Stages; routed?: boolean; embed?: boolean; rerank?: boolean; /** Results that are a file's outline are dropped: what the outlines are worth. */ noOutline?: boolean }
+/**
+ * One row of the tables: how the app would answer (`answer`, the routing of search_code) with these stages and this
+ * tuning. `vec` rows skip the routing: what the model alone is worth.
+ */
+interface Config { name: string; lexical: boolean; vectors: boolean; rerank: boolean; tuning: Tuning; candidates?: number; rrfK?: number; routed: boolean; /** Results that are a file's outline are dropped: what the outlines are worth. */ noOutline?: boolean }
 
-/** What is compared. Each row differs from a neighbour by one thing, so the table says what that thing is worth. */
-function configs(tag: string, rerankId: string): Config[] {
-  const hybrid = { lexical: true, vectors: true, rerank: 0 };
-  const out: Config[] = [
-    { name: `vec ${tag}`, stages: { lexical: false, vectors: true, rerank: 0 }, embed: true },
-    { name: `vec ${tag} no-outline`, stages: { lexical: false, vectors: true, rerank: 0 }, embed: true, noOutline: true },
-    ...[1, 0.5, 0.25, 0.1].map((w) => ({ name: `bm25+vec ${tag} w${w}`, stages: { ...hybrid, lexicalWeight: w }, embed: true })),
-    { name: `routed ${tag} w0.5`, stages: { ...hybrid, lexicalWeight: 0.5 }, embed: true, routed: true },
-    { name: `routed ${tag} w0.25`, stages: { ...hybrid, lexicalWeight: 0.25 }, embed: true, routed: true },
-  ];
-  if (!rerankId) return out;
-  const r = (name: string, stages: Partial<Stages>, routed = false): Config => ({ name: `${name} ${tag} +${rerankId}`, stages: { ...hybrid, lexicalWeight: 0.5, ...stages }, embed: true, rerank: true, routed });
-  out.push(
-    r('rerank30x2000', { rerank: 30 }),
-    r('rerank10x800', { rerank: 10, rerankChars: 800 }),
-    r('rerank10x2000', { rerank: 10 }),
-    r('rerank10x800 gap0.05', { rerank: 10, rerankChars: 800, rerankGap: 0.05 }),
-    r('rerank10x800 gap0.1', { rerank: 10, rerankChars: 800, rerankGap: 0.1 }),
-    r('routed rerank10x800', { rerank: 10, rerankChars: 800 }, true),
-    r('vec-only rerank10x800', { rerank: 10, rerankChars: 800, lexical: false }),
-  );
-  return out;
+const app = (name: string, tuning: Partial<Tuning> = {}, more: Partial<Config> = {}): Config => ({ name, lexical: (tuning.lexicalWeight ?? TUNING.lexicalWeight) > 0, vectors: true, rerank: false, tuning: { ...TUNING, ...tuning }, routed: true, ...more });
+
+/**
+ * What is compared, by grid. Each row differs from a neighbour by one thing, so the table says what that thing is
+ * worth. `models`: one model against another; `fusion`: exact words next to meaning; `rerank`: when and how much the
+ * reranker reads; `final`: the rows read on the test half.
+ */
+function configs(grid: string, tag: string, rerankId: string): Config[] {
+  const r = rerankId ? ` +${rerankId}` : '';
+  const rr = (name: string, tuning: Partial<Tuning>, more: Partial<Config> = {}) => (rerankId ? [app(`${name} ${tag}${r}`, tuning, { rerank: true, ...more })] : []);
+  const vec: Config = { name: `vec ${tag}`, lexical: false, vectors: true, rerank: false, tuning: TUNING, routed: false };
+  if (grid === 'models') return [vec, app(`app ${tag} w0.5`, { lexicalWeight: 0.5 }), app(`app ${tag} w0.25`, { lexicalWeight: 0.25 }), ...rr('app rerank10x800', { rerankGap: Infinity })];
+  if (grid === 'fusion') {
+    return [
+      vec,
+      { ...vec, name: `vec ${tag} no-outline`, noOutline: true },
+      ...[0, 0.1, 0.25, 0.5, 1].map((w) => app(`app ${tag} w${w}`, { lexicalWeight: w })),
+      ...[0.25, 0.5].flatMap((w) => [10, 120].map((k) => app(`app ${tag} w${w} k${k}`, { lexicalWeight: w }, { rrfK: k }))),
+      ...[0.25, 0.5].map((w) => app(`app ${tag} w${w} c60`, { lexicalWeight: w }, { candidates: 60 })),
+    ];
+  }
+  if (grid === 'rerank') {
+    return [
+      ...rr('app rerank10x800', { rerankGap: Infinity }),
+      ...rr('app rerank10x800 gap0.05', { rerankGap: 0.05 }),
+      ...rr('app rerank10x800 gap0.1', { rerankGap: 0.1 }),
+      ...rr('app rerank5x800', { rerank: 5, rerankGap: Infinity }),
+      ...rr('app rerank20x800', { rerank: 20, rerankGap: Infinity }),
+      ...rr('app rerank10x1600', { rerankChars: 1600, rerankGap: Infinity }),
+      ...rr('app rerank30x2000', { rerank: 30, rerankChars: 2000, rerankGap: Infinity }),
+      ...rr('app rerank10x800 w0', { lexicalWeight: 0, rerankGap: Infinity }),
+    ];
+  }
+  if (grid === 'final') return [vec, app(`app ${tag}`), ...rr('app rerank', {})];
+  throw new Error(`Unknown grid ${grid}: models, fusion, rerank, final`);
 }
 
-/** The rows that are kept for the final reading, on the questions nothing was tuned on. */
-function finalConfigs(tag: string, rerankId: string): Config[] {
-  const all = configs(tag, rerankId);
-  const keep = [`vec ${tag}`, `bm25+vec ${tag} w1`, `bm25+vec ${tag} w0.25`, `routed ${tag} w0.25`, `rerank10x800 ${tag} +${rerankId}`, `rerank10x800 gap0.05 ${tag} +${rerankId}`, `routed rerank10x800 ${tag} +${rerankId}`, `rerank30x2000 ${tag} +${rerankId}`];
-  return all.filter((c) => keep.includes(c.name));
+/** Computed once per text, kept in the lab: the grids read the same query vectors and the same judgements again. */
+class Cache<T> {
+  private readonly map = new Map<string, T>();
+  constructor(private readonly file: string) {
+    if (!existsSync(file)) return;
+    for (const line of readFileSync(file, 'utf8').split('\n').filter(Boolean)) {
+      const { k, v } = JSON.parse(line) as { k: string; v: T };
+      this.map.set(k, v);
+    }
+  }
+  static key = (...parts: string[]): string => createHash('sha1').update(parts.join('\u0000')).digest('hex');
+  get(key: string): T | undefined {
+    return this.map.get(key);
+  }
+  set(key: string, value: T): void {
+    this.map.set(key, value);
+    appendFileSync(this.file, `${JSON.stringify({ k: key, v: value })}\n`);
+  }
 }
 
-/** Every stage and combination on the same questions; each question's rank is kept for the paired statistics. */
-async function evaluate(embedIds: string[], rerankIds: string[], set: string, dims: number, grid: 'full' | 'final'): Promise<void> {
+/** Every row of a grid on the same questions; each question's rank is kept for the paired statistics. */
+async function evaluate(embedIds: string[], rerankIds: string[], set: string, dims: number, grid: string): Promise<void> {
   const qs = questions(set);
   const stores = new Map(REPOS.map((r) => [r, storeOf(r)]));
   // An index still being written, or left half done, would be measured as a worse model: it is refused. A few
@@ -149,44 +180,55 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
       if (vectors < chunks) console.warn(`${repo}: ${chunks - vectors} pieces without a vector for ${id}`);
     }
   }
+  mkdirSync(LAB, { recursive: true });
+  const queryCache = new Cache<string>(join(LAB, 'query-vectors.jsonl'));
+  const judged = new Cache<number>(join(LAB, 'rerank-scores.jsonl'));
   const rows: Record<string, unknown>[] = [];
-  const run = async (name: string, fn: (q: Question, store: SearchStore, tree: string) => Promise<{ hits: Hit[]; reranked?: boolean }>, extra: Record<string, unknown> = {}) => {
+  const run = async (name: string, fn: (q: Question, store: SearchStore, tree: string) => Promise<Hit[]>) => {
     const ranks: number[] = [];
     const fileRanks: number[] = [];
     const ms: number[] = [];
     const top: number[] = [];
     const shown: number[] = [];
-    let reranked = 0;
     for (const q of qs) {
       const t = performance.now();
-      const out = await fn(q, stores.get(q.repo)!, join(REPOS_DIR, q.repo));
+      const hits = await fn(q, stores.get(q.repo)!, join(REPOS_DIR, q.repo));
       ms.push(performance.now() - t);
-      ranks.push(rankOf(out.hits, q));
-      fileRanks.push(rankOf(out.hits, q, true));
-      top.push(out.hits[0] ? Number(out.hits[0].score.toFixed(3)) : 0);
+      ranks.push(rankOf(hits, q));
+      fileRanks.push(rankOf(hits, q, true));
+      top.push(hits[0] ? Number(hits[0].score.toFixed(3)) : 0);
       // What the agent would be given: five results in 800 tokens.
-      shown.push(Math.ceil(formatHits(out.hits.slice(0, 5), q.q, 800).length / 3.6));
-      if (out.hits[0]?.by === 'reranker') reranked++;
+      shown.push(Math.ceil(formatHits(hits.slice(0, 5), q.q, 800).length / 3.6));
     }
-    // Scored on the questions that have an answer; the others only matter for the abstention (see `stats`).
+    // Scored on the questions that have an answer; the others only matter for the abstention (see `calibrate`).
     const answerable = qs.map((q, i) => (q.expect.length ? i : -1)).filter((i) => i >= 0);
     const hit = (k: number, rs: number[]) => Math.round((1000 * answerable.filter((i) => rs[i] > 0 && rs[i] <= k).length) / Math.max(1, answerable.length)) / 10;
     const mrr = answerable.reduce((s, i) => s + (ranks[i] > 0 && ranks[i] <= 10 ? 1 / ranks[i] : 0), 0) / Math.max(1, answerable.length);
-    const useful = answerable.filter((i) => ranks[i] > 0 && ranks[i] <= 5).length;
-    const row = { op: 'eval', set, config: name, n: answerable.length, 'hit@1': hit(1, ranks), 'hit@3': hit(3, ranks), 'hit@5': hit(5, ranks), 'hit@30': hit(30, ranks), 'file@5': hit(5, fileRanks), 'mrr@10': Number(mrr.toFixed(3)), msMedian: Math.round(median(ms)), reranked, tokPerQuery: Math.round(shown.reduce((s, x) => s + x, 0) / qs.length), tokPerUseful: Math.round(answerable.reduce((s, i) => s + shown[i], 0) / Math.max(1, useful)), ...extra };
+    const row = { op: 'eval', set, config: name, n: answerable.length, 'hit@1': hit(1, ranks), 'hit@3': hit(3, ranks), 'hit@5': hit(5, ranks), 'hit@10': hit(10, ranks), 'file@5': hit(5, fileRanks), 'mrr@10': Number(mrr.toFixed(3)), msMedian: Math.round(median(ms)), tokPerQuery: Math.round(shown.reduce((s, x) => s + x, 0) / qs.length) };
     rows.push(row);
     record({ ...row, ranks, fileRanks, top, sources: qs.map((q) => q.source ?? 'manual'), repos: qs.map((q) => q.repo), answerable: qs.map((q) => q.expect.length > 0) });
     console.log(JSON.stringify(row));
   };
-  const off = { lexical: false, vectors: false, rerank: 0 };
-  await run('bm25', async (q, s, tree) => ({ hits: await search(s, tree, '', q.q, TOP, { ...off, lexical: true }, {}) }));
-  await run('names only', async (q, s, tree) => ({ hits: lookup(s, tree, routeOf(q.q), TOP) }));
+  if (grid !== 'final' || !embedIds.length) {
+    await run('bm25', (q, s, tree) => search(s, tree, '', q.q, TOP, { lexical: true, vectors: false, rerank: 0 }, {}));
+    await run('bm25 app', async (q, s, tree) => (await answer(s, tree, q.q, TOP, '', (within) => search(s, tree, '', q.q, TOP, { lexical: true, vectors: false, rerank: 0 }, {}, within))).hits);
+  }
   for (const id of embedIds) {
     const model = need(id);
-    const engine = engineOf(model);
+    let engine: Engine | null = null;
     const queryVectors = new Map<string, Float32Array>();
-    for (const q of qs) queryVectors.set(q.q, (await engine.embed([(model.query ?? '') + q.q]))[0]);
-    engine.stop();
+    for (const q of qs) {
+      const key = Cache.key(id, (model.query ?? '') + q.q);
+      let saved = queryCache.get(key);
+      if (!saved) {
+        engine ??= engineOf(model);
+        const v = (await engine.embed([(model.query ?? '') + q.q]))[0];
+        queryCache.set(key, (saved = Buffer.from(v.buffer, v.byteOffset, v.byteLength).toString('base64')));
+      }
+      const bytes = Buffer.from(saved, 'base64');
+      queryVectors.set(q.q, new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+    }
+    (engine as Engine | null)?.stop();
     const cache = new Map<string, VectorIndex>();
     const vectorsOf = (s: SearchStore, tree: string) => {
       if (!cache.has(tree)) cache.set(tree, truncated(s.vectors(tree, id), dims));
@@ -201,24 +243,29 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
     const embedQuery = async (q: string) => cut(queryVectors.get(q)!);
     const tag = dims ? `${id}@${dims}` : id;
     for (const rid of rerankIds.length ? rerankIds : ['']) {
-      const reranker = rid ? engineOf(need(rid)) : null;
-      if (reranker) await reranker.rerank('warm', ['up']);
-      for (const c of grid === 'final' ? finalConfigs(tag, rid) : configs(tag, rid)) {
+      let reranker: Engine | null = null;
+      // Judgements already made are read back; only new pairs wake the model.
+      const rerank = async (query: string, documents: string[]) => {
+        const keys = documents.map((d) => Cache.key(rid, query, d));
+        const missing = documents.filter((_d, i) => judged.get(keys[i]) === undefined);
+        if (missing.length) {
+          reranker ??= engineOf(need(rid));
+          const scores = await reranker.rerank(query, missing);
+          missing.forEach((d, i) => judged.set(Cache.key(rid, query, d), scores[i]));
+        }
+        return keys.map((k) => judged.get(k)!);
+      };
+      for (const c of configs(grid, tag, rid)) {
         // The rows without a reranker are the same whatever the reranker: measured once.
         if (!c.rerank && rid !== (rerankIds[0] ?? '')) continue;
-        const engines = { embedQuery, ...(c.rerank && reranker ? { rerank: (query: string, documents: string[]) => reranker.rerank(query, documents) } : {}) };
+        const stages: Stages = { ...stagesOf(c.vectors, c.rerank, c.tuning), lexical: c.lexical, ...(c.candidates ? { candidates: c.candidates } : {}), ...(c.rrfK ? { rrfK: c.rrfK } : {}) };
+        const engines = { embedQuery, ...(c.rerank ? { rerank } : {}) };
         await run(c.name, async (q, s, tree) => {
-          const found = async () => (await search(s, tree, id, q.q, c.noOutline ? TOP * 2 : TOP, c.stages, engines, '', () => vectorsOf(s, tree))).filter((h) => !c.noOutline || h.kind !== 'outline');
-          if (!c.routed) return { hits: await found() };
-          // As the app answers: a name or a path from the index alone, a behaviour by the hybrid search, definitions first.
-          const route = routeOf(q.q);
-          const pinned = lookup(s, tree, route, TOP);
-          if (route.kind !== 'concept' && pinned.length) return { hits: pinned };
-          const rest = await found();
-          return { hits: [...pinned, ...rest.filter((h) => !pinned.some((p) => p.id === h.id))] };
-        }, c.rerank ? { vramMiB: vramUsed() } : {});
+          const find = async (within: string) => (await search(s, tree, id, q.q, c.noOutline ? TOP * 2 : TOP, stages, engines, within, () => vectorsOf(s, tree))).filter((h) => !c.noOutline || h.kind !== 'outline');
+          return c.routed ? (await answer(s, tree, q.q, TOP, '', find, c.tuning)).hits : find('');
+        });
       }
-      reranker?.stop();
+      (reranker as Engine | null)?.stop();
     }
   }
   for (const s of stores.values()) s.close();
@@ -393,7 +440,7 @@ function split(): void {
 const [command = 'help', ...args] = process.argv.slice(2);
 const list = (s?: string): string[] => (s && s !== '-' ? s.split(',').filter(Boolean) : []);
 if (command === 'index') await index(args[0] ?? 'none', args.filter((a, i) => i > 0 && a !== 'bare').length ? args.filter((a, i) => i > 0 && a !== 'bare') : REPOS, args.includes('bare'));
-else if (command === 'eval') await evaluate(list(args[0]), list(args[1]), args[2] ?? 'all', Number(args[3] ?? 0), args[4] === 'final' ? 'final' : 'full');
+else if (command === 'eval') await evaluate(list(args[0]), list(args[1]), args[2] ?? 'dev', Number(args[3] ?? 0), args[4] ?? 'models');
 else if (command === 'report') report(args[0] ?? 'all');
 else if (command === 'calibrate') calibrate(args[0], args[1] ?? 'dev');
 else if (command === 'stats') stats(args[0], args[1], args[2] ?? 'all', args[3] ?? 'hit@5');
@@ -402,5 +449,5 @@ else if (command === 'freshness') await freshness();
 else if (command === 'ask') await ask(args[0], args[1], args[2] === '-' ? '' : (args[2] ?? ''), args.slice(3).join(' '));
 else if (command === 'questions') checkQuestions();
 else if (command === 'split') split();
-else console.log('index <model|none> [repo…] [bare] | eval <embed,…> [rerank,…|-] [dev|test|all] [dims] [full|final] | report [set] | calibrate <config> [set] | stats <config a> <config b> [set] [hit@5|hit@1|file@5|mrr] | resources <embed> [rerank|-] [auto|gpu|cpu] | freshness | ask <repo> <embed> <rerank|-> <question> | questions | split');
+else console.log('index <model|none> [repo…] [bare] | eval <embed,…|-> [rerank,…|-] [dev|test|all] [dims] [models|fusion|rerank|final] | report [set] | calibrate <config> [set] | stats <config a> <config b> [set] [hit@5|hit@1|file@5|mrr] | resources <embed> [rerank|-] [auto|gpu|cpu] | freshness | ask <repo> <embed> <rerank|-> <question> | questions | split');
 process.exit(0);
