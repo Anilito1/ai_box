@@ -196,6 +196,9 @@ function startHost(device: Device, repo: string, rerank: boolean, idleMinutes = 
 async function host(device: Device, load: Load, rerank: boolean): Promise<void> {
   const repo = join(REPOS_DIR_HOST, 'claude-hub');
   const concepts = questions().filter((q) => q.split(/\s+/).length >= 6);
+  // The host keeps the vector of a question it has seen: each one asked warm is new, as an agent's would be.
+  let asked = 0;
+  const fresh = (i: number) => `${concepts[i % concepts.length]} (${++asked})`;
   const names = ['SearchService', 'routeOf', 'formatHits', 'SessionManager', 'busyReasons', 'Inbox.settle', 'pickDevice', 'syncFiles'];
   // The index first, complete, so what follows times questions only.
   const setup = startHost(device, repo, rerank);
@@ -237,7 +240,7 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
   const warm: number[] = [];
   for (let i = 0; i < WARM_RUNS; i++) {
     const t = performance.now();
-    await h.call('searchCode', repo, { query: concepts[(i + 7) % concepts.length] });
+    await h.call('searchCode', repo, { query: fresh(i + 7) });
     warm.push(performance.now() - t);
   }
   const named: number[] = [];
@@ -252,7 +255,7 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
     await Promise.all(
       Array.from({ length: CONCURRENT }, async (_, i) => {
         const t = performance.now();
-        await h.call('searchCode', repo, { query: concepts[(round * CONCURRENT + i + 50) % concepts.length] });
+        await h.call('searchCode', repo, { query: fresh(round * CONCURRENT + i + 50) });
         each.push(performance.now() - t);
       }),
     );
