@@ -19,6 +19,8 @@ if (readings.length < 3) {
 }
 const accounts = [...new Set(readings.map((r) => r.a))];
 const account = arg('account', accounts[0]);
+// The turn log names no account: the fit takes every Claude turn as this account's. True with one Anthropic account.
+if (accounts.length > 1) console.log(`Readings from ${accounts.length} accounts (${accounts.join(', ')}): Claude turns are not tied to one, the fit below is only right if ${account} ran them all.`);
 const mine = readings.filter((r) => r.a === account).sort((a, b) => a.t - b.t);
 // Claude turns only: the readings are an Anthropic account's.
 const turns = lines('turns-').filter((r) => Object.keys(r.m).some((m) => m.startsWith('claude-')));

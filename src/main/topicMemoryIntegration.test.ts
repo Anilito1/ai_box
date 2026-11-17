@@ -11,7 +11,7 @@ function fixture() {
   memory.update('a', { summary: 'ANONYMIZED_A' }, provenance, 0);
   memory.update('b', { summary: 'ANONYMIZED_B' }, provenance, 0);
   const manager = Object.assign(Object.create(SessionManager.prototype), {
-    contextMemory: memory, memoryTopic: 'a', topics: { linkOf: () => 'a' },
+    contextMemory: memory, memoryTopic: 'a', topics: { linkOf: () => 'a' }, memorySeen: new Map(),
     stop: () => { session.inbox = null; },
     freshStart: () => { session.sessionId = 'fresh'; session.started = false; },
     notice: () => undefined,

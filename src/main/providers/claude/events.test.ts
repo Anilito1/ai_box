@@ -138,9 +138,11 @@ test('subagent tasks carry what the CLI says of them; their own frames become th
   assert.deepEqual(translate(msg({ type: 'user', parent_tool_use_id: 'toolu_1', message: { content: res } })), [{ type: 'agentSteps', parent: 'toolu_1', blocks: res }]);
 });
 
-test('a failed hook run is said with its name and the end of its error; a run that worked is only a sign of life', () => {
+test('a failed hook run is said with its name and the end of its error; a run that worked adds nothing', () => {
   const hook = (outcome: string, stderr = '') => translate(msg({ type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: '', stdout: '', stderr, outcome }));
   assert.deepEqual(hook('error', 'python: cannot open file'), [{ type: 'hookFailed', hook: 'PreToolUse:Bash', detail: 'python: cannot open file' }]);
-  assert.deepEqual(hook('success'), [{ type: 'activity' }]);
-  assert.deepEqual(hook('cancelled'), [{ type: 'activity' }]);
+  assert.deepEqual(hook('success'), []);
+  assert.deepEqual(hook('cancelled'), []);
+  // A guard that blocks a command on purpose (exit 2) works as designed.
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: '', stdout: '', stderr: 'blocked', exit_code: 2, outcome: 'error' })), []);
 });

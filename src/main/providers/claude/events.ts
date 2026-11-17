@@ -43,8 +43,10 @@ export function translate(msg: SDKMessage): AgentEvent[] {
           return [{ type: 'compacting', on: msg.status === 'compacting' }];
         case 'api_retry':
           return [{ type: 'retry' }];
+        // A hook that runs is a sign of life (default below); a finished run is news only when it failed. Exit code 2 is a
+        // hook blocking on purpose.
         case 'hook_response':
-          return msg.outcome === 'error' ? [{ type: 'hookFailed', hook: msg.hook_name || msg.hook_event, detail: (msg.stderr || msg.output || '').slice(-500) }] : ACTIVITY;
+          return msg.outcome === 'error' && msg.exit_code !== 2 ? [{ type: 'hookFailed', hook: msg.hook_name || msg.hook_event, detail: (msg.stderr || msg.output || '').slice(-500) }] : [];
         case 'background_tasks_changed':
           // Level signal with replace semantics; ambient tasks (watchers) are not activity.
           return [{ type: 'background', tasks: msg.tasks.filter((t) => !t.ambient).map((t) => t.description) }];
