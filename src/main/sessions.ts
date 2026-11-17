@@ -3027,6 +3027,7 @@ export class SessionManager extends EventEmitter {
       const limits = await q.rateLimits();
       if (s.query !== q) return;
       this.usage.set(account, usageRead(limits, Date.now()));
+      if (limits) this.opts.costLog.limits(Date.now(), account, limits);
     } catch {
       // Experimental API unavailable, signed out, offline: the status bar leaves the figure out.
       if (s.query === q) this.usage.set(account, usageFailed(this.usage.get(account)));
