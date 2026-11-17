@@ -30,7 +30,10 @@ import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './ba
 import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
 import { memoryTopicOf, TopicMemory, type Provenance } from './topicMemory';
+import { git } from './git';
 import { HookFailures } from './hookFailures';
+import { fetchRemote } from './scm';
+import { announcedCommits } from '../shared/pushCheck';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -627,6 +630,8 @@ export class SessionManager extends EventEmitter {
   private readonly hookFailures = new HookFailures();
   /** Per session and topic, the memory version and event it last saw: what an omitted version or covered_event means. */
   private readonly memorySeen = new Map<string, { version: number; event: number }>();
+  /** Per worker, its report on its way to the master (a pushed commit is checked first): the next one waits for it. */
+  private readonly reports = new Map<string, Promise<void>>();
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -4650,14 +4655,38 @@ export class SessionManager extends EventEmitter {
     const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
     // A diagnosis goes with the topic of the worker it looked into.
     const topic = this.workerTopic(s.diagOf ? this.sessions.get(s.diagOf.target) ?? s : s);
-    this.deliver(master, {
-      text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
-      images: [],
-      from: s.name,
-      shown: text,
-      ...(topic ? { topic: topic.id } : {}),
+    const send = (checked: string) =>
+      this.deliver(master, {
+        text: `${tags().worker(s.name)}\n<hub-note>\n${note}${checked ? `\n${checked}` : ''}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
+        images: [],
+        from: s.name,
+        shown: text,
+        ...(topic ? { topic: topic.id } : {}),
+      });
+    // A report that says commits are pushed reaches the master once they are checked on the remote (a few seconds),
+    // after the worker's earlier reports: a claim that does not hold is said with it.
+    const shas = announcedCommits(text);
+    const before = this.reports.get(s.id) ?? Promise.resolve();
+    const done = before.then(() => (shas.length ? this.pushCheck(s, shas).catch(() => '') : '')).then(send);
+    this.reports.set(s.id, done);
+    void done.finally(() => {
+      if (this.reports.get(s.id) === done) this.reports.delete(s.id);
     });
     return t('master.delivered');
+  }
+
+  /**
+   * The commits a report says are pushed that no remote branch holds (fetched first, the hub's sign-in, no hook): what
+   * the master is told with the report. Empty when all are there, or when the check cannot run (no remote, offline).
+   */
+  private async pushCheck(s: Session, shas: string[]): Promise<string> {
+    if (!(await fetchRemote(s.cwd, { quiet: true, timeout: 20_000 }))) return '';
+    const missing: string[] = [];
+    for (const sha of shas) {
+      const held = (await git(s.cwd, ['branch', '-r', '--contains', sha], { hooks: false }).catch(() => '')).trim();
+      if (!held) missing.push(sha);
+    }
+    return missing.length ? t('hub.pushUnverified', { list: missing.join(', ') }) : '';
   }
 
   /** A worker writes to another session (the master, or a worker) through the hub, as Claude Code's SendMessage does. */
