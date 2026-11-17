@@ -336,6 +336,8 @@ export interface SessionView {
   createdAt: number;
   /** Start of the turn in progress (busy or awaiting a permission), else null. */
   busySince: number | null;
+  /** What its own process still has under way, said for the user (empty: nothing); /clear refuses on the same. */
+  busy: string[];
   /** Descriptions of the background tasks (subagents, shells) still running in this session. */
   background: string[];
   /** The port of those that serve on one and do not say it in their description, by description (read from the command or the output). */
@@ -894,8 +896,8 @@ export interface HubApi {
   /** Claude Code's commands and skills for a session's composer (those it runs as typed). */
   sessionCommands(id: string): Promise<CliCommand[]>;
   compact(id: string, instructions: string): void;
-  /** Starts the session over in a new, empty conversation. */
-  clear(id: string): void;
+  /** Starts the session over in a new, empty conversation; `force`: even while it works, stopping what runs. */
+  clear(id: string, force?: boolean): void;
   /** Deletes one of the master's topics and the history filed under it; the master's own conversation stays. */
   deleteTopic(topic: string): void;
   /** Puts a topic in a group of the topics column (a repo's main folder, "" for General); undefined: back with its repo. */

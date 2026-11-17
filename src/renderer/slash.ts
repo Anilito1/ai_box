@@ -45,6 +45,8 @@ export class SlashMenu {
   /** Closed with Escape: it stays closed until the text changes. */
   private dismissed = '';
   private confirming = false;
+  /** The open /clear question stops a session at work. */
+  private forcing = false;
   /** The selection was moved by hand (arrows, pointer) since the list was last filtered. */
   private chosen = false;
   /** Opened from the composer's "/" button: the draft set aside ('' if none); a pick is written, never run. */
@@ -114,7 +116,9 @@ export class SlashMenu {
   /** Keys while the menu or the /clear question is open; true when the key was used. */
   onKey(e: KeyboardEvent): boolean {
     if (this.confirming) {
-      if (e.key === 'Enter' && !e.isComposing) this.confirmClear();
+      if (e.key === 'Enter' && !e.isComposing) {
+        if (!this.forcing) this.confirmClear();
+      }
       else if (e.key === 'Escape') this.cancelClear();
       else return false;
       e.preventDefault();
@@ -268,12 +272,16 @@ export class SlashMenu {
 
   // ---------- /clear: a light confirmation above the field ----------
 
+  /** A session at work says what it is doing: clearing it anyway stops that, on a click (Enter does not). */
   private askClear(): void {
-    const yes = h('button', 'btn small primary', t('slash.clearYes'));
+    const busy = this.host.session()?.busy ?? [];
+    this.forcing = busy.length > 0;
+    const yes = this.forcing ? h('button', 'btn small danger', t('slash.clearAnyway')) : h('button', 'btn small primary', t('slash.clearYes'));
     yes.addEventListener('click', () => this.confirmClear());
     const no = h('button', 'btn small ghost', t('setup.cancel'));
     no.addEventListener('click', () => this.cancelClear());
-    this.confirmBox.replaceChildren(h('span', 'slash-confirm-text', t('slash.clearConfirm')), yes, no);
+    const text = this.forcing ? t('slash.clearBusy', { why: busy.join(' · ') }) : t('slash.clearConfirm');
+    this.confirmBox.replaceChildren(h('span', 'slash-confirm-text', text), yes, no);
     this.confirmBox.hidden = false;
     this.confirming = true;
     this.input.focus();
@@ -281,9 +289,10 @@ export class SlashMenu {
 
   private confirmClear(): void {
     const s = this.host.session();
+    const force = this.forcing;
     this.cancelClear();
     if (!s) return;
-    this.hub.clear(s.id);
+    this.hub.clear(s.id, force);
     this.host.clearText();
   }
 
