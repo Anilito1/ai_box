@@ -155,7 +155,7 @@ async function measure(kind: 'embed' | 'rerank', id: string, device: Device, loa
     op: 'latency', kind, model: id, device, gpu, load, threads: threads ?? 'default', priority: PRIORITY ?? 'normal', at: new Date().toISOString(),
     coldFirstMs: Math.round(cold[0]), cold: summary(cold), workerLoadMs: summary(loadMs),
     warm: summary(warm), concurrent: summary(each), burstMs: summary(burst),
-    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(), idle, embed: process.env.AIBOX_SEARCH_EMBED ?? 'default',
+    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(),
   };
   mkdirSync(LAB, { recursive: true });
   appendFileSync(join(LAB, 'latency.jsonl'), `${JSON.stringify(row)}\n`);
@@ -271,7 +271,7 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
   const row = {
     op: 'latency', kind: 'host', rerank, device, load, at: new Date().toISOString(),
     host: HOST, cold: summary(cold), prewarmed: prewarmed.length ? summary(prewarmed) : null, warm: summary(warm), named: summary(named), concurrent: summary(each),
-    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(),
+    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(), idle, embed: process.env.AIBOX_SEARCH_EMBED ?? 'default',
   };
   appendFileSync(join(LAB, 'latency.jsonl'), `${JSON.stringify(row)}\n`);
   console.log(JSON.stringify(row));
