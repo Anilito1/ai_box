@@ -57,6 +57,9 @@ const callsOf = (r, tools) => r.calls.filter((c) => new RegExp(`^(${tools})$`).t
 const fits = (c, input) => Object.entries(input ?? {}).every(([k, v]) => re(v).test(String(c.input[k] ?? '')));
 const bashLike = (c) => String(c.input.command ?? c.input.cmd ?? '');
 
+/** Responses whose only tool call is topic: a whole request spent on filing. */
+const topicAlone = (r) => r.requests.filter((names) => names.length === 1 && short(names[0]) === 'topic').length;
+
 /** The failed expectations of one run ([] = passed). */
 function check(sc, r) {
   const e = sc.expect ?? {};
@@ -75,10 +78,9 @@ function check(sc, r) {
   }
   if (e.text && !re(e.text).test(r.text)) failed.push(`text !~ ${e.text}`);
   if (e.maxRequests && r.requests.length > e.maxRequests) failed.push(`${r.requests.length} requests > ${e.maxRequests}`);
+  if (e.topicNeverAlone && topicAlone(r) > 0) failed.push(`${topicAlone(r)} response(s) with topic alone`);
   return failed;
 }
-/** Responses whose only tool call is topic: a whole request spent on filing. */
-const topicAlone = (r) => r.requests.filter((names) => names.length === 1 && short(names[0]) === 'topic').length;
 
 /** S11: no conversation brought under the model's 1M window by the hub's own settings. */
 function staticChecks(h) {
