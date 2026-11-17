@@ -33,7 +33,7 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-const SCHEMA = 2;
+const SCHEMA = 3;
 const NOTHING: FileEntry = { chunks: [], symbols: [], imports: [] };
 
 /** Identifiers cut at their capitals, so `hub tools` finds `hubTools`. Only the parts: the word itself is in the text. */
@@ -98,7 +98,10 @@ export class SearchStore {
         CREATE INDEX chunks_file ON chunks(tree, path);
         CREATE INDEX chunks_hash ON chunks(hash);
         CREATE VIRTUAL TABLE fts USING fts5(symbol, path, body, parts, tokenize="unicode61 remove_diacritics 2");
-        CREATE TABLE vectors(hash TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(hash, model)) WITHOUT ROWID;
+        -- A rowid table: a vector of 2 KB stays in its page, where a WITHOUT ROWID row of that size spills to an overflow
+        -- page of its own (the file was 2.5 times the size of its vectors).
+        CREATE TABLE vectors(hash TEXT NOT NULL, model TEXT NOT NULL, vec BLOB NOT NULL);
+        CREATE UNIQUE INDEX vectors_key ON vectors(hash, model);
         CREATE TABLE symbols(tree TEXT NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, leaf TEXT NOT NULL COLLATE NOCASE, kind TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL);
         CREATE INDEX symbols_leaf ON symbols(tree, leaf);
         CREATE INDEX symbols_file ON symbols(tree, path);
