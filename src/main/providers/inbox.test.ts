@@ -28,8 +28,48 @@ test('closing a stream preserves queued input and recovery never resends an ambi
   const recovered = new Inbox(Inbox.recover(JSON.parse(JSON.stringify(inbox.entries)) as InboxEntry<string>[]));
   assert.deepEqual(recovered.entries.map(e => e.state), ['unknown', 'queued']);
   assert.equal((await recovered[Symbol.asyncIterator]().next()).value, 'never sent');
-  assert.equal(recovered.pending, 2);
+  assert.equal(recovered.pending, 1, 'an unknown input waits on no process');
   assert.throws(() => inbox.push('too late'), /closed/);
+});
+
+test('inputs the provider coalesced into one echo are all received', async () => {
+  const inbox = new Inbox<string>();
+  inbox.push('stale', 'old'); inbox.push('[Worker A] report', 'a'); inbox.push('[Worker B] report', 'b'); inbox.push('later', 'c');
+  const consumer = inbox[Symbol.asyncIterator]();
+  for (let i = 0; i < 4; i++) await consumer.next();
+  // Claude Code takes the prompts that waited during a turn together and echoes them as one message.
+  assert.ok(inbox.acknowledgeEcho('[Worker A] report\n[Worker B] report', v => v));
+  assert.deepEqual(inbox.entries.map(e => e.state), ['sent', 'acknowledged', 'acknowledged', 'sent']);
+  assert.equal(inbox.acknowledgeEcho('[Worker A] report\nsomething else', v => v), false);
+  assert.ok(inbox.acknowledgeEcho('later', v => v));
+  assert.equal(inbox.pending, 1);
+});
+
+test('an echo is never pieced together inside a word, and goes to the live input before an unknown one', async () => {
+  const inbox = new Inbox<string>();
+  inbox.entries.push({ id: 'old', value: 'yes', state: 'unknown', createdAt: 0, updatedAt: 0 });
+  inbox.push('ok', 'a'); inbox.push('ay', 'b'); inbox.push('yes', 'c');
+  const consumer = inbox[Symbol.asyncIterator]();
+  for (let i = 0; i < 3; i++) await consumer.next();
+  assert.equal(inbox.acknowledgeEcho('okay', v => v), false);
+  assert.ok(inbox.acknowledgeEcho('yes', v => v));
+  assert.deepEqual(inbox.entries.map(e => e.state), ['unknown', 'sent', 'sent', 'acknowledged']);
+  inbox.requeue();
+  assert.deepEqual(inbox.entries.map(e => e.state), ['unknown', 'queued', 'queued', 'acknowledged']);
+});
+
+test('a turn that ends with nothing held receives the inputs sent before the last echo, not those written after', async () => {
+  const inbox = new Inbox<string>();
+  inbox.push('first', 'a'); inbox.push('second', 'b');
+  const consumer = inbox[Symbol.asyncIterator]();
+  await consumer.next(); await consumer.next();
+  const echoedAt = Date.now();
+  inbox.entries[1].updatedAt = echoedAt + 1; // Written as the turn ended: its own echo is still to come.
+  assert.ok(inbox.settle(0, echoedAt));
+  assert.deepEqual(inbox.entries.map(e => e.state), ['acknowledged', 'sent']);
+  assert.equal(inbox.settle(1, echoedAt + 1), false, 'the provider still holds it');
+  assert.ok(inbox.settle(0, echoedAt + 1));
+  assert.equal(inbox.pending, 0);
 });
 
 test('persistence must succeed before an input can reach a waiting consumer', async () => {

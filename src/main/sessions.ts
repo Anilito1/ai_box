@@ -26,6 +26,7 @@ import { portOf } from '../shared/backgroundTask';
 import { SCRATCH_DIR, SCRATCH_ENV, SCRATCH_PARENT, scratchName } from '../shared/purge';
 import type { ActivityRecord } from './purgeIndex';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
+import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
 import { TopicMemory, type Provenance } from './topicMemory';
 import { requireAppliedPolicy } from './providers/capabilities';
@@ -142,7 +143,7 @@ import { commitsSince, pullBack, pushedState } from './awayGit';
 import { awayBrief, backNote, resumeNote, saveRequest, type RepoReturn } from '../shared/away';
 import { accessOf, allowedRepo, callOf, leaseConflict, onServer, scopeOf, type Lease } from '../shared/vps';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote' | 'diagnosis' | 'diagFor'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'remote' | 'diagnosis' | 'diagFor' | 'busy'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -220,6 +221,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   signalAt: number | null;
   /** No turn is under way: an approval that ends now leaves the session idle. */
   turnOver: boolean;
+  /** When its process last echoed an input it took: what it took before then is received, echoed or not. */
+  echoAt: number | null;
   /**
    * Its conversation runs on the remote server's runner. `detached`: the hub is not connected, the session may go on
    * there; `done`: it ended there (idle, stopped), and starts again at the next message. `seq`: the number of the last
@@ -1533,18 +1536,24 @@ export class SessionManager extends EventEmitter {
    * /clear: the session goes on in a new, empty conversation (the last one stays in Claude Code's history). A post's
    * handoff note goes with the first message of the new one, as after any renewal. Its worktree, if any, stays.
    */
-  clear(id: string): void {
+  clear(id: string, force = false): void {
     const s = this.sessions.get(id);
     if (!s) return;
     if (this.ended(s)) return this.refuse(id, '/clear', t('refuse.ended'));
-    if (s.query && this.isWorking(s)) return this.notice(s, t('notice.clearBusy'), 'info');
+    // Only its own process counts: its workers' turns and closings are theirs. `force`: the user chose to stop it all.
+    const reasons = this.busyOf(s);
+    if (reasons.length > 0 && !force) return this.notice(s, t('notice.clearBusy', { why: this.busyText(reasons).join(' · ') }), 'info');
+    // Forced: what ran in the old conversation stops; messages it had not taken go to the new one, an install goes on.
+    const stopped = this.busyText(reasons.filter((why) => why.kind !== 'queued' && why.kind !== 'installing'));
     const running = !!s.inbox;
     if (running) {
       const q = s.query;
       s.noteFresh = false; // Not the renewal teardown() would announce: this one is said below.
+      s.inbox?.requeue();
       s.inbox?.close();
       this.teardown(s);
       q?.close();
+      if (stopped.length > 0) this.reap(s, s.procs.splice(0));
     }
     Object.assign(s, { sessionId: randomUUID(), started: false, historyLoad: null, lastMessage: '', noteFresh: false, handoffDone: false, error: '' });
     if (s.metrics) s.metrics = { ...s.metrics, contextTokens: 0, contextPct: 0 };
@@ -1553,6 +1562,8 @@ export class SessionManager extends EventEmitter {
     this.pendingItems.delete(s.id);
     this.emit('items', s.id, [], true);
     this.notice(s, t(s.note ? 'notice.clearedNote' : 'notice.cleared'), 'info');
+    if (stopped.length > 0) this.notice(s, t('notice.clearStopped', { why: stopped.join(' · ') }), 'info');
+    if (s.queued > 0) this.notice(s, tn('notice.clearCarried', s.queued), 'info');
     if (running && !this.orphan(s)) void this.launch(s, false);
     this.changed();
   }
@@ -1615,6 +1626,7 @@ export class SessionManager extends EventEmitter {
         idleSince: s.status === 'idle' ? s.idleAt : null,
         agents: s.agents,
         subagents: s.subagents.views(),
+        busy: this.busyText(this.busyOf(s)),
         compacting: s.compacting,
         retrying: s.retrying,
         limit: s.limit,
@@ -2411,7 +2423,10 @@ export class SessionManager extends EventEmitter {
   private teardown(s: Session): void {
     // Keep queued inputs; a sent input without receipt becomes unknown rather than disappearing.
     s.generation++;
+    const unconfirmed = s.inbox ? s.deliveries.some(e => e.state === 'sent') : false;
     s.inbox?.close();
+    // Said now; at a quit the saved state still has them sent, and the next start says it.
+    if (unconfirmed && !this.quitting) this.notice(s, t('notice.unconfirmed'), 'info');
     if (s.id === MASTER_ID && s.inbox) this.topics.end(true);
     s.query = null;
     s.inbox = null;
@@ -2420,7 +2435,7 @@ export class SessionManager extends EventEmitter {
     s.mcpLease?.dispose();
     s.mcpLease = null;
     s.liveId = null;
-    s.queued = this.deliveryPending(s);
+    s.queued = this.inFlight(s);
     s.runAccount = '';
     s.usageAccount = '';
     s.switchPending = false;
@@ -2455,6 +2470,7 @@ export class SessionManager extends EventEmitter {
     s.signalAt = null;
     s.approvedAt = null;
     s.turnOver = true;
+    s.echoAt = null;
     s.tools.clear();
     s.tokens.reset();
   }
@@ -2631,8 +2647,9 @@ export class SessionManager extends EventEmitter {
       }
       case 'promptTaken':
         // Provider echoes are receipts, not iterator reads. Match FIFO among equal inputs.
-        if (s.deliveries.length) s.inbox?.acknowledge(value => this.inputText(value) === ev.text);
+        if (s.deliveries.length) s.inbox?.acknowledgeEcho(ev.text, value => this.inputText(value));
         else s.queued = Math.max(0, s.queued - 1);
+        s.echoAt = Date.now();
         if (s.id === MASTER_ID) this.topics.taken(ev.text);
         this.markBusy(s, true);
         break;
@@ -2667,6 +2684,7 @@ export class SessionManager extends EventEmitter {
         // A local command (/context, /usage…) is never replayed: the program's own count says what still waits.
         // A provider queue count is not a receipt for a particular durable input.
         if (ev.queued !== null && s.deliveries.length === 0) s.queued = Math.min(s.queued, ev.queued);
+        else if (ev.queued !== null && s.echoAt !== null) s.inbox?.settle(ev.queued, s.echoAt);
         if (s.id === MASTER_ID) this.topics.end(s.queued === 0);
         s.retrying = false;
         s.limit = null;
@@ -2853,17 +2871,25 @@ export class SessionManager extends EventEmitter {
 
   /** Nothing running and nothing on the way: no turn, no background task, no prompt waiting in the queue. */
   private settled(s: Session): boolean {
-    return s.status === 'idle' && !this.hasActivity(s);
-  }
-
-  private hasActivity(s: Session): boolean {
-    return s.turnOver === false || s.background.length > 0 || s.pending.size > 0 || s.queued > 0 ||
-      (s.agentTasks?.size ?? 0) > 0 || (s.subagents?.running ?? 0) > 0 || (s.agents ?? 0) > 0 ||
-      !!s.compacting || !!s.retrying || !!s.moving || !!s.transitioning || !!s.installing;
+    return s.status === 'idle' && !this.isWorking(s);
   }
 
   private isWorking(s: Session): boolean {
-    return s.status === 'starting' || s.status === 'busy' || s.status === 'attention' || this.hasActivity(s);
+    return busyReasons(s).length > 0;
+  }
+
+  /** What keeps a session with a process working. */
+  private busyOf(s: Session): BusyReason[] {
+    return s.query ? busyReasons(s) : [];
+  }
+
+  /** Those reasons, said for the user. */
+  private busyText(reasons: BusyReason[]): string[] {
+    return reasons.map((why) => {
+      if (why.kind === 'background') return tn('busy.background', why.labels.length, { list: why.labels.slice(0, 2).map((l) => oneLine(l, 60)).join(', ') });
+      if ('count' in why) return tn(`busy.${why.kind}`, why.count);
+      return t(`busy.${why.kind}`);
+    });
   }
 
   /** The CLI answers `initialize` at spawn, before any turn: the session is usable from then on. */
@@ -3178,9 +3204,14 @@ export class SessionManager extends EventEmitter {
     return s.deliveries.filter(e => e.state === 'queued' || e.state === 'sent' || e.state === 'unknown').length;
   }
 
+  /** Inputs still on their way to the session's process: what it has to take in. An unknown one waits on nothing. */
+  private inFlight(s: Session): number {
+    return s.deliveries.filter(e => e.state === 'queued' || e.state === 'sent').length;
+  }
+
   private deliveryInbox(s: Session): Inbox<AgentInput> {
     return new Inbox(s.deliveries, () => {
-      s.queued = this.deliveryPending(s);
+      s.queued = this.inFlight(s);
       const ended = s.deliveries.filter(e => e.state === 'acknowledged');
       // The receipt needs its identity, not another retained copy of images or prompt contents.
       for (const entry of ended) entry.value = { content: '' };
@@ -3593,7 +3624,7 @@ export class SessionManager extends EventEmitter {
    * a note the hub writes from its last note and steps (asking the model would reread the whole conversation).
    */
   private renewStale(s: Session): void {
-    if (s.inbox || this.deliveryPending(s) > 0 || !s.roleId || !s.started || s.noteFresh) return;
+    if (s.inbox || this.inFlight(s) > 0 || !s.roleId || !s.started || s.noteFresh) return;
     if (!freshStartDue({ working: false, worked: this.worked(s), idleMs: Date.now() - s.activeAt })) return;
     s.note = staleNote(s.note, [...s.items.values()], lang()).slice(0, NOTE_MAX);
     this.freshStart(s);
@@ -5169,6 +5200,7 @@ export class SessionManager extends EventEmitter {
       signalAt: null,
       approvedAt: null,
       turnOver: true,
+      echoAt: null,
       tools: new Map(),
       bgRuns: new Map(),
       bgPorts: {},
@@ -5287,9 +5319,11 @@ export class SessionManager extends EventEmitter {
         // State saved before fixed* existed only holds display values: those sessions inherit from settings.json.
         const s = this.create(p.id, p.role, p.name, p.mission, p.cwd, p.fixedModel ?? '', p.fixedEffort ?? null);
         Object.assign(s, p, { status: 'exited' });
-        s.deliveries = Inbox.recover(Array.isArray(s.deliveries) ? s.deliveries : []);
-        s.queued = this.deliveryPending(s);
-        if (s.deliveries.some(e => e.state === 'unknown')) this.notice(s, 'Des messages ont été envoyés sans accusé de réception avant l’arrêt. Ils sont conservés sans réémission automatique.', 'info');
+        const deliveries = Array.isArray(s.deliveries) ? s.deliveries : [];
+        s.deliveries = Inbox.recover(deliveries);
+        s.queued = this.inFlight(s);
+        // Said once, for the inputs the last quit or crash left without receipt; a stop before said it then.
+        if (deliveries.some(e => e.state === 'sent')) this.notice(s, t('notice.unconfirmed'), 'info');
         s.extraTrees = s.extraTrees.filter(validTree);
         // Programs of the hub's last run: last known to run when the state was saved (at its close, or before a crash).
         if (s.procs?.length) previous.set(s.id, s.procs.map((p) => ({ ...p, endedAt: p.endedAt ?? savedAt })));
