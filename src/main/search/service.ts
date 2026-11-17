@@ -38,6 +38,9 @@ const BIG_MODEL = 1_500_000_000;
 export interface SearchQuery { query: string; k?: number; expand?: boolean; budget?: number; under?: string }
 interface Checkout { tree: string; family: string }
 
+/** The folder is in no repo of the user's list: the search does not read it. */
+class NotListed extends Error {}
+
 /** Kinds `where_is` shows first: what a project runs on, before what its code merely names. */
 const INFRA = ['edge', 'table', 'view', 'function', 'procedure', 'cron', 'policy', 'trigger', 'index', 'type', 'schema', 'extension', 'sequence'];
 
@@ -48,6 +51,25 @@ function runtimePackages(platform = process.platform, arch = process.arch): stri
 
 const same = (a: string, b: string): boolean => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
 const env = (): Record<string, string> => process.env as Record<string, string>;
+
+/**
+ * Which process answers a question by meaning: the model building an index when it is loaded on the card or idle
+ * (`indexer`), else the questions' own process when it runs (`asker`), else that process is to be started.
+ */
+export function queryEngine(indexer: { gpu: boolean; busy: boolean } | null, askerRunning: boolean): 'indexer' | 'asker' | 'start' {
+  if (indexer && (indexer.gpu || !indexer.busy)) return 'indexer';
+  return askerRunning ? 'asker' : 'start';
+}
+
+/**
+ * The loaded models that should leave their place, to start again elsewhere at the next question: on the card while
+ * something else works there (a render, a game: `util` is then not ours, nothing of ours being busy); the questions'
+ * process on the processor while the card is free again with `room` for it.
+ */
+export function misplaced(util: number, room: boolean, asker: 'card' | 'processor' | null, reranker: 'card' | 'processor' | null): ('asker' | 'reranker')[] {
+  if (util >= GPU_BUSY) return [...(asker === 'card' ? ['asker' as const] : []), ...(reranker === 'card' ? ['reranker' as const] : [])];
+  return asker === 'processor' && room ? ['asker'] : [];
+}
 
 /** The first `dims` dimensions of a vector, at length 1 again. */
 export function shorten(vector: Float32Array, dims: number): Float32Array {
@@ -97,8 +119,9 @@ export class SearchService {
   private readonly rerankModel: SearchModel | null;
   /** Builds the vectors of an index: on the card when it is free. */
   private indexer: Engine | null = null;
-  /** Turns a question into its vector, on the processor. */
+  /** Turns a question into its vector: on the card when it was free at the start, on the processor otherwise. */
   private asker: Engine | null = null;
+  private askOn: SearchSettings['device'] = 'cpu';
   private reranker: Engine | null = null;
   private readonly stores = new Map<string, SearchStore>();
   private readonly checkouts = new Map<string, Checkout>();
@@ -245,22 +268,49 @@ export class SearchService {
     renameSync(part, path);
   }
 
-  private engine(model: SearchModel, device: () => SearchSettings['device']): Engine {
+  /** `priority`: `above` for the answers an agent waits for, `below` for building an index (see WorkerInit.priority). */
+  private engine(model: SearchModel, device: () => SearchSettings['device'], priority: 'above' | 'below'): Engine {
     const settings = this.opts.settings;
-    return new Engine({ script: this.opts.workerScript, runtime: this.runtime, modelPath: this.modelPath(model), model, device, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
+    return new Engine({ script: this.opts.workerScript, runtime: this.runtime, modelPath: this.modelPath(model), model, device, priority, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
   }
 
   /** The card is ours to use: the user did not rule it out, and nothing else is working on it or filling it. */
   private async cardFree(model: SearchModel): Promise<boolean> {
     if (this.opts.settings().device === 'cpu') return false;
     if (this.opts.settings().device === 'gpu') return true;
-    const ours = (this.indexer?.state.running && this.indexer.state.gpu) || (this.reranker?.state.running && this.reranker.state.gpu);
+    const ours = [this.indexer, this.asker, this.reranker].some((e) => e?.state.running && e.state.gpu);
     if (ours) return true;
     const load = await gpuLoad();
     return load === null || (load.util < GPU_BUSY && load.freeMiB > vramNeed(model));
   }
 
-  /** The vector of a question: from the model already on the card when it is idle there, else on the processor. */
+  /**
+   * What answers a question by meaning. The model that builds an index when it is on the card (a question waits for
+   * one batch at most there) or idle; else the questions' own process, started on the card when it is free: a
+   * question takes milliseconds there, and up to seconds on a busy processor. A large reranker keeps the card to itself.
+   */
+  private async asking(): Promise<Engine> {
+    const indexer = this.indexer?.state.running ? { gpu: this.indexer.state.gpu, busy: this.indexer.busy } : null;
+    const pick = queryEngine(indexer, this.asker?.state.running === true);
+    if (pick === 'indexer') return this.indexer!;
+    if (pick === 'start') this.askOn = (this.rerankModel?.bytes ?? 0) <= BIG_MODEL && this.embedModel.bytes <= BIG_MODEL && (await this.cardFree(this.embedModel)) ? 'gpu' : 'cpu';
+    return (this.asker ??= this.engine(this.embedModel, () => this.askOn, 'above'));
+  }
+
+  /** Models kept warm turn after turn would never move: see `misplaced`. Only between questions. */
+  private async rebalance(): Promise<void> {
+    const engines = [this.indexer, this.asker, this.reranker];
+    if (this.opts.settings().device !== 'auto' || engines.some((e) => e?.busy)) return;
+    const load = await gpuLoad();
+    if (!load) return;
+    const where = (e: Engine | null) => (e?.state.running ? (e.state.gpu ? 'card' : 'processor') : null);
+    const room = this.embedModel.bytes <= BIG_MODEL && load.freeMiB > vramNeed(this.embedModel);
+    const out = misplaced(load.util, room, where(this.asker), where(this.reranker));
+    if (out.includes('asker')) this.asker?.stop();
+    if (out.includes('reranker')) this.reranker?.stop();
+  }
+
+  /** The vector of a question. */
   private async embedQuery(query: string): Promise<Float32Array> {
     const known = this.queryVectors.get(query);
     if (known) {
@@ -270,24 +320,24 @@ export class SearchService {
       return known;
     }
     const text = (this.embedModel.query ?? '') + query;
-    const warm = this.indexer?.state.running && !this.indexer.busy ? this.indexer : null;
-    const engine = warm ?? (this.asker ??= this.engine(this.embedModel, () => 'cpu'));
-    const vector = shorten((await engine.embed([text]))[0], VECTOR_DIMS);
+    const vector = shorten((await (await this.asking()).embed([text]))[0], VECTOR_DIMS);
     this.queryVectors.set(query, vector);
     if (this.queryVectors.size > QUERY_CACHE) this.queryVectors.delete(this.queryVectors.keys().next().value!);
     return vector;
   }
 
   private async embedOnProcessor(texts: string[]): Promise<Float32Array[]> {
-    this.asker ??= this.engine(this.embedModel, () => 'cpu');
+    // The card is taken: a questions' process already on it may still answer, else one starts on the processor.
+    if (!this.asker?.state.running) this.askOn = 'cpu';
+    this.asker ??= this.engine(this.embedModel, () => this.askOn, 'above');
     return (await this.asker.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
   }
 
   private async embedDocs(texts: string[]): Promise<Float32Array[]> {
-    // One model on the card at a time.
+    // One model on the card at a time; the questions' process already there reads the code too (its batches give way).
     this.reranker?.stop();
-    this.indexer ??= this.engine(this.embedModel, () => this.opts.settings().device);
-    return (await this.indexer.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
+    const engine = this.asker?.state.running && this.asker.state.gpu ? this.asker : (this.indexer ??= this.engine(this.embedModel, () => this.opts.settings().device, 'below'));
+    return (await engine.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
   }
 
   /** The reranker, when it may run: installed, the card free, and no index being built on it. Null otherwise. */
@@ -295,10 +345,12 @@ export class SearchService {
     const model = this.rerankModel;
     if (!model || !this.hasModel(model) || this.indexer?.busy || !(await this.cardFree(model))) return null;
     return (query, documents) => {
-      // One model on the card at a time, and a large reranker never beside a large embedder.
-      if (this.indexer?.state.running && !this.indexer.busy) this.indexer.stop();
-      if (model.bytes > BIG_MODEL && this.embedModel.bytes > BIG_MODEL) this.asker?.stop();
-      this.reranker ??= this.engine(model, () => this.opts.settings().device);
+      // Two small models share the card; a large one is there alone, and never beside a large embedder.
+      if (model.bytes > BIG_MODEL || this.embedModel.bytes > BIG_MODEL) {
+        if (this.indexer?.state.running && !this.indexer.busy) this.indexer.stop();
+        if (this.asker?.state.gpu || (model.bytes > BIG_MODEL && this.embedModel.bytes > BIG_MODEL)) this.asker?.stop();
+      }
+      this.reranker ??= this.engine(model, () => this.opts.settings().device, 'above');
       return this.reranker.rerank(query, documents);
     };
   }
@@ -323,7 +375,7 @@ export class SearchService {
       this.checkouts.set(key, found);
     }
     const { tree, family } = found;
-    if (!this.opts.settings().repos.some((r) => same(resolve(r), family))) throw new Error(`${basename(family)} is not in the list of repos the user lets the hub index (Settings › Repos). Use Grep here.`);
+    if (!this.opts.settings().repos.some((r) => same(resolve(r), family))) throw new NotListed(`${basename(family)} is not in the list of repos the user lets the hub index (Settings › Repos). Use Grep here.`);
     return { tree, family, store: this.store(`${basename(family).replace(/[^\w.-]/g, '_')}-${createHash('sha1').update(family.toLowerCase()).digest('hex').slice(0, 8)}`) };
   }
 
@@ -503,6 +555,25 @@ export class SearchService {
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  /**
+   * Loads what a question by meaning needs before it comes (an agent starts working in `folder`): the first question
+   * then takes milliseconds instead of the seconds a model takes to load, many more on a busy machine. Nothing for a
+   * repo outside the list, or whose index has no vectors yet. False when the folder is not one the search reads.
+   */
+  async warm(folder: string): Promise<boolean> {
+    if (!this.opts.settings().enabled || !this.installed) return true;
+    const found = await this.checkout(folder).catch((err: unknown) => err);
+    if (found instanceof NotListed) return false;
+    if (found instanceof Error) throw found;
+    const { tree, store } = found as Checkout & { store: SearchStore };
+    if (store.stats(tree, this.embedModel.id).vectors === 0) return true;
+    await this.rebalance();
+    // One after the other, as a search does: the reranker may need the card to itself.
+    await (await this.asking()).embed(['warm']);
+    await (await this.judge())?.('warm', ['up']);
+    return true;
   }
 
   /** The repos of the list whose index is missing or incomplete get it now, so the first question does not wait. */

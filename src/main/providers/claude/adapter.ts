@@ -23,6 +23,19 @@ import { toCommands, translate } from './events';
 
 /** The largest autoCompactWindow the CLI accepts: a worker compacts only at the model's own limit. */
 const FULL_WINDOW = 1_000_000;
+/**
+ * Characters of skill descriptions a worker's skill list may take. Claude Code's own budget is 1% of the window: with
+ * 1M, the list weighs about 8k tokens on every request of every worker. Each skill keeps its name and the start of its
+ * description; a value the user set in their own environment wins.
+ */
+const WORKER_SKILL_LIST_CHARS = '8000';
+
+/**
+ * The model as Claude Code is asked for it: a Fable id goes with its 1M variant. A Claude Code older than the model (the
+ * SDK's own binary did not know Fable 5.2) otherwise gives it a 200k window and compacts it near 170k; Fable's window
+ * is 1M wherever the model is available. Any other model, and a variant already chosen, go as they are.
+ */
+export const fullWindow = (model: string) => (/^claude-fable-\d/i.test(model) && !model.includes('[') ? `${model}[1m]` : model);
 
 
 /**
@@ -99,7 +112,7 @@ export class ClaudeProcess implements AgentProcess {
 
   interrupt = async (): Promise<void> => void (await this.q.interrupt());
   close = () => this.q.close();
-  setModel = (model: string) => this.q.setModel(model);
+  setModel = (model: string) => this.q.setModel(fullWindow(model));
   // An effortLevel sent alone to a session in Ultracode turns it off: both keys go together.
   setEffort = (effort: Effort, ultracode = false) => this.q.applyFlagSettings({ effortLevel: effort, ...(ultracode ? { ultracode: true } : {}) });
   setUltracode = (on: boolean) => this.q.applyFlagSettings({ ultracode: on });
@@ -168,7 +181,7 @@ export const claudeAdapter: ProviderAdapter = {
       ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, spec.remote) } : {}),
       ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
       // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
-      ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.model ? { model: fullWindow(spec.model) } : {}),
       ...(spec.effort ? { effort: spec.effort } : {}),
       ...(spec.mode ? { permissionMode: spec.mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
@@ -181,6 +194,8 @@ export const claudeAdapter: ProviderAdapter = {
       // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
       extraArgs: { name: spec.name, 'replay-user-messages': null },
       includePartialMessages: true,
+      // Hook runs come on the stream: the hub counts the failed ones (hookFailures.ts).
+      includeHookEvents: true,
       // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups,
       // unless it was asked to run in Ultracode: that mode is the Workflow tool, used for every task of weight.
       disallowedTools: disallowedTools(spec),
@@ -192,7 +207,7 @@ export const claudeAdapter: ProviderAdapter = {
           name: 'hub',
           version: '0.6.0',
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tools: spec.tools.map((def) => tool(def.name, def.description, def.shape, def.handler as any)),
+          tools: spec.tools.map((def) => tool(def.name, def.description, def.shape, def.handler as any, def.alwaysLoad ? { alwaysLoad: true } : undefined)),
         }),
       },
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
@@ -210,7 +225,7 @@ export const claudeAdapter: ProviderAdapter = {
         return { behavior: 'allow', updatedInput: input, ...(answer.always && o.suggestions ? { updatedPermissions: o.suggestions } : {}) };
       },
       onElicitation: (req, o) => spec.onElicitation({ serverName: req.serverName, message: req.message, mode: req.mode, requestedSchema: req.requestedSchema }, o.signal),
-      env: spec.env,
+      env: master ? spec.env : { SLASH_COMMAND_TOOL_CHAR_BUDGET: WORKER_SKILL_LIST_CHARS, ...spec.env },
       ...(spec.conversation.resume ? { resume: spec.conversation.id } : { sessionId: spec.conversation.id }),
     };
     // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.

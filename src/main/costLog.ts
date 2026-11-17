@@ -2,11 +2,12 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dayOf, decodeRecord, encodeRecord, sumUsage, type DayCost, type TurnRecord } from '../shared/costs';
+import type { RateLimits } from '../shared/types';
 
 const FILE = /^turns-(\d{4})-(\d{2})\.jsonl$/;
-const monthFile = (at: number) => {
+const monthFile = (at: number, kind = 'turns') => {
   const d = new Date(at);
-  return `turns-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}.jsonl`;
+  return `${kind}-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}.jsonl`;
 };
 
 /**
@@ -21,6 +22,8 @@ export class CostLog {
   readonly since: number;
   /** The cost of the turns of today (local day), kept as they are appended: the status bar shows it. */
   private day: DayCost;
+  /** Last plan-limit figures written, per account: a reading that changes nothing is not written again. */
+  private readonly lastLimits = new Map<string, string>();
 
   constructor(dataDir: string) {
     this.dir = join(dataDir, 'usage');
@@ -83,6 +86,24 @@ export class CostLog {
         await appendFile(join(this.dir, monthFile(record.at)), line, 'utf8');
       })
       .catch(() => undefined); // Disk full or locked: this turn is missing from the history, the next ones are not.
+  }
+
+  /**
+   * A plan-limit reading (5 h, 7 days, Fable), written to `limits-YYYY-MM.jsonl` when one of its figures changes. Set
+   * against the turns of the same hours, these readings show how the plan counts each kind of token (cache reads and
+   * writes included), which the plan's own pages do not say.
+   */
+  limits(at: number, account: string, l: RateLimits): void {
+    const key = JSON.stringify([l.fiveHourPct, l.sevenDayPct, l.fablePct ?? null, l.fiveHourResetsAt, l.sevenDayResetsAt]);
+    if (this.lastLimits.get(account) === key) return;
+    this.lastLimits.set(account, key);
+    const line = `${JSON.stringify({ t: at, a: account, h5: l.fiveHourPct, r5: l.fiveHourResetsAt, d7: l.sevenDayPct, r7: l.sevenDayResetsAt, ...(l.fablePct == null ? {} : { fb: l.fablePct }) })}\n`;
+    this.tail = this.tail
+      .then(async () => {
+        await mkdir(this.dir, { recursive: true });
+        await appendFile(join(this.dir, monthFile(at, 'limits')), line, 'utf8');
+      })
+      .catch(() => undefined); // Disk full or locked: one reading less, the next change is written.
   }
 
   /** Turns in [from, to), oldest first; only the months the range touches are read. */

@@ -42,6 +42,8 @@ export interface HubTool {
   shape: ZodRawShape;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (args: any, extra?: unknown) => Promise<HubToolResult>;
+  /** Given whole from the start of the conversation instead of behind Claude Code's tool search. */
+  alwaysLoad?: boolean;
 }
 
 /** A message for the agent: text, or text and images, as the Messages API writes it. */
@@ -89,6 +91,8 @@ export type AgentEvent =
   /** The context in use and the model's window, said during a turn by a program whose replies do not carry it. */
   | { type: 'context'; tokens: number; size: number }
   | { type: 'retry' }
+  /** A hook of the user's settings failed (Claude Code goes on without it): its name and the end of what it said. */
+  | { type: 'hookFailed'; hook: string; detail: string }
   /** Level signal: the background tasks running now (their descriptions). */
   | { type: 'background'; tasks: string[] }
   /**

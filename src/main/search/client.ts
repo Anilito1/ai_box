@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import type { SearchSettings, SearchState } from '../../shared/search';
+import { repoOf, samePath } from '../repos';
 import type { HostCall, HostInit, HostReply, HostRequest } from './host';
 import type { Doc } from './indexer';
 import type { SearchQuery } from './service';
@@ -15,7 +16,20 @@ export interface SearchClientOptions {
   onState?: () => void;
 }
 
+/** A folder is warmed again no sooner than this: the models stay loaded for minutes after a question. */
+const WARM_EVERY_MS = 60_000;
+/** …and one outside the listed repos, no sooner than this. */
+const NOT_READ_MS = 15 * 60_000;
 const NOTHING: SearchState = { installed: false, installing: null, error: '', loaded: { embed: false, rerank: false, gpu: false }, sizeMb: 0, models: [], repos: [] };
+
+/**
+ * Whether a conversation gets search_code whole (not behind Claude Code's tool search). A new one gets it
+ * when its folder is indexed; a resumed one keeps what it started with, whatever changed since: the tools head the
+ * prompt, and a tool that appears or goes under a resumed conversation makes it write its whole cache again.
+ */
+export function searchShownFor(conversation: string, resume: boolean, shown: string[], indexed: () => boolean): boolean {
+  return resume ? shown.includes(conversation) : indexed();
+}
 
 /**
  * The app's side of the local search: it starts the search process for a request and talks to it. Off, the feature
@@ -24,6 +38,8 @@ const NOTHING: SearchState = { installed: false, installing: null, error: '', lo
 export class SearchClient {
   private child: ChildProcess | null = null;
   private seq = 0;
+  /** When each folder was last warmed. */
+  private readonly warmed = new Map<string, number>();
   private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 
   constructor(private readonly opts: SearchClientOptions) {}
@@ -84,6 +100,27 @@ export class SearchClient {
 
   install(): Promise<string> {
     return this.call({ method: 'install', args: [] });
+  }
+
+  /** The folder is in a repo of the user's list, or one of its worktrees: read from the files, nothing started. */
+  indexed(folder: string): boolean {
+    const { enabled, repos } = this.opts.settings();
+    const repo = enabled ? repoOf(folder) : null;
+    return repo !== null && repos.some((r) => samePath(r, repo.main) || samePath(r, repo.checkout));
+  }
+
+  /**
+   * An agent starts working in `folder`: the models its questions need are loaded meanwhile, so that its first
+   * question does not wait seconds for them. Asked again for a folder no more than once a minute.
+   */
+  warm(folder: string): void {
+    const now = Date.now();
+    if (!this.enabled || now - (this.warmed.get(folder) ?? 0) < WARM_EVERY_MS) return;
+    // Folders of sessions long gone are forgotten.
+    if (this.warmed.size > 200) for (const [f, at] of this.warmed) if (now - at > NOT_READ_MS) this.warmed.delete(f);
+    this.warmed.set(folder, now);
+    // A folder the search does not read (no listed repo) is not asked about again for a while.
+    void this.call<boolean>({ method: 'warm', args: [folder] }).then((read) => !read && this.warmed.set(folder, now + NOT_READ_MS), () => undefined);
   }
 
   /** Builds the index of the listed repos that have none (after an install, a new repo in the list). */
