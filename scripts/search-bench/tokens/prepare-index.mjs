@@ -36,7 +36,8 @@ for (;;) {
   if (error) throw new Error(error);
   const line = state.repos.map((r) => `${r.path.replace(/^.*[\\/]/, '')} ${r.vectors}/${r.chunks}${r.indexing ? ' …' : ''}${r.error ? ` (${r.error})` : ''}`).join(' · ');
   console.log(`${Math.round((Date.now() - t0) / 1000)} s  ${line}`);
-  if (state.repos.every((r) => r.error || (!r.indexing && r.chunks > 0 && r.vectors >= r.chunks))) break;
+  // Without models (a folder of words only), there are no vectors to wait for.
+  if (state.repos.every((r) => r.error || (!r.indexing && r.chunks > 0 && (!state.installed || r.vectors >= r.chunks)))) break;
 }
 host.removeAllListeners('exit');
 host.kill();

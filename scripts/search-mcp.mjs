@@ -50,11 +50,11 @@ const answer = async (work) => {
 // The words the hub should give its sessions too (src/main/i18n.ts, src/main/providers/claude/adapter.ts): what is
 // measured is what would ship. Claude Code defers MCP tools behind its tool search, showing the model only their names
 // until it loads them; `alwaysLoad` keeps search_code in the prompt, for a few hundred cached tokens a request.
-//   AIBOX_SEARCH_EXPOSE  how the agent learns of the tools, to compare: deferred | always (default) | instructions | both
+//   AIBOX_SEARCH_EXPOSE  how the agent learns of the tools, to compare: deferred | always (default) | instructions | both | hint (deferred, a hint by its name)
 const expose = process.env.AIBOX_SEARCH_EXPOSE ?? 'always';
 const INSTRUCTIONS =
   'Local index of the repo you work in. To find where something is (a feature, a behaviour, a name you are not sure of), call search_code before Grep, Glob or reading files, then Read only the line ranges it gives. For what a table, an RPC, an edge function or a scheduled job is: where_is. Keep Grep to list every occurrence of an exact string.';
-const ALWAYS = expose === 'always' || expose === 'both' ? { 'anthropic/alwaysLoad': true } : {};
+const ALWAYS = expose === 'always' || expose === 'both' ? { 'anthropic/alwaysLoad': true } : expose === 'hint' ? { 'anthropic/searchHint': 'find code by behaviour or name in this repo, local, cheaper than Grep+Read' } : {};
 const server = new McpServer({ name: 'search', version: '0.3.0' }, expose === 'instructions' || expose === 'both' ? { instructions: INSTRUCTIONS } : {});
 server.registerTool(
   'search_code',
