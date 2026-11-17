@@ -140,6 +140,15 @@ function finalConfigs(tag: string, rerankId: string): Config[] {
 async function evaluate(embedIds: string[], rerankIds: string[], set: string, dims: number, grid: 'full' | 'final'): Promise<void> {
   const qs = questions(set);
   const stores = new Map(REPOS.map((r) => [r, storeOf(r)]));
+  // An index still being written, or left half done, would be measured as a worse model: it is refused. A few
+  // pieces the model could not read (an empty text) are only reported.
+  for (const id of embedIds) {
+    for (const [repo, s] of stores) {
+      const { chunks, vectors } = s.stats(join(REPOS_DIR, repo), id);
+      if (!chunks || chunks - vectors > Math.max(5, chunks / 1000)) throw new Error(`${repo}: ${vectors} of ${chunks} pieces have a vector for ${id}; run index first`);
+      if (vectors < chunks) console.warn(`${repo}: ${chunks - vectors} pieces without a vector for ${id}`);
+    }
+  }
   const rows: Record<string, unknown>[] = [];
   const run = async (name: string, fn: (q: Question, store: SearchStore, tree: string) => Promise<{ hits: Hit[]; reranked?: boolean }>, extra: Record<string, unknown> = {}) => {
     const ranks: number[] = [];

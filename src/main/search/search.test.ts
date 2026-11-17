@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -382,6 +383,61 @@ test('index: follows git, leaves secrets out, and computes only what changed', a
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('index: one writer at a time across processes, no hole while files are cut again, no wipe under a writer', async () => {
+  const { root, git, write } = tempRepo('hub-search-race-');
+  const dir = mkdtempSync(join(tmpdir(), 'hub-search-db-'));
+  const file = join(dir, 'repo.sqlite');
+  // Two connections to one file: what two processes (the app, a bench, the MCP bridge) each open.
+  const a = new SearchStore(file);
+  const b = new SearchStore(file);
+  try {
+    for (let i = 0; i < 40; i++) write(`src/m${i}.ts`, `export function handler${i}(order: Order): void {\n${lines(24, (n) => `  step${n}(order, ${i});`)}\n}\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'first');
+
+    // Both start at once: one passes over the files, the other waits for it and finds nothing left to do.
+    const both = await Promise.all([syncFiles(a, root, root, 'fake'), syncFiles(b, root, root, 'fake')]);
+    assert.deepEqual(both.map((s) => s.changed).sort(), [0, 40]);
+    await syncVectors(a, root, 'fake', fakeEmbed, { root });
+    assert.deepEqual([b.stats(root, 'fake').chunks, b.stats(root, 'fake').vectors], [40, 40]);
+
+    // The way files are cut changed: they are cut again in place. A reader never sees the index emptied, and the
+    // vectors of the unchanged texts are still there at the end.
+    a.setMeta(`rules:${root}`, 'older');
+    let done = false;
+    const pass = syncFiles(a, root, root, 'fake').finally(() => (done = true));
+    let fewest = 40;
+    while (!done) {
+      fewest = Math.min(fewest, b.stats(root, 'fake').chunks);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    assert.deepEqual([(await pass).changed, fewest, b.stats(root, 'fake').vectors], [40, 40, 40]);
+
+    // A claim is held against another owner until it ends; a writer that died frees the index at once.
+    const now = Date.now();
+    assert.ok(a.claim('first', 1000, now));
+    assert.ok(!b.claim('second', 1000, now + 500, () => true));
+    assert.ok(b.claim('second', 1000, now + 500, () => false));
+    assert.ok(!a.claim('first', 1000, now + 600, () => true));
+    assert.ok(a.claim('first', 1000, now + 1600, () => true));
+    a.release('first');
+
+    // Another version of the search opens the file while it is written: the index is not wiped under the writer.
+    assert.ok(a.claim('writer', 60_000));
+    const raw = new (createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')).DatabaseSync(file);
+    raw.exec('PRAGMA user_version=1');
+    raw.close();
+    assert.throws(() => new SearchStore(file), /Another version/);
+    assert.equal(b.stats(root, 'fake').chunks, 40);
+    a.release('writer');
+  } finally {
+    a.close();
+    b.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

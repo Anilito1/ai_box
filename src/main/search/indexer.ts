@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { git } from '../git';
 import { cutFile, type Chunk, type SymbolDef } from './chunker';
 import { listFiles, looksWritten, redact, skipReason } from './files';
-import { embedText, hashOf, type FileEntry, type ImportRef, type SearchStore } from './store';
+import { embedText, hashOf, type FileEntry, type FileState, type ImportRef, type SearchStore } from './store';
 
 export interface FileStats { files: number; changed: number; removed: number; chunks: number; missing: number; ms: number; full: boolean }
 export interface SyncProgress { done: number; total: number }
@@ -13,6 +14,53 @@ export const EMBED_CHARS = 6000;
 const BATCH = 16;
 /** Raised when the way files are chosen, cleaned or cut changes: an index made under other rules is built again. */
 const RULES = '4';
+/**
+ * A writer that gives no news for this long is stuck: its claim is taken over (one whose process ended, at once).
+ * Longer than the git calls of a pass, which may take a minute each.
+ */
+const CLAIM_MS = 300_000;
+/** How long a writer waits for another one, which is doing the same work meanwhile. */
+const WAIT_MS = 10 * 60_000;
+const writing = new WeakMap<SearchStore, Promise<unknown>>();
+
+/**
+ * `work` as the only writer of an index's files: one after the other in this process, and across processes through
+ * the claim the index holds (the app, a bench and the MCP bridge may open the same file). Two passes at once would
+ * each remove what the other just put; one prune would take the vectors of files the other had not put back yet.
+ * `renew` keeps the claim through a long pass, and stops it if another writer took the index over meanwhile.
+ */
+async function exclusive<T>(store: SearchStore, work: (renew: () => void) => Promise<T>): Promise<T> {
+  const run = (writing.get(store) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+    const owner = `${process.pid}:${randomUUID()}`;
+    const deadline = Date.now() + WAIT_MS;
+    // A file locked by a long write elsewhere is one more reason to wait, not a failure.
+    const take = () => {
+      try {
+        return store.claim(owner, CLAIM_MS);
+      } catch (err) {
+        if (/locked|busy/i.test(String(err))) return false;
+        throw err;
+      }
+    };
+    while (!take()) {
+      if (Date.now() > deadline) throw new Error('Another process has been updating this index for too long');
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    let renewed = Date.now();
+    const renew = () => {
+      if (Date.now() - renewed < CLAIM_MS / 4) return;
+      if (!store.claim(owner, CLAIM_MS)) throw new Error('Another process took over this index');
+      renewed = Date.now();
+    };
+    try {
+      return await work(renew);
+    } finally {
+      store.release(owner);
+    }
+  });
+  writing.set(store, run);
+  return run;
+}
 
 /** What a file imports, module by module, with the names it takes from each. */
 export function importRefs(text: string): ImportRef[] {
@@ -101,69 +149,81 @@ async function candidates(store: SearchStore, tree: string, root: string): Promi
  * ignores is never listed); those whose size or date differ are read and cut again, those gone are removed.
  * Secrets are taken out of the text first; a file whose name says it holds some (`.env`, `*.pem`, `credentials*`…)
  * is recorded as skipped and never read. `tree` names the checkout: worktrees of one repo share an index file.
+ * Another process updating the same index is waited for.
  */
 export async function syncFiles(store: SearchStore, tree: string, root: string, model: string): Promise<FileStats> {
-  const t0 = Date.now();
-  const { paths, head, dirty } = await candidates(store, tree, root);
-  const full = paths === null;
-  if (full) {
-    if (store.meta(`rules:${tree}`) !== RULES) store.dropTree(tree);
-    store.setMeta(`rules:${tree}`, RULES);
-  }
-  const known = store.files(tree);
-  const listed = full ? await listFiles(root) : paths;
-  const seen = new Set<string>();
-  let changed = 0;
-  let removed = 0;
-  for (const path of listed) {
-    const info = await stat(join(root, path)).catch(() => null);
-    if (!info?.isFile()) continue;
-    seen.add(path);
-    const before = known.get(path);
-    const state = { size: info.size, mtime: Math.round(info.mtimeMs), skipped: '' as string };
-    if (before && before.size === state.size && before.mtime === state.mtime) continue;
-    changed++;
-    state.skipped = skipReason(path, info.size);
-    let entry: FileEntry | undefined;
-    if (!state.skipped) {
-      const raw = await readFile(join(root, path), 'utf8').catch(() => null);
-      const text = raw === null ? '' : redact(raw).text;
-      if (raw === null) state.skipped = 'unreadable';
-      else if (!looksWritten(text)) state.skipped = 'minified';
-      else entry = await entryOf(path, text);
+  return exclusive(store, async (renew) => {
+    const t0 = Date.now();
+    const { paths, head, dirty } = await candidates(store, tree, root);
+    renew();
+    const full = paths === null;
+    // Under other rules every file is cut again in place: the index never has a hole, and the vectors of a text that
+    // did not change are kept. Until the pass ends, the next one starts over.
+    const rebuild = full && store.meta(`rules:${tree}`) !== RULES;
+    if (rebuild) store.setMeta(`head:${tree}`, '');
+    const known = store.files(tree);
+    const listed = full ? await listFiles(root) : paths;
+    const seen = new Set<string>();
+    let changed = 0;
+    let removed = 0;
+    for (const path of listed) {
+      renew();
+      const info = await stat(join(root, path)).catch(() => null);
+      if (!info?.isFile()) continue;
+      seen.add(path);
+      const before = known.get(path);
+      const state = { size: info.size, mtime: Math.round(info.mtimeMs), skipped: '' as string };
+      if (!rebuild && before && before.size === state.size && before.mtime === state.mtime) continue;
+      changed++;
+      state.skipped = skipReason(path, info.size);
+      let entry: FileEntry | undefined;
+      if (!state.skipped) {
+        const raw = await readFile(join(root, path), 'utf8').catch(() => null);
+        const text = raw === null ? '' : redact(raw).text;
+        if (raw === null) state.skipped = 'unreadable';
+        else if (!looksWritten(text)) state.skipped = 'minified';
+        else entry = await entryOf(path, text);
+      }
+      store.transaction(() => store.putFile(tree, path, state, entry));
     }
-    store.transaction(() => store.putFile(tree, path, state, entry));
-  }
-  // Gone: every known file no longer listed (a full look), or the candidates that are not there any more.
-  for (const path of full ? known.keys() : listed) {
-    if (seen.has(path) || !known.has(path)) continue;
-    store.transaction(() => store.removeFile(tree, path));
-    removed++;
-  }
-  if (changed || removed) store.prune();
-  store.setMeta(`head:${tree}`, head);
-  store.setMeta(`dirty:${tree}`, JSON.stringify(dirty));
-  if (changed || removed) store.checkpoint();
-  const stats = store.stats(tree, model);
-  return { files: stats.files, changed, removed, chunks: stats.chunks, missing: model ? store.missing(tree, model).length : 0, ms: Date.now() - t0, full };
+    // Gone: every known file no longer listed (a full look), or the candidates that are not there any more.
+    for (const path of full ? known.keys() : listed) {
+      if (seen.has(path) || !known.has(path)) continue;
+      store.transaction(() => store.removeFile(tree, path));
+      removed++;
+    }
+    if (changed || removed) store.prune();
+    if (rebuild) store.setMeta(`rules:${tree}`, RULES);
+    store.setMeta(`head:${tree}`, head);
+    store.setMeta(`dirty:${tree}`, JSON.stringify(dirty));
+    if (changed || removed) store.checkpoint();
+    const stats = store.stats(tree, model);
+    return { files: stats.files, changed, removed, chunks: stats.chunks, missing: model ? store.missing(tree, model).length : 0, ms: Date.now() - t0, full };
+  });
 }
 
 export interface Doc { id: string; text: string }
 
 /** The same for texts that are not files (the topics' memory, the posts' notes): each is a document named by its id. */
 export async function syncDocs(store: SearchStore, tree: string, docs: Doc[]): Promise<void> {
-  const known = store.files(tree);
-  const seen = new Set<string>();
-  for (const doc of docs) {
-    seen.add(doc.id);
+  const states = docs.map((doc) => {
     const text = redact(doc.text).text;
-    const state = { size: text.length, mtime: Number.parseInt(hashOf(text).slice(0, 12), 16), skipped: '' };
-    const before = known.get(doc.id);
-    if (before && before.size === state.size && before.mtime === state.mtime) continue;
-    const { chunks } = await cutFile(`${doc.id}.md`, text);
-    store.transaction(() => store.putFile(tree, doc.id, state, { chunks: chunks.map((c) => ({ ...c, hash: hashOf(embedText(doc.id, c).slice(0, EMBED_CHARS)) })), symbols: [], imports: [] }));
-  }
-  for (const id of known.keys()) if (!seen.has(id)) store.transaction(() => store.removeFile(tree, id));
+    return { id: doc.id, text, state: { size: text.length, mtime: Number.parseInt(hashOf(text).slice(0, 12), 16), skipped: '' } };
+  });
+  const same = (known: Map<string, FileState>, s: (typeof states)[number]) => known.get(s.id)?.size === s.state.size && known.get(s.id)?.mtime === s.state.mtime;
+  // Nothing changed, as for most searches: nothing to write, no claim to take.
+  const before = store.files(tree);
+  if (before.size === states.length && states.every((s) => same(before, s))) return;
+  await exclusive(store, async () => {
+    const known = store.files(tree);
+    for (const s of states) {
+      if (same(known, s)) continue;
+      const { chunks } = await cutFile(`${s.id}.md`, s.text);
+      store.transaction(() => store.putFile(tree, s.id, s.state, { chunks: chunks.map((c) => ({ ...c, hash: hashOf(embedText(s.id, c).slice(0, EMBED_CHARS)) })), symbols: [], imports: [] }));
+    }
+    const seen = new Set(states.map((s) => s.id));
+    for (const id of known.keys()) if (!seen.has(id)) store.transaction(() => store.removeFile(tree, id));
+  });
 }
 
 /**

@@ -20,6 +20,18 @@ export interface StoredSymbol extends SymbolDef { path: string }
 export interface FileEntry { chunks: (Chunk & { hash: string })[]; symbols: SymbolDef[]; imports: ImportRef[] }
 /** Every vector of a checkout, in one block: `ids[i]` owns `data[i*dims …]`, each value a cosine part times 127. */
 export interface VectorIndex { ids: Int32Array; data: Int8Array; dims: number }
+/** Who writes the files of an index now, from which process, until when unless renewed. */
+interface Claim { owner: string; pid: number; until: number }
+
+/** A process that still runs (EPERM: it runs, under another user). */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 const SCHEMA = 2;
 const NOTHING: FileEntry = { chunks: [], symbols: [], imports: [] };
@@ -65,10 +77,22 @@ export class SearchStore {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
     this.db = new (load().DatabaseSync)(path);
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=4000;');
-    const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
-    // An index is only a copy of the repo: another layout is built again, not migrated.
-    if (version !== SCHEMA) {
-      this.db.exec(`DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS fts; DROP TABLE IF EXISTS vectors; DROP TABLE IF EXISTS symbols; DROP TABLE IF EXISTS imports; DROP TABLE IF EXISTS meta;
+    const version = () => Number(this.db.prepare('PRAGMA user_version').get()?.user_version);
+    // An index is only a copy of the repo: another layout is built again, not migrated…
+    if (version() !== SCHEMA) {
+      // …unless another version of the search is writing it right now: it is not wiped under that writer.
+      let held: Claim | null = null;
+      try {
+        held = JSON.parse(String(this.db.prepare("SELECT value FROM meta WHERE key='writer'").get()?.value ?? 'null')) as Claim | null;
+      } catch {
+        // no meta table: a new file, or a layout that had none
+      }
+      if (held && held.until > Date.now() && pidAlive(held.pid)) {
+        this.db.close();
+        throw new Error('Another version of the search is updating this index');
+      }
+      // …in one transaction that looks again: two processes opening the old file at once build it once.
+      this.transaction(() => version() !== SCHEMA && this.db.exec(`DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS chunks; DROP TABLE IF EXISTS fts; DROP TABLE IF EXISTS vectors; DROP TABLE IF EXISTS symbols; DROP TABLE IF EXISTS imports; DROP TABLE IF EXISTS meta;
         CREATE TABLE files(tree TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, skipped TEXT NOT NULL, PRIMARY KEY(tree, path)) WITHOUT ROWID;
         CREATE TABLE chunks(id INTEGER PRIMARY KEY, tree TEXT NOT NULL, path TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL, hash TEXT NOT NULL);
         CREATE INDEX chunks_file ON chunks(tree, path);
@@ -81,7 +105,7 @@ export class SearchStore {
         CREATE TABLE imports(tree TEXT NOT NULL, path TEXT NOT NULL, source TEXT NOT NULL, names TEXT NOT NULL);
         CREATE INDEX imports_file ON imports(tree, path);
         CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
-        PRAGMA user_version=${SCHEMA};`);
+        PRAGMA user_version=${SCHEMA};`));
     }
   }
 
@@ -119,6 +143,25 @@ export class SearchStore {
 
   setMeta(key: string, value: string): void {
     this.sql('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
+  }
+
+  /**
+   * The right to write this index's files for `ms`, taken or renewed: false while another owner holds it, in this
+   * process or another. A claim whose process ended, or that was not renewed in time, is taken over.
+   */
+  claim(owner: string, ms: number, now = Date.now(), alive: (pid: number) => boolean = pidAlive): boolean {
+    return this.transaction(() => {
+      const held = JSON.parse(this.meta('writer') || 'null') as Claim | null;
+      if (held && held.owner !== owner && held.until > now && alive(held.pid)) return false;
+      this.setMeta('writer', JSON.stringify({ owner, pid: process.pid, until: now + ms } satisfies Claim));
+      return true;
+    });
+  }
+
+  release(owner: string): void {
+    this.transaction(() => {
+      if ((JSON.parse(this.meta('writer') || 'null') as Claim | null)?.owner === owner) this.sql("DELETE FROM meta WHERE key='writer'").run();
+    });
   }
 
   files(tree: string): Map<string, FileState> {
