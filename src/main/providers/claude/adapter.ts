@@ -35,6 +35,19 @@ const WORKER_SKILL_LIST_CHARS = '8000';
  * SDK's own binary did not know Fable 5.2) otherwise gives it a 200k window and compacts it near 170k; Fable's window
  * is 1M wherever the model is available. Any other model, and a variant already chosen, go as they are.
  */
+/**
+ * Whether a permission request comes from a permissions.ask rule alone, from the fields the CLI sends (not all in the
+ * SDK's types). `rule`: the rule decided. A compound command (a loop, a `$(…)`) the CLI cannot check part by part keeps
+ * its own reason (`other`: "A variable in this command can't be checked") and names the rule in `matchedAskRule`; in
+ * bypass mode that reason alone never asks. A safety check, a hook or a mix of reasons per subcommand
+ * (`subcommandResults`, whose reasons are not sent) is not the rule alone.
+ */
+export function askedByRule(o: { decisionReasonType?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }): boolean {
+  if (o.requiresUserInteraction) return false;
+  if (o.decisionReasonType === 'rule') return true;
+  return o.matchedAskRule != null && (o.decisionReasonType === undefined || o.decisionReasonType === 'other');
+}
+
 export const fullWindow = (model: string) => (/^claude-fable-\d/i.test(model) && !model.includes('[') ? `${model}[1m]` : model);
 
 
@@ -219,9 +232,7 @@ export const claudeAdapter: ProviderAdapter = {
           reason: o.decisionReason ?? '',
           // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
           canAlways: (o.suggestions?.length ?? 0) > 0,
-          // Sent by the CLI, not in the SDK's types: 'rule' when only a permissions.ask rule asks (a safety check is
-          // 'safetyCheck', a hook 'hook').
-          byRule: (o as { decisionReasonType?: string }).decisionReasonType === 'rule',
+          byRule: askedByRule(o as { decisionReasonType?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }),
           signal: o.signal,
         });
         if (answer.behavior === 'deny') return { behavior: 'deny', message: answer.message };

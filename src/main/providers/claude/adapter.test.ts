@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import { ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
+import { askedByRule, ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
 
 test('a worker has no Workflow tool, unless it runs in Ultracode', () => {
   assert.ok(disallowedTools({ role: 'worker', readOnly: false, ultracode: false }).includes('Workflow'));
@@ -121,4 +121,30 @@ test('Claude readiness acknowledges the requested mode before the first user tur
   const refused = new ClaudeProcess(q, 'conv', () => {});
   await assert.rejects(refused.ready(), /not allowed/);
   assert.equal(refused.policy.status, 'refused');
+});
+
+// What Claude Code 2.1.321 sends in bypass mode with the ask rule `Bash(echo deploy:*)` (probe of 17/11).
+const askRule = { source: 'projectSettings', toolName: 'Bash', ruleContent: 'echo deploy:*' };
+
+test('a compound command whose only ask is a permissions.ask rule is the rule alone', () => {
+  // echo deploy a && echo done · for s in a b; do echo deploy $s; done
+  assert.equal(askedByRule({ decisionReasonType: 'rule' }), true);
+  // for s in a b; do r=$(npx supabase functions deploy $s … | tail -1); echo "$s: $r"; done: the deploy loop that waited
+  assert.equal(askedByRule({ decisionReasonType: 'other', matchedAskRule: askRule }), true);
+});
+
+test('a command substitution whose only ask is a permissions.ask rule is the rule alone', () => {
+  // echo "result: $(echo deploy a)"
+  assert.equal(askedByRule({ decisionReasonType: 'rule' }), true);
+  assert.equal(askedByRule({ matchedAskRule: askRule }), true);
+});
+
+test('a safety check, a hook, reasons per subcommand or a question to the user are not the rule alone', () => {
+  assert.equal(askedByRule({ decisionReasonType: 'safetyCheck', matchedAskRule: askRule }), false);
+  assert.equal(askedByRule({ decisionReasonType: 'hook', matchedAskRule: askRule }), false);
+  // echo deploy a && echo x > .claude/settings.local.json: the reasons of each part are not sent
+  assert.equal(askedByRule({ decisionReasonType: 'subcommandResults' }), false);
+  assert.equal(askedByRule({ decisionReasonType: 'other' }), false);
+  assert.equal(askedByRule({ decisionReasonType: 'rule', requiresUserInteraction: true }), false);
+  assert.equal(askedByRule({}), false);
 });
