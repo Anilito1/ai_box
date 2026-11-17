@@ -108,7 +108,7 @@ async function main(): Promise<void> {
         if (req.op === 'embed' && embedder) {
           const vectors: Float32Array[] = [];
           // A text longer than the model's room is cut at the token, not refused. Four are kept for the model's own markers
-          // (BOS and EOS, which node-llama-cpp adds before checking the room).
+          // (node-llama-cpp adds BOS and EOS, then refuses when length >= contextSize: `- 2` failed on EmbeddingGemma).
           for (const text of req.texts) vectors.push(normalized((await embedder.getEmbeddingFor(model.tokenize(text).slice(0, init.slotTokens - 4))).vector));
           send({ id: req.id, vectors });
         } else if (req.op === 'rerank' && ranker) send({ id: req.id, scores: await ranker.rankAll(req.query, req.documents) });
