@@ -211,6 +211,15 @@ const en = {
   'workers.unknown': 'No worker named {name}.',
   'workers.more': 'Post, folder, account, cost, background tasks, last message: list_workers with detail=true, or name=<worker>.',
   'workers.busyBackground': '{n} background task(s)',
+  'memory.unavailable': 'Local topic memory unavailable: use ordinary handoff notes.',
+  'memory.rules.master':
+    '## Topic memory\ntopic_memory keeps a short, anonymized state per topic (its id comes from topic). Read it at the start of a topic. At the end of meaningful work, update the state (objective, constraints, tasks, blockers, artifacts, nextStep), then compact a handoff (text, at most 1600 tokens) before changing topic; the hub fills version and covered_event when you leave them out. A user decision goes with decision and its message as source; a correction supersedes it, never erases it. Never client content, transcripts or secrets. Pressure: warning = prepare a handoff, compact = compact now, hard = nothing more is stored. With a saved summary the hub may start you a fresh conversation on a topic switch or at 90% of your context; without one it keeps the conversation.',
+  'memory.rules.worker':
+    '## Topic memory\nYour work belongs to topic {topic}: topic_memory reads and writes its memory (leave topic out). Read it when you start; at the end of meaningful work, update the state (tasks, blockers, artifacts, nextStep) and compact a short handoff (text). Anonymized only: never client content, transcripts or secrets.',
+  'tool.topicMemory':
+    'Short local memory of a topic, anonymized: read (bounded packet, never a transcript), update (structured state), decision (a user decision, append-only, source = its message), remember (short note), compact (handoff summary in text). version and covered_event are optional: the hub fills the current ones. No client data or secrets.',
+  'tool.topicMemory.worker':
+    'Short local memory of your topic, anonymized (topic can be left out): read (bounded packet), update (structured state), remember (short note), compact (handoff summary in text), decision (a user decision, source = its message). version and covered_event are optional: the hub fills the current ones. No client data or secrets.',
   'workers.team': 'Team (permanent workers):',
   'workers.adhoc': 'Ad-hoc workers:',
   'workers.post': '  post: {text} · model {model}, effort {effort}',
@@ -785,6 +794,15 @@ const fr: Record<Key, string> = {
   'workers.unknown': 'Aucun worker nommé {name}.',
   'workers.more': 'Poste, dossier, compte, coût, tâches de fond, dernier message : list_workers avec detail=true, ou name=<worker>.',
   'workers.busyBackground': '{n} tâche(s) de fond',
+  'memory.unavailable': 'Mémoire locale des sujets indisponible : utilise les notes de passation habituelles.',
+  'memory.rules.master':
+    "## Mémoire des sujets\ntopic_memory garde un état court et anonymisé par sujet (son id vient de topic). Lis-la au début d'un sujet. À la fin d'un travail utile, mets l'état à jour (objective, constraints, tasks, blockers, artifacts, nextStep), puis compacte une passation (text, 1600 tokens au plus) avant de changer de sujet ; le hub remplit version et covered_event si tu les omets. Une décision de l'utilisateur passe par decision, avec son message comme source ; une correction la remplace, sans l'effacer. Jamais de contenu client, de transcription ni de secret. Pression : warning = prépare une passation, compact = compacte maintenant, hard = plus rien n'est stocké. Avec un résumé enregistré, le hub peut te faire repartir sur une conversation neuve au changement de sujet ou à 90 % de ton contexte ; sans résumé, il garde la conversation.",
+  'memory.rules.worker':
+    "## Mémoire du sujet\nTon travail relève du sujet {topic} : topic_memory lit et écrit sa mémoire (omets topic). Lis-la en commençant ; à la fin d'un travail utile, mets l'état à jour (tasks, blockers, artifacts, nextStep) et compacte une courte passation (text). Anonymisé seulement : jamais de contenu client, de transcription ni de secret.",
+  'tool.topicMemory':
+    "Mémoire locale courte d'un sujet, anonymisée : read (paquet borné, jamais une transcription), update (état structuré), decision (décision de l'utilisateur, en ajout seul, source = son message), remember (note courte), compact (résumé de passation dans text). version et covered_event sont facultatifs : le hub met les valeurs courantes. Ni donnée client ni secret.",
+  'tool.topicMemory.worker':
+    "Mémoire locale courte de ton sujet, anonymisée (topic peut être omis) : read (paquet borné), update (état structuré), remember (note courte), compact (résumé de passation dans text), decision (décision de l'utilisateur, source = son message). version et covered_event sont facultatifs : le hub met les valeurs courantes. Ni donnée client ni secret.",
   'workers.team': 'Équipe (workers permanents) :',
   'workers.adhoc': 'Workers ponctuels :',
   'workers.post': '  poste : {text} · modèle {model}, effort {effort}',

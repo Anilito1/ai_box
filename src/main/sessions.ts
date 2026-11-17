@@ -29,7 +29,7 @@ import type { ActivityRecord } from './purgeIndex';
 import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './backgroundPorts';
 import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
-import { TopicMemory, type Provenance } from './topicMemory';
+import { memoryTopicOf, TopicMemory, type Provenance } from './topicMemory';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -1830,7 +1830,7 @@ export class SessionManager extends EventEmitter {
     // through the hub's tool of the same job.
     s.scratch = !isMaster && !remote && !s.readOnly ? this.prepareScratch(s) : null;
     const scratchRules = s.scratch ? scratchSection(s.scratch, SCRATCH_ENV) : '';
-    const memoryRules = this.contextMemory.status.mode === 'sqlite' ? '\n## Topic memory\nUse topic_memory read at the start of a topic. At the end of meaningful work, update objective, constraints, tasks, blockers, artifact paths and nextStep, then compact into a handoff of at most 1600 estimated tokens before changing topic. Read the packet immediately before summarizing and pass its lastEvent as covered_event; new activity invalidates an older summary. Record user decisions with the append-only decision action and message provenance; corrections supersede an earlier decision, never erase it. Store only anonymized data, never raw client content, transcripts or secrets. Read pressure: warning means prepare a handoff; compact means compact now; hard rejects additional memory. Saved summaries permit an idle master to start a fresh provider conversation on topic switches or at 90% provider context usage. Without a saved summary the hub preserves the current conversation.\n' : '\nLocal topic memory unavailable; use ordinary handoff notes.\n';
+    const memoryRules = this.memoryRules(s);
     const append = (harness === 'claude' && !remote ? base : base.replace(/SendMessage/g, 'send_message')) + scratchRules + memoryRules + (s.diagOf ? `\n${diagPrompt(lang())}\n` : '');
     // What the session asked for, if its account has it (a fallback step's own model first).
     const picked = s.home !== null && s.fallbackModel ? s.fallbackModel : this.modelFits(account, s.fixedModel) ? s.fixedModel : '';
@@ -3701,10 +3701,9 @@ export class SessionManager extends EventEmitter {
     const listWorkers = tool('list_workers', t('tool.listWorkers'), listShape, (a) => run(() => this.listWorkers(undefined, a as ListOptions)));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
-    const memory = tool('topic_memory',
-      'Local short topic memory. Before switching jobs save an anonymized structured state and compact handoff. read returns a bounded packet, never a transcript. Decisions are append-only; source must identify the user message for user decisions. No client data or secrets. A version conflict requires reading again. The hub renews an idle master on topic switch only after a saved summary; busy turns continue. SQLite failure leaves ordinary sessions working.',
+    const memory = tool('topic_memory', t(role === 'worker' ? 'tool.topicMemory.worker' : 'tool.topicMemory'),
       {
-        topic: z.string(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
+        topic: z.string().optional(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
         version: z.number().int().nonnegative().optional(), covered_event: z.number().int().nonnegative().optional(), source: z.string().max(160).optional(),
         anonymized: z.literal(true).optional(), text: z.string().max(12000).optional(), supersedes: z.string().optional(),
         state: z.object({ objective: z.string().max(2000).optional(), summary: z.string().max(6000).optional(),
@@ -3712,20 +3711,21 @@ export class SessionManager extends EventEmitter {
           blockers: z.array(z.string().max(500)).max(20).optional(), artifacts: z.array(z.string().max(500)).max(30).optional(),
           nextStep: z.string().max(1000).optional() }).optional(),
       }, (args) => run(() => {
-        if (role === 'worker' && this.topics.linkOf(s.name) !== args.topic) throw new Error('Memory access requires this worker’s assigned topic');
+        const topic = memoryTopicOf(role, this.topics.linkOf(s.name), args.topic);
         if (this.contextMemory.status.mode !== 'sqlite') return JSON.stringify(this.contextMemory.status);
-        if (args.action === 'read') return JSON.stringify({ lastEvent: this.contextMemory.lastEvent(args.topic), packet: this.contextMemory.get(args.topic) ? this.contextMemory.packet(args.topic) : null, pressure: this.contextMemory.pressure(args.topic) });
-        if (args.anonymized !== true || !args.source) throw new Error('Anonymize first and provide source provenance');
-        const provenance: Provenance = { actor: s.name, source: args.source, anonymized: true };
-        if (args.action === 'remember') return JSON.stringify(this.contextMemory.remember(args.topic, args.text ?? '', provenance));
-        if (args.version === undefined) throw new Error('Read current version before writing (0 for a new topic)');
-        if (args.action === 'decision') return JSON.stringify(this.contextMemory.decision(args.topic, args.text ?? '', provenance, args.version, args.supersedes));
-        if (args.action === 'compact') {
-          if (args.covered_event === undefined) throw new Error('Read the packet and supply its lastEvent as covered_event before compacting');
-          return JSON.stringify(this.contextMemory.compact(args.topic, args.text ?? '', provenance, args.version, args.covered_event));
-        }
-        if (args.state?.summary !== undefined && args.covered_event !== this.contextMemory.lastEvent(args.topic)) throw new Error('Read the packet and supply its lastEvent as covered_event before summarizing');
-        return JSON.stringify(this.contextMemory.update(args.topic, args.state ?? {}, provenance, args.version));
+        if (args.action === 'read') return JSON.stringify({ lastEvent: this.contextMemory.lastEvent(topic), packet: this.contextMemory.get(topic) ? this.contextMemory.packet(topic) : null, pressure: this.contextMemory.pressure(topic) });
+        if (args.anonymized !== true) throw new Error('Anonymize first, then pass anonymized: true');
+        // A user decision names the message it comes from; the session's own notes are its own.
+        if (args.action === 'decision' && !args.source) throw new Error('A decision needs its source: the user message it comes from');
+        const provenance: Provenance = { actor: s.name, source: args.source ?? s.name, anonymized: true };
+        if (args.action === 'remember') return JSON.stringify(this.contextMemory.remember(topic, args.text ?? '', provenance));
+        // Left out, version and covered_event are the current ones: what the session writes now covers what it knows now.
+        const version = args.version ?? this.contextMemory.get(topic)?.version ?? 0;
+        const covered = args.covered_event ?? this.contextMemory.lastEvent(topic);
+        if (args.action === 'decision') return JSON.stringify(this.contextMemory.decision(topic, args.text ?? '', provenance, version, args.supersedes));
+        if (args.action === 'compact') return JSON.stringify(this.contextMemory.compact(topic, args.text ?? args.state?.summary ?? '', provenance, version, covered));
+        if (args.state?.summary !== undefined && covered !== this.contextMemory.lastEvent(topic)) throw new Error('New activity since that read: read the packet again before summarizing');
+        return JSON.stringify(this.contextMemory.update(topic, args.state ?? {}, provenance, version));
       }));
     if (role === 'worker') {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }, extra) =>
@@ -4695,6 +4695,21 @@ export class SessionManager extends EventEmitter {
     const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`);
     const account = this.opts.cfg.accounts.length > 0 ? ` · ${t('workers.account', { name: this.accountName(s.runAccount || this.accountOf(s)) })}${s.userAccount ? ` (${t('workers.byUser', { what: t('workers.userAccount') })})` : ''}` : '';
     return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''}${account} · ${ctx} · ${cost} · ${s.cwd}`;
+  }
+
+  /**
+   * The topic memory section of a session's instructions: the master's, or a worker's with the id of its topic. A worker
+   * linked to no topic has neither the section nor the tool (the hub refused every call it made).
+   */
+  private memoryRules(s: Session): string {
+    const topic = s.role === 'worker' ? this.topics.linkOf(s.name) : undefined;
+    if (s.role === 'worker' && !topic) return '';
+    if (this.contextMemory.status.mode !== 'sqlite') return `
+${t('memory.unavailable')}
+`;
+    return `
+${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('memory.rules.master')}
+`;
   }
 
   /**

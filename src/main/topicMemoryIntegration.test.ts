@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SessionManager } from './sessions';
-import { TopicMemory } from './topicMemory';
+import { memoryTopicOf, TopicMemory } from './topicMemory';
 import { visibleText } from './transcript';
 
 // Exercise the actual session routing hook without launching a provider or accessing installed app data.
@@ -105,4 +105,16 @@ test('a stale summary never reaches the prompt; structured state and recent mess
     assert.match(fresh.text, /CURRENT_SUMMARY/);
     assert.match(fresh.text, /"summary_stale":false/);
   } finally { memory.close(); }
+});
+
+test('a worker is told its own topic and may leave it out; without a topic it gets no memory section', () => {
+  const { manager } = fixture();
+  const linked = Object.assign(Object.create(SessionManager.prototype), { contextMemory: new TopicMemory(':memory:'), topics: { linkOf: (name: string) => (name === 'hub-w' ? 'topic-7' : undefined) } });
+  assert.match(linked.memoryRules({ role: 'worker', name: 'hub-w' }), /topic-7/);
+  assert.equal(linked.memoryRules({ role: 'worker', name: 'hub-other' }), '');
+  assert.match(manager.memoryRules({ role: 'master', name: 'hub-maitre' }), /version and covered_event/);
+  assert.equal(memoryTopicOf('worker', 'topic-7', undefined), 'topic-7');
+  assert.throws(() => memoryTopicOf('worker', 'topic-7', 'topic-8'), /Your topic is topic-7/);
+  assert.throws(() => memoryTopicOf('worker', undefined, 'topic-7'), /No topic is linked/);
+  assert.throws(() => memoryTopicOf('master', undefined, undefined), /Name the topic/);
 });
