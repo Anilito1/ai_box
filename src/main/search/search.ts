@@ -237,8 +237,12 @@ export const TUNING = {
   rerankChars: 800,
   /** …and only when the first and fifth results by meaning are closer than this. */
   rerankGap: 0.05,
-  /** Under these, the search says it found nothing sure instead of showing code. 0 answers always. */
-  minMeaning: 0,
+  /**
+   * Under these, the search says it found nothing sure instead of showing code; 0 answers always. Cosine of
+   * nemotron-3-embed-1b, to measure again with another model: on the dev half, 0.3 silences 8 % of the questions,
+   * 7 of the 11 that have no answer in the repo, and one right answer in 86.
+   */
+  minMeaning: 0.3,
   minReranker: 0,
   /**
    * Definitions of the names a described behaviour holds, shown before what the search finds. None: on the dev
