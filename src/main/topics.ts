@@ -91,8 +91,8 @@ export function topicToolSpec(l: Lang = lang()) {
   const fr = l === 'fr';
   return {
     description: fr
-      ? "Range ta réponse dans un sujet (un chantier) : le hub classe ta conversation par sujet pour l'utilisateur et lui montre un badge tant que tu attends sa réponse. Appelle-le au début de chaque réponse qui porte sur un chantier, avant tout autre outil."
-      : 'Files your reply under a topic (a job): the hub sorts your conversation by topic for the user and shows them a badge while you wait for their answer. Call it at the start of every reply about a job, before any other tool.',
+      ? "Range ta réponse dans un sujet (un chantier) : le hub classe ta conversation par sujet pour l'utilisateur et lui montre un badge tant que tu attends sa réponse. Dans chaque réponse qui porte sur un chantier, appelle-le en premier dans le message de ton premier autre outil, jamais seul dans un message."
+      : 'Files your reply under a topic (a job): the hub sorts your conversation by topic for the user and shows them a badge while you wait for their answer. In every reply about a job, call it first in the message of your first other tool, never alone in a message.',
     fields: {
       id: fr
         ? "Identifiant stable, en minuscules avec tirets (ex. paiements-niveau-a). Réutilise celui d'un sujet existant."
@@ -130,7 +130,7 @@ export function topicsSection(l: Lang = lang()): string {
     return `## Sujets
 L'utilisateur suit plusieurs chantiers à la fois dans ta conversation ; le hub la range par sujet avec l'outil \`topic\`.
 - Un sujet = un chantier (une demande et ses suites), jamais plusieurs chantiers regroupés. Plusieurs workers peuvent partager un sujet s'ils travaillent au même chantier.
-- Au début de chaque réponse qui porte sur un chantier, avant tout autre outil, appelle \`topic\` : \`id\` stable (réutilise celui du sujet existant), \`title\` court (« Paiements · niveau A »), \`workers\` de ce chantier seulement.
+- Dans chaque réponse qui porte sur un chantier, appelle \`topic\` en premier dans le même message que ton premier autre outil (appels groupés), jamais seul : un message qui ne contient que \`topic\` coûte une requête entière. \`id\` stable (réutilise celui du sujet existant), \`title\` court (« Paiements · niveau A »), \`workers\` de ce chantier seulement.
 - Réponse qui touche plusieurs chantiers (tu en lances plusieurs, un retour en concerne un autre) : un appel \`topic\` par chantier, chacun juste avant les outils de ce chantier ; le hub range chaque outil et chaque worker sous le dernier sujet nommé.
 - \`awaiting_user: true\`, avec \`question\`, sur le sujet où tu poses une question à l'utilisateur ou attends son go, son avis ou une validation ; sinon \`false\`. Si tu t'en aperçois en cours de réponse, rappelle \`topic\` pour ce sujet à la fin.
 - Un message général (point sur tout, question sans chantier) : pas de \`topic\`, il reste dans « Tout ».
@@ -139,7 +139,7 @@ L'utilisateur suit plusieurs chantiers à la fois dans ta conversation ; le hub 
   return `## Topics
 The user follows several jobs at once in your conversation; the hub sorts it by topic with the \`topic\` tool.
 - A topic = one job (a request and its follow-ups), never several jobs together. Several workers may share a topic when they work on the same job.
-- At the start of every reply about a job, before any other tool, call \`topic\`: a stable \`id\` (reuse the existing topic's), a short \`title\` ("Payments · level A"), the \`workers\` of that job only.
+- In every reply about a job, call \`topic\` first in the same message as your first other tool (grouped calls), never alone: a message holding only \`topic\` costs a whole request. A stable \`id\` (reuse the existing topic's), a short \`title\` ("Payments · level A"), the \`workers\` of that job only.
 - A reply about several jobs (you start several, a report concerns another one): one \`topic\` call per job, each right before that job's tools; the hub files each tool and each worker under the topic named last.
 - \`awaiting_user: true\`, with \`question\`, on the topic where you ask the user a question or wait for their go-ahead, opinion or approval; otherwise \`false\`. If you notice it during your reply, call \`topic\` again for that topic at the end.
 - A general message (an overview, a question about no job): no \`topic\`, it stays in "All".
