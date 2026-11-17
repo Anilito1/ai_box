@@ -92,7 +92,7 @@ bounded.sort((a, b) => a - b);
 const boundedLines = bounded.length ? bounded[Math.floor(bounded.length / 2)] : 150;
 
 // 3. Each request's cost, split between the results its context carried and the step it took.
-const blank = () => ({ cost: 0, eq: 0, requests: 0, usage: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 }, content: {}, trip: {}, sessions: new Set(), results: {}, episodes: { n: 0, locateRuns: 0, locateTrips: 0, savedTrips: 0, savedTripCost: 0, lengths: {} }, overflow: 0, explore: { requests: 0, calls: 0, single: 0, context: 0 } });
+const blank = () => ({ cost: 0, eq: 0, requests: 0, usage: { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0 }, content: {}, trip: {}, sessions: new Set(), results: {}, episodes: { n: 0, locateRuns: 0, locateTrips: 0, savedTrips: 0, savedTripCost: 0, lengths: {}, longRequests: 0, longTripCost: 0 }, overflow: 0, explore: { requests: 0, calls: 0, single: 0, context: 0 } });
 const groups = { all: blank() };
 const groupOf = (key) => (groups[key] ??= blank());
 const add = (o, k, v) => (o[k] = (o[k] ?? 0) + v);
@@ -113,6 +113,10 @@ for (const s of sessions) {
       g.episodes.n++;
       g.episodes.locateTrips += episode.locate;
       if (episode.locate) g.episodes.locateRuns++;
+      if (episode.length >= 3) {
+        g.episodes.longRequests += episode.length;
+        g.episodes.longTripCost += episode.tripCost;
+      }
       const bucket = episode.length >= 6 ? '6+' : String(episode.length);
       g.episodes.lengths[bucket] = (g.episodes.lengths[bucket] ?? 0) + 1;
     }
@@ -155,8 +159,9 @@ for (const s of sessions) {
     }
     if (!explore) closeEpisode();
     else {
-      episode ??= { locate: 0, locateCost: 0, length: 0 };
+      episode ??= { locate: 0, locateCost: 0, length: 0, tripCost: 0 };
       episode.length++;
+      episode.tripCost += rest;
       if (r.emits.locate) {
         episode.locate++;
         episode.locateCost += (rest * r.emits.locate) / calls;
@@ -220,7 +225,7 @@ function summary(g) {
       strict: pct(strict, g.cost),
       withConsult: pct(strict + CONSULT_REPLACED * consult, g.cost),
     },
-    episodes: { n: g.episodes.n, locateRuns: g.episodes.locateRuns, locateTrips: g.episodes.locateTrips, savedTrips: g.episodes.savedTrips, lengths: g.episodes.lengths },
+    episodes: { n: g.episodes.n, locateRuns: g.episodes.locateRuns, locateTrips: g.episodes.locateTrips, savedTrips: g.episodes.savedTrips, lengths: g.episodes.lengths, longRequests: g.episodes.longRequests, longTripShare: pct(g.episodes.longTripCost, g.cost) },
     results: Object.fromEntries(Object.entries(g.results).map(([t, x]) => [t, { n: x.n, avgTokens: Math.round(x.tokens / Math.max(x.n, 1)) }])),
     overflowRequests: g.overflow,
     // Round trips spent exploring: how many, how many calls each carried, and the context each one read again.

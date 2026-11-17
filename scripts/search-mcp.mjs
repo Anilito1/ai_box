@@ -47,24 +47,38 @@ const answer = async (work) => {
   }
 };
 
-// The same words as the hub gives its sessions (src/main/i18n.ts): what is measured is what would ship.
-const server = new McpServer({ name: 'search', version: '0.2.0' });
-server.tool(
+// The words the hub should give its sessions too (src/main/i18n.ts, src/main/providers/claude/adapter.ts): what is
+// measured is what would ship. Claude Code defers MCP tools behind its tool search, showing the model only their names
+// until it loads them; `alwaysLoad` keeps search_code in the prompt, for a few hundred cached tokens a request.
+//   AIBOX_SEARCH_EXPOSE  how the agent learns of the tools, to compare: deferred | always (default) | instructions | both
+const expose = process.env.AIBOX_SEARCH_EXPOSE ?? 'always';
+const INSTRUCTIONS =
+  'Local index of the repo you work in. To find where something is (a feature, a behaviour, a name you are not sure of), call search_code before Grep, Glob or reading files, then Read only the line ranges it gives. For what a table, an RPC, an edge function or a scheduled job is: where_is. Keep Grep to list every occurrence of an exact string.';
+const ALWAYS = expose === 'always' || expose === 'both' ? { 'anthropic/alwaysLoad': true } : {};
+const server = new McpServer({ name: 'search', version: '0.3.0' }, expose === 'instructions' || expose === 'both' ? { instructions: INSTRUCTIONS } : {});
+server.registerTool(
   'search_code',
-  'Finds where something is in a repo: give a name of the code, a path, or describe a behaviour (French or English). Answers `path:lines symbol (score)` with a short excerpt; then Read only those lines. Local, nothing leaves this computer. Not exhaustive: Grep lists every occurrence.',
   {
-    query: z.string().min(2).max(500).describe('Question or description of what you look for'),
-    k: z.number().int().min(1).max(20).optional().describe('Number of results (default 5, 3 with expand)'),
-    path: z.string().max(300).optional().describe('Only under this folder of the repo (e.g. src/main)'),
-    expand: z.boolean().optional().describe('true: each piece whole instead of an excerpt'),
-    budget: z.number().int().min(300).max(8000).optional().describe('Size of the answer in tokens (default 800)'),
+    description:
+      'Use first when you do not know which file holds something: a behaviour or a feature described in French or English, a name you are unsure of, a path. One call replaces several rounds of Grep, Glob and exploratory reads. Answers the best places as `path:start-end symbol (score)` with a short excerpt, about 800 tokens; then Read only those lines. "No confident match": use Grep. Local, nothing leaves this computer. Not exhaustive: Grep lists every occurrence of an exact string.',
+    inputSchema: {
+      query: z.string().min(2).max(500).describe('A described behaviour, a name or a path'),
+      k: z.number().int().min(1).max(20).optional().describe('Number of places (default 5, 3 with expand)'),
+      path: z.string().max(300).optional().describe('Only under this folder (e.g. src/main)'),
+      expand: z.boolean().optional().describe('Whole pieces instead of excerpts (more tokens)'),
+      budget: z.number().int().min(300).max(8000).optional().describe('Answer size in tokens (default 800)'),
+    },
+    _meta: ALWAYS,
   },
   (a) => answer(() => call('searchCode', process.cwd(), { query: a.query, k: a.k, expand: a.expand === true, budget: a.budget, under: a.path })),
 );
-server.tool(
+server.registerTool(
   'where_is',
-  'What a name is across the indexed repos (edge function, table, SQL function, scheduled job, policy, function of the code): its current definition as `repo path:lines`, and where it is used. Instant, no model.',
-  { name: z.string().min(2).max(200).describe('The exact name (e.g. a table, an RPC, an edge function slug)') },
+  {
+    description:
+      'What a name is across the indexed repos (edge function, table, SQL function, scheduled job, policy, function of the code): its current definition as `repo path:lines`, and where it is used. Use it instead of grepping several repos or the migrations for a name. Instant, no model, a few lines.',
+    inputSchema: { name: z.string().min(2).max(200).describe('The exact name (e.g. a table, an RPC, an edge function slug)') },
+  },
   (a) => answer(() => call('whereIs', process.cwd(), a.name)),
 );
 process.on('exit', () => host?.kill());

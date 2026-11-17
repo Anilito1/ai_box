@@ -1,0 +1,38 @@
+[
+  {
+    "id": "hub-handoff",
+    "repo": "claude-hub",
+    "prompt": "Explique comment l'AI Box décide qu'un worker permanent doit écrire sa note de passation, où la note est gardée et comment elle est remise dans la conversation suivante. Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["src/main/sessions.ts"]
+  },
+  {
+    "id": "hub-cost-day",
+    "repo": "claude-hub",
+    "prompt": "Explique comment l'AI Box calcule le coût du jour affiché dans la barre d'état et à quel moment il repart de zéro. Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["src/main/costLog.ts"]
+  },
+  {
+    "id": "crm-repondeur",
+    "repo": "CRM-extension",
+    "prompt": "Explique comment le pilote automatique d'appels reconnaît qu'il est tombé sur une messagerie vocale et ce qu'il fait ensuite (raccrocher, laisser un message, passer au contact suivant). Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["lib/pd-amd-core.js"]
+  },
+  {
+    "id": "crm-sql-garde",
+    "repo": "CRM-extension",
+    "prompt": "Explique comment le serveur de la fiche client empêche une requête SQL dangereuse de s'exécuter : ce qui est refusé, à quel endroit et ce que reçoit l'appelant. Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["supabase/functions/crm-customer/sql-guard.ts"]
+  },
+  {
+    "id": "mkt-achat-meta",
+    "repo": "marketing-factory",
+    "prompt": "Explique comment un achat est remonté à Meta côté serveur : d'où vient l'évènement, comment on vérifie que le paiement est bien encaissé et quel montant est envoyé. Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["supabase/functions/meta-capi/index.ts"]
+  },
+  {
+    "id": "mkt-paiement-stripe",
+    "repo": "marketing-factory",
+    "prompt": "Quand un paiement Stripe arrive, explique comment on s'assure qu'il vient bien de Stripe et ce qui est enregistré ensuite, dans quelle table. Cite fichier:lignes pour chaque étape. Réponse en 12 lignes max.",
+    "expect": ["supabase/functions/stripe-webhook/index.ts"]
+  }
+]
