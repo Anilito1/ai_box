@@ -136,7 +136,7 @@ export function translate(msg: SDKMessage): AgentEvent[] {
           isError: msg.is_error === true,
           result: msg.subtype === 'success' ? msg.result : '',
           queued: typeof msg.queued_turn_count === 'number' ? msg.queued_turn_count : null,
-          contextWindows: Object.values(msg.modelUsage ?? {}).map((m) => m.contextWindow),
+          contextWindows: Object.fromEntries(Object.entries(msg.modelUsage ?? {}).map(([model, m]) => [model, m.contextWindow])),
           usage: totalsOf(msg.total_cost_usd, msg.modelUsage),
         },
       ];

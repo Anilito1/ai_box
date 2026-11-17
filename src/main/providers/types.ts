@@ -126,7 +126,8 @@ export type AgentEvent =
       result: string;
       /** Prompts still waiting in the program's queue, when it says. */
       queued: number | null;
-      contextWindows: number[];
+      /** The window the program reports for each model of the turn, by model id (a subagent's too). */
+      contextWindows: Record<string, number>;
       /** Running totals of the conversation. */
       usage: Totals;
     }

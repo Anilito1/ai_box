@@ -201,7 +201,7 @@ export class GeminiStream {
       isError: reason === 'refusal',
       result: reason === 'cancelled' || reason === 'refusal' ? '' : this.lastAnswer,
       queued: null,
-      contextWindows: this.contextSize > 0 ? [this.contextSize] : [],
+      contextWindows: this.contextSize > 0 ? { [this.model()]: this.contextSize } : {},
       usage: this.usage,
     });
     this.lastAnswer = '';

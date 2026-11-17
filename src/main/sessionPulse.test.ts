@@ -76,7 +76,7 @@ async function hub() {
 
 const toolUse = (id: string, name = 'Agent') => ({ type: 'assistant', id: `reply-${id}`, blocks: [{ type: 'tool_use', id, name, input: {} }], error: '', contextTokens: 0 });
 const started = { type: 'stream', textStart: false, delta: '' };
-const turnEnd = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: [], usage: { cost: 0, models: {} } };
+const turnEnd = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: {}, usage: { cost: 0, models: {} } };
 const refused = { type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' } };
 const heartbeat = { type: 'tool_progress', heartbeat: true, tool_use_id: 't1', tool_name: 'Agent', parent_tool_use_id: null, elapsed_time_seconds: 30 };
 

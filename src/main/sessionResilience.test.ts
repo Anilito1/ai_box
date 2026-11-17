@@ -15,7 +15,7 @@ type Internal = any;
 const never = () => new Promise<never>(() => undefined);
 const processStub = () => ({ close: () => undefined, interrupt: async () => undefined, context: never, totals: never, rateLimits: never });
 const prompt = (text: string) => ({ text, images: [] });
-const turn = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: [], usage: { cost: 0, models: {} } };
+const turn = { type: 'turn', subtype: 'success', isError: false, result: 'done', queued: 0, contextWindows: {}, usage: { cost: 0, models: {} } };
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'session-resilience-'));
   const work = join(dir, 'work'); mkdirSync(work);
@@ -182,5 +182,62 @@ test('queued deliveries keep every isolated worktree available for resumption', 
     assert.match(result, /accusé de réception/);
     assert.equal(s.tree.state, 'kept'); assert.equal(s.extraTrees[0].state, 'kept');
     assert.equal(s.deliveries[0].state, 'queued');
+  } finally { done(); }
+});
+
+test('messages that waited during a turn and came back coalesced leave the session idle, /clear allowed', async () => {
+  const { manager, inner, s, q, done } = fixture();
+  try {
+    const next = s.inbox[Symbol.asyncIterator]();
+    inner.onEvent(s, q, { type: 'promptTaken', text: 'MISSION_001' });
+    inner.pushUser(s, { ...prompt('[Worker A] REPORT_A'), from: 'hub' }); await next.next();
+    inner.pushUser(s, { ...prompt('[Worker B] REPORT_B'), from: 'hub' }); await next.next();
+    inner.onEvent(s, q, { ...turn, queued: 2 }); // Both still wait in the provider.
+    // Claude Code takes both together: one user message, one echo, their texts joined.
+    inner.onEvent(s, q, { type: 'promptTaken', text: '[Worker A] REPORT_A\n[Worker B] REPORT_B' });
+    inner.onEvent(s, q, turn);
+    assert.equal(s.queued, 0);
+    assert.equal(inner.isWorking(s), false);
+    assert.deepEqual(manager.snapshot().sessions.find(v => v.id === s.id)?.busy, []);
+  } finally { done(); }
+});
+
+test('a turn end settles inputs taken without a matching echo, and an unknown input never keeps a session working', async () => {
+  const { inner, s, q, done } = fixture();
+  try {
+    const next = s.inbox[Symbol.asyncIterator]();
+    inner.pushUser(s, prompt('FIRST_001')); await next.next();
+    inner.pushUser(s, prompt('SECOND_002')); await next.next();
+    inner.onEvent(s, q, { type: 'promptTaken', text: 'an echo worded otherwise' });
+    inner.onEvent(s, q, turn);
+    assert.equal(s.queued, 0, 'the provider holds nothing more: what was sent before its echo was taken');
+    assert.equal(inner.isWorking(s), false);
+    s.deliveries.push({ id: 'LOST_001', value: { content: 'LOST' }, state: 'unknown', createdAt: 0, updatedAt: 0 });
+    inner.pushUser(s, prompt('THIRD_003')); await next.next();
+    inner.onEvent(s, q, { type: 'promptTaken', text: 'THIRD_003' });
+    inner.onEvent(s, q, turn);
+    assert.equal(s.queued, 0);
+    assert.equal(inner.isWorking(s), false);
+  } finally { done(); }
+});
+
+test('/clear refused while the session itself works says why; forced, it says what it stopped', async () => {
+  const { manager, inner, s, q, done } = fixture();
+  try {
+    let launched = 0;
+    inner.launch = async () => { launched++; };
+    inner.onEvent(s, q, { type: 'promptTaken', text: 'WORK_001' });
+    inner.onEvent(s, q, { type: 'background', tasks: ['npm run dev'] });
+    inner.pushUser(s, { ...prompt('[Worker A] REPORT_A'), from: 'hub' }); await s.inbox[Symbol.asyncIterator]().next();
+    manager.clear(s.id);
+    const notices = () => [...s.items.values()].filter((i: Internal) => i.kind === 'notice').map((i: Internal) => i.text);
+    assert.match(notices().at(-1), /still working \(a turn in progress · 1 message not taken in yet · 1 background task: npm run dev\)/);
+    assert.equal(launched, 0);
+    manager.clear(s.id, true);
+    assert.match(notices().at(-2), /stopping what was still under way: a turn in progress · 1 background task: npm run dev\.$/);
+    assert.match(notices().at(-1), /1 message it had not taken in yet goes to the new conversation/);
+    assert.deepEqual(s.deliveries.map((e: Internal) => e.state), ['queued'], 'the new conversation gets it');
+    assert.deepEqual(inner.busyOf(s), [], 'the old process is gone');
+    assert.equal(launched, 1);
   } finally { done(); }
 });

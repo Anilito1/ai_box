@@ -49,7 +49,7 @@ const api: HubApi = {
   remove: (id) => ipcRenderer.send('session:remove', id),
   sessionCommands: (id) => ipcRenderer.invoke('session:commands', id),
   compact: (id, instructions) => ipcRenderer.send('session:compact', id, instructions),
-  clear: (id) => ipcRenderer.send('session:clear', id),
+  clear: (id, force) => ipcRenderer.send('session:clear', id, force === true),
   deleteTopic: (topic) => ipcRenderer.send('topic:delete', topic),
   moveTopic: (topic, group) => ipcRenderer.send('topic:move', topic, group ?? null),
   showCost: (id) => ipcRenderer.send('session:cost', id),

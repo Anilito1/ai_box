@@ -66,7 +66,7 @@ test('usage: the context is the last update, the tokens are summed per model acr
   assert.ok(Math.abs(turn.usage.cost - .0003575) < 1e-12);
   assert.deepEqual({ ...turn.usage.models['gemini-2.5-pro'], cost: 0 }, { cost: 0, input: 110, output: 22, cacheRead: 0, cacheWrite: 0 });
   assert.equal(turn?.type === 'turn' && turn.usage.models['gemini-3.8-flash'].input, 5);
-  assert.deepEqual(turn?.type === 'turn' && turn.contextWindows, [1_000_000]);
+  assert.deepEqual(turn?.type === 'turn' && turn.contextWindows, { 'gemini-2.5-pro': 1_000_000 });
 });
 
 test('how a turn ends: cancelled is an interruption, a refusal an error, running out of tokens still a turn', () => {

@@ -22,7 +22,8 @@ export class Inbox<T> implements AsyncIterable<T> {
     return entries.map(entry => entry.state === 'sent' ? { ...entry, state: 'unknown', updatedAt: Date.now() } : entry);
   }
 
-  get pending(): number { return this.entries.filter(e => e.state === 'queued' || e.state === 'sent' || e.state === 'unknown').length; }
+  /** Inputs still on their way to this stream's process; an unknown one went to a process that is gone, nothing waits for it. */
+  get pending(): number { return this.entries.filter(e => e.state === 'queued' || e.state === 'sent').length; }
 
   push(value: T, id: string = randomUUID()): string {
     if (this.closed) throw new Error('Inbox is closed');
@@ -39,6 +40,48 @@ export class Inbox<T> implements AsyncIterable<T> {
     const entry = this.entries.find(e => (e.state === 'sent' || e.state === 'unknown') && (typeof match === 'string' ? e.id === match : match(e.value)));
     if (!entry) return false;
     entry.state = 'acknowledged'; entry.updatedAt = Date.now();
+    this.changed();
+    return true;
+  }
+
+  /**
+   * The provider's echo of an input it took. Inputs that waited together can come back as one echo, their texts
+   * joined (Claude Code coalesces its queue): every input of that run is received.
+   */
+  acknowledgeEcho(echo: string, textOf: (value: T) => string): boolean {
+    // The live process's inputs first: an unknown one went to an earlier process.
+    const sent = this.entries.filter(e => e.state === 'sent');
+    const same = sent.find(e => textOf(e.value) === echo);
+    if (same) return this.receive([same]);
+    for (let i = 0; i < sent.length; i++) {
+      const run = coalesced(sent.slice(i), echo.trim(), textOf);
+      if (run.length > 0) return this.receive(run);
+    }
+    return this.acknowledge(value => textOf(value) === echo);
+  }
+
+  /** Inputs sent but not taken go out again, to the next process: a new conversation never saw them. */
+  requeue(): void {
+    const sent = this.entries.filter(e => e.state === 'sent');
+    if (sent.length === 0) return;
+    for (const entry of sent) { entry.state = 'queued'; entry.updatedAt = Date.now(); }
+    this.changed();
+  }
+
+  /**
+   * A turn ended with `held` inputs still waiting in the provider: the oldest sent ones beyond those were taken, even
+   * without an echo of their own. Only those sent before `echoedAt` (the last echo heard), so an input written as the
+   * turn ended stays unconfirmed until its own echo.
+   */
+  settle(held: number, echoedAt: number): boolean {
+    const sent = this.entries.filter(e => e.state === 'sent');
+    return this.receive(sent.slice(0, Math.max(0, sent.length - held)).filter(e => e.updatedAt <= echoedAt));
+  }
+
+  private receive(entries: InboxEntry<T>[]): boolean {
+    if (entries.length === 0) return false;
+    const at = Date.now();
+    for (const entry of entries) { entry.state = 'acknowledged'; entry.updatedAt = at; }
     this.changed();
     return true;
   }
@@ -84,4 +127,20 @@ export class Inbox<T> implements AsyncIterable<T> {
       },
     };
   }
+}
+
+/** The entries, from the first one on, whose texts make up the whole echo in order; none when they do not. */
+function coalesced<T>(entries: InboxEntry<T>[], echo: string, textOf: (value: T) => string): InboxEntry<T>[] {
+  const run: InboxEntry<T>[] = [];
+  let rest = echo;
+  for (const entry of entries) {
+    const text = textOf(entry.value).trim();
+    const after = rest.slice(text.length);
+    // Joined at a line or a space, never inside a word: "ok" and "ay" are not "okay".
+    if (!text || !rest.startsWith(text) || (after && !/^\s/.test(after))) return [];
+    run.push(entry);
+    rest = after.trimStart();
+    if (!rest) return run;
+  }
+  return [];
 }

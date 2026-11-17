@@ -1127,7 +1127,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('session:analyze', (id) => (isStr(id) ? mgr.analyze(id) : ''));
     handle('session:commands', (id) => (isStr(id) ? mgr.commands(id) : []));
     on('session:compact', (id, instructions) => isStr(id) && isStr(instructions) && instructions.length <= 4000 && mgr.compact(id, instructions));
-    on('session:clear', (id) => isStr(id) && mgr.clear(id));
+    on('session:clear', (id, force) => isStr(id) && mgr.clear(id, force === true));
     on('topic:delete', (topic) => isTopicId(topic) && mgr.deleteTopic(topic));
     on('topic:move', (topic, group) => isTopicId(topic) && (group === null || (isStr(group) && group.length <= 1000)) && mgr.moveTopic(topic, group ?? undefined));
     on('session:cost', (id) => isStr(id) && void mgr.showCost(id));
