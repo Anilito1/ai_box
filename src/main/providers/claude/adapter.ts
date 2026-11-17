@@ -23,6 +23,13 @@ import { toCommands, translate } from './events';
 
 /** The largest autoCompactWindow the CLI accepts: a worker compacts only at the model's own limit. */
 const FULL_WINDOW = 1_000_000;
+/**
+ * Characters of skill descriptions a worker's skill list may take. Claude Code's own budget is 1% of the window: with
+ * 1M, the list weighs about 8k tokens on every request of every worker. Each skill keeps its name and the start of its
+ * description; a value the user set in their own environment wins.
+ */
+const WORKER_SKILL_LIST_CHARS = '8000';
+
 
 
 /**
@@ -210,7 +217,7 @@ export const claudeAdapter: ProviderAdapter = {
         return { behavior: 'allow', updatedInput: input, ...(answer.always && o.suggestions ? { updatedPermissions: o.suggestions } : {}) };
       },
       onElicitation: (req, o) => spec.onElicitation({ serverName: req.serverName, message: req.message, mode: req.mode, requestedSchema: req.requestedSchema }, o.signal),
-      env: spec.env,
+      env: master ? spec.env : { SLASH_COMMAND_TOOL_CHAR_BUDGET: WORKER_SKILL_LIST_CHARS, ...spec.env },
       ...(spec.conversation.resume ? { resume: spec.conversation.id } : { sessionId: spec.conversation.id }),
     };
     // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.

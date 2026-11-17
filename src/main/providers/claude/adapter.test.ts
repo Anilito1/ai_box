@@ -23,6 +23,12 @@ test('Ultracode goes to Claude Code in the flag settings of the launch, only whe
   assert.ok(!('ultracode' in launchSettings({ role: 'worker', ultracode: false })));
 });
 
+test('a worker gets neither the unused claude.ai connectors nor MasterTools; the master keeps them', () => {
+  const denied = (launchSettings({ role: 'worker', ultracode: false }).deniedMcpServers ?? []).map((d) => d.serverName);
+  assert.ok(denied.includes('claude.ai MasterTools') && denied.includes('higgsfield'));
+  assert.equal(launchSettings({ role: 'master', ultracode: false }).deniedMcpServers, undefined);
+});
+
 function fakeQuery() {
   const applied: unknown[] = [];
   const q = { applyFlagSettings: async (settings: unknown) => void applied.push(settings) } as unknown as Query;
