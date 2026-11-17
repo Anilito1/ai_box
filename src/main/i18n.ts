@@ -111,7 +111,9 @@ const en = {
   'hub.noText': '(no text)',
   'tool.byName': 'Worker name (e.g. "hub-fix-api")',
   'tool.listWorkers':
-    'Every hub worker, the team (permanent workers) first: status (asleep, ready, working…), folder (cwd), post, mission, model, effort, context, cost, background tasks, preview of its last message.',
+    'Every hub worker, the team (permanent workers) first, one line each: status (asleep, ready, working…), model, effort, context, mission. detail=true adds post, folder (cwd), account, cost, background tasks and the preview of its last message; name=<worker> gives one worker in full.',
+  'tool.listWorkers.detail': 'Full cards (post, folder, account, cost, background tasks, last message) instead of one line per worker.',
+  'tool.listWorkers.name': 'One worker only (hub-xxx or xxx), in full.',
   'tool.listRepos': "Local git repositories under {roots} (worktrees included): name, path, remote, current branch. A worker's cwd = the folder's root.",
   'tool.listCapabilities':
     'Read only. MCP servers (connected first, then to connect, then in error) and skills installed on this computer, one line each: name, source, state, who can use it (master+workers, master only, or only sessions whose cwd is a given repo). Use it to name the right skills and connectors in a brief.',
@@ -206,6 +208,9 @@ const en = {
   'repos.unreadable': 'unreadable',
   'repos.detached': 'detached ({sha})',
   'workers.none': 'No worker.',
+  'workers.unknown': 'No worker named {name}.',
+  'workers.more': 'Post, folder, account, cost, background tasks, last message: list_workers with detail=true, or name=<worker>.',
+  'workers.busyBackground': '{n} background task(s)',
   'workers.team': 'Team (permanent workers):',
   'workers.adhoc': 'Ad-hoc workers:',
   'workers.post': '  post: {text} · model {model}, effort {effort}',
@@ -528,7 +533,7 @@ const en = {
   'workers.leads': '  lead of group {list}',
   'workers.groups': 'Groups (lead → members): {list}',
   'workers.notMine': '{n} other worker(s) outside your group: ask the master.',
-  'tool.lead.listWorkers': 'The workers of your group(s): you first, then your members with status, post, mission, model, provider account, context, cost, preview of their last message.',
+  'tool.lead.listWorkers': 'The workers of your group(s), you first, one line each: status, model, effort, context, mission. detail=true adds post, account, cost and the preview of their last message.',
   'tool.lead.message':
     'Writes to a member of your group: precise instruction, answer to its question. It receives it as an instruction from you, its lead. A sleeping or closed member is woken or restarted with its whole conversation, on its own provider; a working one reads it at the end of its current step. Its report comes back to you as a message. Only your members.',
   'tool.lead.report': "A member's mission, state, recent activity (tools, messages) and full last message. Only your members.",
@@ -678,7 +683,9 @@ const fr: Record<Key, string> = {
   'hub.noText': '(aucun texte)',
   'tool.byName': 'Nom du worker (ex. "hub-fix-api")',
   'tool.listWorkers':
-    "Tous les workers du hub, l'équipe (workers permanents) d'abord : statut (endormi, prêt, en cours…), dossier (cwd), poste, mission, modèle, effort, contexte, coût, tâches de fond, aperçu du dernier message.",
+    "Tous les workers du hub, l'équipe (workers permanents) d'abord, une ligne chacun : statut (endormi, prêt, en cours…), modèle, effort, contexte, mission. detail=true ajoute poste, dossier (cwd), compte, coût, tâches de fond et aperçu du dernier message ; name=<worker> donne un seul worker en entier.",
+  'tool.listWorkers.detail': 'Fiches complètes (poste, dossier, compte, coût, tâches de fond, dernier message) au lieu d’une ligne par worker.',
+  'tool.listWorkers.name': 'Un seul worker (hub-xxx ou xxx), en entier.',
   'tool.listRepos': "Dépôts git locaux sous {roots} (worktrees compris) : nom, chemin, remote, branche courante. Le cwd d'un worker = la racine du dossier.",
   'tool.listCapabilities':
     "Lecture seule. Serveurs MCP (connectés d'abord, puis à connecter, puis en erreur) et skills installés sur cet ordinateur, une ligne chacun : nom, source, état, qui peut s'en servir (maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné). Sert à citer les bons skills et connecteurs dans un brief.",
@@ -775,6 +782,9 @@ const fr: Record<Key, string> = {
   'repos.unreadable': 'illisible',
   'repos.detached': 'détachée ({sha})',
   'workers.none': 'Aucun worker.',
+  'workers.unknown': 'Aucun worker nommé {name}.',
+  'workers.more': 'Poste, dossier, compte, coût, tâches de fond, dernier message : list_workers avec detail=true, ou name=<worker>.',
+  'workers.busyBackground': '{n} tâche(s) de fond',
   'workers.team': 'Équipe (workers permanents) :',
   'workers.adhoc': 'Workers ponctuels :',
   'workers.post': '  poste : {text} · modèle {model}, effort {effort}',
@@ -1103,7 +1113,7 @@ const fr: Record<Key, string> = {
   'workers.leads': '  chef du groupe {list}',
   'workers.groups': 'Groupes (chef → membres) : {list}',
   'workers.notMine': '{n} autre(s) worker(s) hors de ton groupe : passe par le maître.',
-  'tool.lead.listWorkers': "Les workers de ton ou tes groupes : toi d'abord, puis tes membres avec état, poste, mission, modèle, compte, contexte, coût, aperçu de leur dernier message.",
+  'tool.lead.listWorkers': "Les workers de ton ou tes groupes, toi d'abord, une ligne chacun : état, modèle, effort, contexte, mission. detail=true ajoute poste, compte, coût et aperçu de leur dernier message.",
   'tool.lead.message':
     "Écrit à un membre de ton groupe : consigne précise, réponse à sa question. Il la reçoit comme une consigne de toi, son chef. Un membre endormi ou fermé est réveillé ou relancé avec toute sa conversation, sur son propre fournisseur ; un membre au travail la lit à la fin de son étape. Son rapport te revient en message. Tes membres seulement.",
   'tool.lead.report': "Mission, état, activité récente (outils, messages) et dernier message complet d'un membre. Tes membres seulement.",

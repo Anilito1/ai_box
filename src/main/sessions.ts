@@ -417,6 +417,9 @@ export type RoleSave = { role: TeamRole; before: TeamRole | null; notes: ChoiceN
 
 type PermissionItem = Extract<ChatItem, { kind: 'permission' }>;
 
+/** list_workers: one line per worker, or the full cards (`detail`), or one worker's card (`name`). */
+type ListOptions = { detail?: boolean | null; name?: string | null };
+
 const MASTER_ID = 'master';
 /** Effort of a worker when nobody fixed one: the user's own default (settings.json) is for their own sessions. */
 const WORKER_EFFORT: Effort = 'medium';
@@ -3694,7 +3697,8 @@ export class SessionManager extends EventEmitter {
         }
       });
     };
-    const listWorkers = tool('list_workers', t('tool.listWorkers'), {}, () => run(() => this.listWorkers()));
+    const listShape = { detail: z.boolean().nullish().describe(t('tool.listWorkers.detail')), name: z.string().nullish().describe(t('tool.listWorkers.name')) };
+    const listWorkers = tool('list_workers', t('tool.listWorkers'), listShape, (a) => run(() => this.listWorkers(undefined, a as ListOptions)));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
     const memory = tool('topic_memory',
@@ -3739,7 +3743,7 @@ export class SessionManager extends EventEmitter {
       const lead = this.groupsLed(s).length > 0;
       const leadTools = lead
         ? [
-            tool('list_workers', t('tool.lead.listWorkers'), {}, () => run(() => this.listWorkers(s))),
+            tool('list_workers', t('tool.lead.listWorkers'), listShape, (a) => run(() => this.listWorkers(s, a as ListOptions))),
             tool(
               'message_worker',
               t('tool.lead.message'),
@@ -4693,6 +4697,21 @@ export class SessionManager extends EventEmitter {
     return `${s.name} · ${status}${since} · ${model}${mine.length ? ` (${t('workers.byUser', { what: mine.join(', ') })})` : ''}${account} · ${ctx} · ${cost} · ${s.cwd}`;
   }
 
+  /**
+   * A worker in one line, what the master needs to route work: status, model and effort, context, mission. Its post,
+   * folder, account, cost, background tasks and last message come with `detail` (16 KB on average for the whole team).
+   */
+  private workerBrief(s: Session): string {
+    const m = s.metrics;
+    const ctx = m?.contextPct != null ? `ctx ${m.estimated ? '~' : ''}${Math.round(m.contextPct)}%` : 'ctx —';
+    const since = s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '';
+    const status = s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`);
+    const model = `${s.modelLabel || s.model || t('spawn.usualModel')}/${s.effort ?? t('spawn.usualEffort')}`;
+    const busy = s.background.length > 0 ? ` · ${t('workers.busyBackground', { n: s.background.length })}` : '';
+    const mission = s.mission ? ` · ${oneLine(s.mission, 90)}` : '';
+    return `${s.instanceOf ? '  ↳ ' : '- '}${s.name} · ${status}${since} · ${model} · ${ctx}${busy}${mission}`;
+  }
+
   /** Its worktree as the master reads it: branch, and what was kept at the last close. */
   private treeLine(s: Session): string {
     const tree = s.tree;
@@ -4703,14 +4722,20 @@ export class SessionManager extends EventEmitter {
   }
 
   /** Every worker for the master (and the workers that coordinate); a lead's own tool shows its groups only. */
-  private listWorkers(lead?: Session): string {
+  private listWorkers(lead?: Session, opts: ListOptions = {}): string {
     const { cfg } = this.opts;
     const all = this.visible().filter((s) => s.role === 'worker');
-    const workers = lead ? all.filter((w) => w === lead || leads(cfg.groups, lead, w)) : all;
+    const mine = lead ? all.filter((w) => w === lead || leads(cfg.groups, lead, w)) : all;
+    // One worker by name: its full card. Unknown: said, rather than the whole list.
+    const wanted = opts.name ? opts.name.trim().replace(/^hub-/, '') : '';
+    const workers = wanted ? mine.filter((w) => displayName(w) === wanted) : mine;
+    if (wanted && workers.length === 0) return t('workers.unknown', { name: opts.name ?? '' });
+    const detail = !!opts.detail || !!wanted;
     const outside = lead ? all.length - workers.length : 0;
     const accounts = lead ? '' : cfg.accounts.length > 0 ? t('workers.accounts', { list: this.accountBadges().map((a) => a.name).join(', '), usual: this.accountName(firstAccount(cfg.accounts, cfg.workerAccount)) }) : '';
     if (workers.length === 0) return [t('workers.none'), accounts].filter(Boolean).join('\n');
     const block = (s: Session) => {
+      if (!detail) return this.workerBrief(s);
       const post = this.roleOf(s);
       const lines = [`${s.instanceOf ? '  ↳ ' : '- '}${this.workerLine(s)}`];
       if (post) lines.push(t('workers.post', { text: oneLine(post.description, 160), model: post.model || 'auto', effort: post.effort || 'auto' }));
@@ -4742,6 +4767,7 @@ export class SessionManager extends EventEmitter {
       posts.length > 0 ? `${t('workers.team')}\n${posts.flatMap((p) => [p, ...under(p)]).map(block).join('\n')}` : '',
       adhoc.length > 0 ? `${t('workers.adhoc')}\n${adhoc.map(block).join('\n')}` : '',
       outside > 0 ? t('workers.notMine', { n: outside }) : '',
+      detail ? '' : t('workers.more'),
     ]
       .filter(Boolean)
       .join('\n\n');
