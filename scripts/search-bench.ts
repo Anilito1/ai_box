@@ -146,6 +146,8 @@ function configs(grid: string, tag: string, rerankId: string): Config[] {
       ...rr('app rerank10x800 w0', { lexicalWeight: 0, rerankGap: Infinity }),
     ];
   }
+  if (grid === 'pick') return [app(`app ${tag} w0.5 perFile2 pinned0`, { lexicalWeight: 0.5, perFile: 2, pinned: 0 }), app(`app ${tag} w0.25 perFile2 pinned0`, { lexicalWeight: 0.25, perFile: 2, pinned: 0 }), app(`app ${tag} w0.1 perFile2 pinned0`, { lexicalWeight: 0.1, perFile: 2, pinned: 0 }), app(`app ${tag} w0.5 perFile1 pinned0`, { lexicalWeight: 0.5, perFile: 1, pinned: 0 })];
+  if (grid === 'pin') return [0, 1, 2].flatMap((n) => [app(`app ${tag} w0.5 pinned${n}`, { lexicalWeight: 0.5, pinned: n }), app(`app ${tag} w0.5 perFile2 pinned${n}`, { lexicalWeight: 0.5, perFile: 2, pinned: n })]);
   if (grid === 'final') return [vec, app(`app ${tag}`), ...rr('app rerank', {})];
   throw new Error(`Unknown grid ${grid}: models, fusion, rerank, final`);
 }
@@ -192,6 +194,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
     const fileRanks: number[] = [];
     const ms: number[] = [];
     const top: number[] = [];
+    const topBy: string[] = [];
     const shown: number[] = [];
     for (const q of qs) {
       const t = performance.now();
@@ -200,6 +203,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
       ranks.push(rankOf(hits, q));
       fileRanks.push(rankOf(hits, q, true));
       top.push(hits[0] ? Number(hits[0].score.toFixed(3)) : 0);
+      topBy.push(hits[0]?.by ?? '');
       // What the agent would be given: five results in 800 tokens.
       shown.push(Math.ceil(formatHits(hits.slice(0, 5), q.q, 800).length / 3.6));
     }
@@ -209,7 +213,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
     const mrr = answerable.reduce((s, i) => s + (ranks[i] > 0 && ranks[i] <= 10 ? 1 / ranks[i] : 0), 0) / Math.max(1, answerable.length);
     const row = { op: 'eval', set, config: name, n: answerable.length, 'hit@1': hit(1, ranks), 'hit@3': hit(3, ranks), 'hit@5': hit(5, ranks), 'hit@10': hit(10, ranks), 'file@5': hit(5, fileRanks), 'mrr@10': Number(mrr.toFixed(3)), msMedian: Math.round(median(ms)), tokPerQuery: Math.round(shown.reduce((s, x) => s + x, 0) / qs.length) };
     rows.push(row);
-    record({ ...row, ranks, fileRanks, top, sources: qs.map((q) => q.source ?? 'manual'), repos: qs.map((q) => q.repo), answerable: qs.map((q) => q.expect.length > 0) });
+    record({ ...row, ranks, fileRanks, top, topBy, sources: qs.map((q) => q.source ?? 'manual'), repos: qs.map((q) => q.repo), answerable: qs.map((q) => q.expect.length > 0) });
     console.log(JSON.stringify(row));
   };
   if (grid !== 'final' || !embedIds.length) {
@@ -276,7 +280,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
   console.table(rows.map(({ op: _op, set: _set, ...r }) => r));
 }
 
-interface EvalRow { op: string; set: string; config: string; ranks: number[]; fileRanks: number[]; top: number[]; answerable: boolean[]; sources: string[]; repos: string[]; msMedian: number; tokPerQuery: number; tokPerUseful: number }
+interface EvalRow { op: string; set: string; config: string; ranks: number[]; fileRanks: number[]; top: number[]; topBy?: string[]; answerable: boolean[]; sources: string[]; repos: string[]; msMedian: number; tokPerQuery: number; tokPerUseful: number }
 const evalRows = (set: string): EvalRow[] => {
   const rows = readFileSync(join(LAB, 'results.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as EvalRow).filter((r) => r.op === 'eval' && r.set === set && r.sources);
   // The last run of each row.
@@ -307,10 +311,11 @@ function calibrate(config: string, set: string): void {
   const all = r.top.map((_t, i) => i);
   const none = all.filter((i) => !r.answerable[i]);
   const rows = [...new Set(r.top.map((t) => Math.round(t * 20) / 20))].sort((a, b) => a - b).map((t) => {
-    const silent = all.filter((i) => r.top[i] < t);
+    // As answer() does: only a first result found by meaning or judged by the reranker can be too weak.
+    const silent = all.filter((i) => r.top[i] < t && (!r.topBy || /meaning|reranker/.test(r.topBy[i])));
     const lost = silent.filter(right).length;
     const spared = silent.length - lost;
-    return { under: t, silent: silent.length, noAnswerCaught: `${none.filter((i) => r.top[i] < t).length}/${none.length}`, wrongSpared: spared, rightLost: lost, precisionOfAnswers: Number((all.filter((i) => r.top[i] >= t && right(i)).length / Math.max(1, all.length - silent.length)).toFixed(3)) };
+    return { under: t, silent: silent.length, noAnswerCaught: `${none.filter((i) => silent.includes(i)).length}/${none.length}`, wrongSpared: spared, rightLost: lost, precisionOfAnswers: Number((all.filter((i) => r.top[i] >= t && right(i)).length / Math.max(1, all.length - silent.length)).toFixed(3)) };
   });
   console.table(rows);
 }

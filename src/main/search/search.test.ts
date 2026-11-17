@@ -462,13 +462,14 @@ test('answer: a name from the index alone, a behaviour by the search after the d
 
     const byName = await answer(store, 't', 'makeInvoice', 5, '', find);
     assert.deepEqual([byName.known, byName.hits[0].symbol, byName.hits[0].by, byName.users, within], [true, 'makeInvoice', 'definition', ['src/cart.ts'], []]);
-    const byBehaviour = await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find);
+    const byBehaviour = await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find, { ...TUNING, pinned: 2 });
     assert.deepEqual([byBehaviour.known, byBehaviour.unsure, byBehaviour.hits.map((h) => h.by)], [false, false, ['definition', 'meaning']]);
+    assert.deepEqual((await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find, { ...TUNING, pinned: 0 })).hits.map((h) => h.by), ['meaning']);
     // A file the question names is where the search looks; a weak best result is said to be unsure, unless a definition answers.
     await answer(store, 't', 'how does src/cart.ts pay a cart and send the order', 5, '', find);
     assert.equal(within.at(-1), 'src/cart.ts');
     assert.ok((await answer(store, 't', 'how are refunds paid back to the customer', 5, '', find, { ...TUNING, minMeaning: 0.5 })).unsure);
-    assert.ok(!(await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find, { ...TUNING, minMeaning: 0.5 })).unsure);
+    assert.ok(!(await answer(store, 't', 'where does makeInvoice get called when a cart is paid', 5, '', find, { ...TUNING, pinned: 2, minMeaning: 0.5 })).unsure);
   } finally {
     store.close();
   }

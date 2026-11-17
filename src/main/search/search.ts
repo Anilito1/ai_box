@@ -232,18 +232,22 @@ export async function search(
 export const TUNING = {
   /** A rank by exact words next to the same rank by meaning. */
   lexicalWeight: 0.5,
-  /** The reranker reads this many candidates, this much of each. */
-  rerank: 10,
+  /** The reranker reads this many candidates, this much of each; 0, it is not used (nothing gained over nemotron on the dev half). */
+  rerank: 0,
   rerankChars: 800,
   /** …and only when the first and fifth results by meaning are closer than this. */
   rerankGap: 0.05,
   /** Under these, the search says it found nothing sure instead of showing code. 0 answers always. */
   minMeaning: 0,
   minReranker: 0,
-  /** Definitions of the names a described behaviour holds, shown before what the search finds. */
-  pinned: 2,
-  /** At most this many results of one file; 0, no limit. */
-  perFile: 0,
+  /**
+   * Definitions of the names a described behaviour holds, shown before what the search finds. None: on the dev
+   * half they only pushed the answer down (a brand, a column, a post's name read as code); the search finds a
+   * named definition by itself.
+   */
+  pinned: 0,
+  /** At most this many results of one file, so five results reach more files; 0, no limit. */
+  perFile: 2,
 };
 export type Tuning = typeof TUNING;
 

@@ -482,7 +482,7 @@ export class SearchService {
       return index;
     };
     const rerank = vectors ? await this.judge() : null;
-    return search(store, tree, model.id, query, limit, stagesOf(vectors, rerank !== null),{ embedQuery: (text) => this.embedQuery(text), ...(rerank ? { rerank } : {}) }, under, vectorsOf);
+    return search(store, tree, model.id, query, limit, stagesOf(vectors, rerank !== null), { embedQuery: (text) => this.embedQuery(text), ...(rerank ? { rerank } : {}) }, under, vectorsOf);
   }
 
   /**
