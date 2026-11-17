@@ -20,6 +20,8 @@ export interface EngineOptions {
   slotTokens?: number;
   /** Processor threads one request may use; llama.cpp's own choice when absent. */
   threads?: number;
+  /** See WorkerInit.priority. */
+  priority?: 'above' | 'below';
   onState?: (state: EngineState) => void;
 }
 
@@ -168,7 +170,7 @@ export class Engine {
     const chosen = gpu ? await deviceOf(script, runtime) : null;
     const device = chosen?.index ?? -1;
     return new Promise<ChildProcess>((resolve, reject) => {
-      const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads }, device);
+      const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads, priority: this.opts.priority }, device);
       let ready = false;
       const fail = (reason: string) => {
         if (this.child === child) this.stop();

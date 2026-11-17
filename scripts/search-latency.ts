@@ -20,6 +20,8 @@ const REPOS_DIR_HOST = resolve(process.env.AIBOX_BENCH_REPOS ?? join(LAB, '..', 
 const SOURCES = join(REPOS_DIR_HOST, 'claude-hub', 'src', 'main');
 const COLD_RUNS = Number(process.env.AIBOX_LATENCY_COLD ?? 5);
 const WARM_RUNS = Number(process.env.AIBOX_LATENCY_WARM ?? 40);
+/** The workers' priority (see WorkerInit.priority); the system's own when absent. */
+const PRIORITY = process.env.AIBOX_LATENCY_PRIORITY as 'above' | 'below' | undefined;
 /** Agents asking at the same moment. */
 const CONCURRENT = 8;
 
@@ -72,7 +74,7 @@ const need = (id: string): SearchModel => {
   return m;
 };
 const engineOf = (model: SearchModel, device: Device, threads?: number): Engine =>
-  new Engine({ script: SCRIPT, runtime: RUNTIME, modelPath: join(MODELS, model.file), model, device: () => device, idleMs: () => 600_000, ...(threads ? { threads } : {}) });
+  new Engine({ script: SCRIPT, runtime: RUNTIME, modelPath: join(MODELS, model.file), model, device: () => device, idleMs: () => 600_000, ...(threads ? { threads } : {}), ...(PRIORITY ? { priority: PRIORITY } : {}) });
 
 /**
  * What else runs on the machine while measuring. `cpu`: every logical processor busy (a build and tests beside the
@@ -150,7 +152,7 @@ async function measure(kind: 'embed' | 'rerank', id: string, device: Device, loa
   stopLoad();
   await new Promise((r) => setTimeout(r, 2500));
   const row = {
-    op: 'latency', kind, model: id, device, gpu, load, threads: threads ?? 'default', at: new Date().toISOString(),
+    op: 'latency', kind, model: id, device, gpu, load, threads: threads ?? 'default', priority: PRIORITY ?? 'normal', at: new Date().toISOString(),
     coldFirstMs: Math.round(cold[0]), cold: summary(cold), workerLoadMs: summary(loadMs),
     warm: summary(warm), concurrent: summary(each), burstMs: summary(burst),
     ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(),
@@ -216,6 +218,19 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
     cold.push(performance.now() - t);
     await h.stop();
   }
+  // The same, once a turn has started: the hub warms the models, the question comes after.
+  const prewarmed: number[] = [];
+  for (let i = 0; i < COLD_RUNS; i++) {
+    const w = startHost(device, repo, rerank);
+    const read = await w.call<boolean>('warm', repo).catch(() => null);
+    if (read !== null) {
+      const t = performance.now();
+      await w.call('searchCode', repo, { query: concepts[(i + 3) % concepts.length] });
+      prewarmed.push(performance.now() - t);
+    }
+    await w.stop();
+    if (read === null) break;
+  }
   const h = startHost(device, repo, rerank);
   await h.call('searchCode', repo, { query: 'warm up the models' });
   const vramLoaded = vramUsed();
@@ -246,7 +261,7 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
   stopLoad();
   const row = {
     op: 'latency', kind: 'host', rerank, device, load, at: new Date().toISOString(),
-    cold: summary(cold), warm: summary(warm), named: summary(named), concurrent: summary(each),
+    host: HOST, cold: summary(cold), prewarmed: prewarmed.length ? summary(prewarmed) : null, warm: summary(warm), named: summary(named), concurrent: summary(each),
     ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(),
   };
   appendFileSync(join(LAB, 'latency.jsonl'), `${JSON.stringify(row)}\n`);

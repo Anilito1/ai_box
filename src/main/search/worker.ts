@@ -1,3 +1,4 @@
+import { constants, setPriority } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -15,6 +16,11 @@ export interface WorkerInit {
   slotTokens: number;
   /** Processor threads one request may use; llama.cpp's own choice when absent. */
   threads?: number;
+  /**
+   * `above`: an agent waits for the answer, which comes first on a busy processor. `below`: work nobody waits for
+   * (building an index), which gives way to everything else.
+   */
+  priority?: 'above' | 'below';
 }
 export type WorkerRequest = { id: number; op: 'embed'; texts: string[] } | { id: number; op: 'rerank'; query: string; documents: string[] };
 export type WorkerReply =
@@ -39,6 +45,17 @@ type GetLlama = (o: { gpu: 'auto' | false; build: 'never'; skipDownload: true; l
 
 const send = (reply: WorkerReply): void => void process.send?.(reply);
 
+/** False where the system does not allow it (raising it, outside Windows): the process keeps the priority it had. */
+function prioritize(priority: WorkerInit['priority']): boolean {
+  if (!priority) return false;
+  try {
+    setPriority(priority === 'above' ? constants.priority.PRIORITY_ABOVE_NORMAL : constants.priority.PRIORITY_BELOW_NORMAL);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalized(vector: readonly number[]): Float32Array {
   const out = Float32Array.from(vector);
   let sum = 0;
@@ -52,6 +69,8 @@ async function main(): Promise<void> {
   const init = JSON.parse(process.env.AIBOX_SEARCH_WORKER ?? '{}') as WorkerInit;
   // The hub gone without a word (crash, kill): nothing must keep the model in memory.
   process.on('disconnect', () => process.exit(0));
+  const raised = init.priority === 'above' && prioritize('above');
+  if (init.priority === 'below') prioritize('below');
   const lib = (await import(pathToFileURL(join(init.runtime, 'node_modules', 'node-llama-cpp', 'dist', 'index.js')).href)) as { getLlama: GetLlama };
   const open = (gpu: boolean) => lib.getLlama({ gpu: gpu ? 'auto' : false, build: 'never', skipDownload: true, logLevel: 'error' });
   if (init.kind === 'devices') {
@@ -82,6 +101,9 @@ async function main(): Promise<void> {
   let queue: Promise<void> = Promise.resolve();
   process.on('message', (req: WorkerRequest) => {
     queue = queue.then(async () => {
+      // Pieces of code to read in a batch are nobody's wait: they give way while a process meant for questions reads them.
+      const batch = raised && req.op === 'embed' && req.texts.length > 1;
+      if (batch) prioritize('below');
       try {
         if (req.op === 'embed' && embedder) {
           const vectors: Float32Array[] = [];
@@ -92,6 +114,8 @@ async function main(): Promise<void> {
         else send({ id: req.id, error: 'Unsupported request' });
       } catch (err) {
         send({ id: req.id, error: err instanceof Error ? err.message : String(err) });
+      } finally {
+        if (batch) prioritize('above');
       }
     });
   });

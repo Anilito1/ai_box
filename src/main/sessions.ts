@@ -396,7 +396,7 @@ export interface ManagerOptions {
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
   /** The local search (search_code, search_memory): given to sessions launched while it is on. */
-  search?: { enabled(): boolean; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string>; where(folder: string, name: string): Promise<string> };
+  search?: { enabled(): boolean; warm(folder: string): void; code(folder: string, q: SearchQuery): Promise<string>; memory(scope: string, docs: Doc[], q: SearchQuery): Promise<string>; where(folder: string, name: string): Promise<string> };
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
   scratchRoot?: string;
   /** Folders too wide to be a project besides the home folder and the workspaces (the Desktop, Documents…). */
@@ -2877,6 +2877,8 @@ export class SessionManager extends EventEmitter {
       s.busySince = Date.now();
       if (frame) s.signalAt = s.busySince;
       s.tokens.reset(); // A reading that came between turns belongs to neither.
+      // A turn begins: the search models load meanwhile, so the agent's first question does not wait for them.
+      if (!s.remoteRun && this.searchers.has(s)) this.opts.search?.warm(s.cwd);
     }
     s.status = 'busy';
   }
@@ -3688,6 +3690,8 @@ export class SessionManager extends EventEmitter {
   }
 
   private searchTelemetry: SearchTelemetry | null = null;
+  /** Sessions given the search tools: their turns warm the search models. */
+  private readonly searchers = new WeakSet<Session>();
   private get searchLog(): SearchTelemetry {
     return (this.searchTelemetry ??= new SearchTelemetry(join(this.opts.dataDir, 'search', 'telemetry.jsonl')));
   }
@@ -3787,6 +3791,8 @@ export class SessionManager extends EventEmitter {
           ),
         ]
       : [];
+    if (searchTools.length) this.searchers.add(s);
+    else this.searchers.delete(s);
     if (role === 'worker') {
       const toMaster = tool('message_master', t('tool.messageMaster'), { message: z.string().describe(t('tool.messageMaster.message')) }, ({ message }, extra) =>
         once(extra, () => this.messageMaster(s, message)),

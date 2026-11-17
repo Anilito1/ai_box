@@ -14,6 +14,7 @@ export type HostCall =
   | { method: 'reindex'; args: [repo: string] }
   | { method: 'install'; args: [] }
   | { method: 'prepare'; args: [] }
+  | { method: 'warm'; args: [folder: string] }
   | { method: 'state'; args: [] };
 export type HostRequest = ({ id: number } & HostCall) | { settings: SearchSettings };
 export type HostReply = { id: number; result?: unknown; error?: string } | { changed: true };
