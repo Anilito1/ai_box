@@ -42,6 +42,13 @@ export function gpuLoad(): Promise<{ freeMiB: number; util: number } | null> {
   });
 }
 
+/**
+ * After a model process that could not start, the same device waits this long before another try, doubled at each
+ * failure in a row: a build Windows blocks (Smart App Control) or a card that refuses the model would otherwise cost
+ * every question a process that dies.
+ */
+export const retryAfter = (failures: number): number => Math.min(30 * 60_000, 30_000 * 2 ** (failures - 1));
+
 /** What a model needs on the card: its weights plus the working buffers. */
 export const vramNeed = (model: SearchModel): number => model.bytes / 1048576 + 700;
 
@@ -123,6 +130,8 @@ export class Engine {
   private readonly waiting = new Map<number, { resolve: (r: Answer) => void; reject: (e: Error) => void }>();
   private seq = 0;
   private info: EngineState = { running: false, gpu: false, loadMs: 0, dims: 0 };
+  /** The last start that failed, on the card or not: until `retryAfter`, the questions do without the model. */
+  private failure: { gpu: boolean; at: number; count: number; reason: string } | null = null;
 
   constructor(private readonly opts: EngineOptions) {}
 
@@ -167,21 +176,28 @@ export class Engine {
   private async launch(): Promise<ChildProcess> {
     const { script, runtime, modelPath, model } = this.opts;
     const gpu = await this.wantsGpu();
+    const last = this.failure;
+    if (last?.gpu === gpu && Date.now() - last.at < retryAfter(last.count)) throw new Error(last.reason);
     const chosen = gpu ? await deviceOf(script, runtime) : null;
     const device = chosen?.index ?? -1;
     return new Promise<ChildProcess>((resolve, reject) => {
       const child = start(script, { runtime, modelPath, kind: model.kind, gpu, slotTokens: this.opts.slotTokens ?? 2048, threads: this.opts.threads, priority: this.opts.priority }, device);
       let ready = false;
+      let failed = false;
       const fail = (reason: string) => {
         if (this.child === child) this.stop();
         child.kill();
-        if (!ready) reject(new Error(reason));
+        if (ready || failed) return;
+        failed = true;
+        this.failure = { gpu, at: Date.now(), count: (this.failure?.gpu === gpu ? this.failure.count : 0) + 1, reason };
+        reject(new Error(reason));
       };
       const timer = setTimeout(() => fail('The search engine did not start in time'), START_TIMEOUT_MS);
       child.on('message', (m: WorkerReply) => {
         if ('ready' in m) {
           ready = true;
           clearTimeout(timer);
+          this.failure = null;
           this.child = child;
           this.info = { running: true, gpu: m.gpu, loadMs: m.loadMs, dims: m.dims };
           // The device kept on disk is no longer the one found (another card, a driver gone): listed again next time.

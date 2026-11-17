@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { SEARCH_DEFAULTS } from '../../shared/search';
 import { SearchClient, searchShownFor } from './client';
-import { Engine } from './engine';
+import { Engine, retryAfter } from './engine';
 import { modelOf } from './models';
 import { misplaced, queryEngine } from './service';
 
@@ -62,6 +62,35 @@ test('the graphics device is listed once, kept on disk, and listed again when a 
     assert.equal(existsSync(kept), true);
   } finally {
     delete process.env.FAKE_DEVICE;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a model that cannot start on a device is not started again for every question', async () => {
+  assert.deepEqual([1, 2, 3, 20].map(retryAfter), [30_000, 60_000, 120_000, 30 * 60_000]);
+  const dir = mkdtempSync(join(tmpdir(), 'aibox-blocked-'));
+  const script = join(dir, 'worker.mjs');
+  const starts = join(dir, 'starts.txt');
+  // The processor build refused by Windows, as Smart App Control does: the worker dies before it is ready.
+  writeFileSync(script, `
+import { appendFileSync } from 'node:fs';
+const init = JSON.parse(process.env.AIBOX_SEARCH_WORKER);
+appendFileSync(${JSON.stringify(starts)}, init.gpu ? 'g' : 'c');
+if (init.gpu) { process.send({ ready: true, gpu: true, loadMs: 1, dims: 1, device: '' }); process.on('message', (m) => process.send({ id: m.id, vectors: [Float32Array.of(1)] })); process.on('disconnect', () => process.exit(0)); }
+else process.send({ fatal: 'NoBinaryFoundError' }, () => process.exit(1));`);
+  writeFileSync(join(dir, 'gpu-devices.json'), JSON.stringify({ index: 0, name: '' }));
+  let device: 'cpu' | 'gpu' = 'cpu';
+  const e = new Engine({ script, runtime: dir, modelPath: '', model: modelOf('qwen3-embed-0.6b')!, device: () => device, idleMs: () => 60_000 });
+  try {
+    await assert.rejects(e.embed(['q']), /NoBinaryFoundError/);
+    await assert.rejects(e.embed(['q']), /NoBinaryFoundError/);
+    assert.equal(readFileSync(starts, 'utf8'), 'c');
+    // The card is another device: tried at once.
+    device = 'gpu';
+    assert.equal((await e.embed(['q']))[0][0], 1);
+    assert.equal(readFileSync(starts, 'utf8'), 'cg');
+  } finally {
+    e.stop();
     rmSync(dir, { recursive: true, force: true });
   }
 });
