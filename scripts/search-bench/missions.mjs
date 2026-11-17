@@ -10,6 +10,7 @@
 //   tool        + the search tools and the bounded-reading rule
 //   tool+brief  + the tools, the brief and the rule
 //   tool-bare   + the tools alone, as they would ship without a word in the prompts
+//   tool-cited  + the tools and the instruction that names them (no bounded-reading rule)
 import { fork, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -74,7 +75,8 @@ async function run(mission, arm) {
   const work = modify ? worktreeOf(mission, arm) : mission.cwd;
   const brief = arm.includes('brief') ? await briefOf(mission) : '';
   const ruled = tool && arm !== 'tool-bare';
-  const rules = [arm === 'bounded' || ruled ? BOUNDED_RULE : '', ruled ? SEARCH_RULE : ''].filter(Boolean).join('\n');
+  // tool-cited: the tools and the sentence that names them, without the bounded-reading rule.
+  const rules = [arm === 'bounded' || (ruled && arm !== 'tool-cited') ? BOUNDED_RULE : '', ruled ? SEARCH_RULE : ''].filter(Boolean).join('\n');
   const expose = process.env.AIBOX_SEARCH_EXPOSE ? { AIBOX_SEARCH_EXPOSE: process.env.AIBOX_SEARCH_EXPOSE } : {};
   if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, AIBOX_SEARCH_CWD: mission.cwd, ...(process.env.AIBOX_SEARCH_EMBED ? { AIBOX_SEARCH_EMBED: process.env.AIBOX_SEARCH_EMBED } : {}), ...expose } } } }));
   const args = [
