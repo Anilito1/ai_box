@@ -155,7 +155,7 @@ async function measure(kind: 'embed' | 'rerank', id: string, device: Device, loa
     op: 'latency', kind, model: id, device, gpu, load, threads: threads ?? 'default', priority: PRIORITY ?? 'normal', at: new Date().toISOString(),
     coldFirstMs: Math.round(cold[0]), cold: summary(cold), workerLoadMs: summary(loadMs),
     warm: summary(warm), concurrent: summary(each), burstMs: summary(burst),
-    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(),
+    ...memory, vramBeforeMiB: vramBefore, vramLoadedMiB: vramLoaded, vramAfterMiB: vramUsed(), idle, embed: process.env.AIBOX_SEARCH_EMBED ?? 'default',
   };
   mkdirSync(LAB, { recursive: true });
   appendFileSync(join(LAB, 'latency.jsonl'), `${JSON.stringify(row)}\n`);
@@ -163,8 +163,8 @@ async function measure(kind: 'embed' | 'rerank', id: string, device: Device, loa
 }
 
 /** A search host as the app starts it, on a data folder of the lab (search/runtime and search/models linked there). */
-function startHost(device: Device, repo: string, rerank: boolean) {
-  const settings = { enabled: true, idleMinutes: 5, device, repos: [repo], budget: 800 };
+function startHost(device: Device, repo: string, rerank: boolean, idleMinutes = 5) {
+  const settings = { enabled: true, idleMinutes, device, repos: [repo], budget: 800 };
   const init = { dataDir: resolve(process.env.AIBOX_SEARCH_DATA ?? join(LAB, 'data')), workerScript: SCRIPT, settings };
   const child = fork(HOST, [], { env: { ...process.env, AIBOX_SEARCH_RERANK: rerank ? '' : 'none', AIBOX_SEARCH_HOST: JSON.stringify(init) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
   let seq = 0;
@@ -259,6 +259,15 @@ async function host(device: Device, load: Load, rerank: boolean): Promise<void> 
   }
   await h.stop();
   stopLoad();
+  // At rest: the host left running, its models end by themselves after the idle delay (5 s minimum, see Engine).
+  await new Promise((r) => setTimeout(r, 3000));
+  const vramRest = vramUsed();
+  const resting = startHost(device, repo, rerank, 0.1);
+  await resting.call('searchCode', repo, { query: concepts[0] });
+  const vramAsked = vramUsed();
+  await new Promise((r) => setTimeout(r, 12_000));
+  const idle = { vramRestMiB: vramRest, vramAskedMiB: vramAsked, vramIdleMiB: vramUsed(), workersIdle: memoryOf(resting.child.pid!).workingSetMiB };
+  await resting.stop();
   const row = {
     op: 'latency', kind: 'host', rerank, device, load, at: new Date().toISOString(),
     host: HOST, cold: summary(cold), prewarmed: prewarmed.length ? summary(prewarmed) : null, warm: summary(warm), named: summary(named), concurrent: summary(each),
