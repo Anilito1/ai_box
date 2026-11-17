@@ -3080,6 +3080,12 @@ export class SessionManager extends EventEmitter {
   private askPermission(s: Session, req: PermissionRequest, inbox: Session['inbox']): Promise<PermissionAnswer> {
     // A process that was replaced or stopped: no one is left to answer it, and the session is no longer its own.
     if (req.signal.aborted || s.inbox !== inbox) return Promise.resolve({ behavior: 'deny', message: t('perm.cancelled') });
+    // "Allow everything": Claude Code still stops on a repo's permissions.ask rule (a deploy, `gh api`), but the user
+    // chose not to be asked. Its own safety checks and the hooks that ask still come to the user; deny rules never ask.
+    if (req.byRule && s.mode === 'bypassPermissions') {
+      this.notice(s, t('notice.askRuleAllowed', { tool: toolLabel(req.tool), summary: oneLine(toolSummary(req.tool, req.input), 200) }), 'info');
+      return Promise.resolve({ behavior: 'allow', always: false });
+    }
     const item: PermissionItem = {
       kind: 'permission',
       id: `perm-${randomUUID()}`,

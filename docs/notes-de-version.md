@@ -26,6 +26,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - La liste des workers que lit le maître tient en une ligne par worker ; le détail reste disponible sur demande.
 - La mémoire des sujets fonctionne pour les workers : chacun sait à quel sujet il travaille, et ses notes ne sont plus refusées à tort.
 - /clear n'est plus refusé à tort quand plusieurs messages sont arrivés pendant un tour. Si la session travaille vraiment, il dit ce qu'elle fait encore et propose « Effacer quand même ».
+- En mode « Tout autoriser », les workers ne t'arrêtent plus pour une action qu'une règle d'un projet demande de confirmer (un déploiement, par exemple) : elle passe, et une ligne le signale dans la conversation.
 
 ## 2026-11-16
 

@@ -219,6 +219,9 @@ export const claudeAdapter: ProviderAdapter = {
           reason: o.decisionReason ?? '',
           // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
           canAlways: (o.suggestions?.length ?? 0) > 0,
+          // Sent by the CLI, not in the SDK's types: 'rule' when only a permissions.ask rule asks (a safety check is
+          // 'safetyCheck', a hook 'hook').
+          byRule: (o as { decisionReasonType?: string }).decisionReasonType === 'rule',
           signal: o.signal,
         });
         if (answer.behavior === 'deny') return { behavior: 'deny', message: answer.message };

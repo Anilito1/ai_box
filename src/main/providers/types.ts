@@ -56,6 +56,8 @@ export interface PermissionRequest {
   reason: string;
   /** Allowing it for good is possible (the program proposed a rule). */
   canAlways: boolean;
+  /** Asked only because a permission rule says "ask" (a repo's `permissions.ask`); unknown to some providers. */
+  byRule?: boolean;
   signal: AbortSignal;
 }
 export type PermissionAnswer = { behavior: 'allow'; always: boolean } | { behavior: 'deny'; message: string };
