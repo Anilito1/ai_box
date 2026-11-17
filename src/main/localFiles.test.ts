@@ -44,13 +44,17 @@ test('malicious local-file requests never reach the shell', async () => {
     await mkdir(root);
     await mkdir(join(outer, 'workspace-other'));
     await writeFile(join(outer, 'outside.txt'), 'synthetic');
-    await symlink(join(outer, 'outside.txt'), join(root, 'escape.txt'));
-    await symlink(outer, join(root, 'escape-dir'));
+    // Windows refuses a file symlink without privilege: that one case is left out there; a junction needs none.
+    const fileLink = await symlink(join(outer, 'outside.txt'), join(root, 'escape.txt')).then(() => true, (e: NodeJS.ErrnoException) => {
+      if (process.platform === 'win32' && e.code === 'EPERM') return false;
+      throw e;
+    });
+    await symlink(outer, join(root, 'escape-dir'), process.platform === 'win32' ? 'junction' : 'dir');
     await mkdir(join(root, 'Danger.app'));
     await writeFile(join(root, '.env'), 'synthetic');
     await writeFile(join(root, 'run.command'), 'synthetic');
     await writeFile(join(root, 'launch.desktop'), 'synthetic');
-    for (const input of ['../outside.txt', join(outer, 'outside.txt'), join(outer, 'workspace-other', 'x.txt'), 'escape.txt', 'escape-dir/outside.txt']) {
+    for (const input of ['../outside.txt', join(outer, 'outside.txt'), join(outer, 'workspace-other', 'x.txt'), ...(fileLink ? ['escape.txt'] : []), 'escape-dir/outside.txt']) {
       assert.deepEqual(await openLocalFile(root, input, 'open', shell), { ok: false, error: 'outside' });
     }
     for (const input of ['.env', 'run.command', 'launch.desktop', 'Danger.app']) assert.deepEqual(await openLocalFile(root, input, 'open', shell), { ok: false, error: 'unsupported' });
