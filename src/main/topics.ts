@@ -130,7 +130,7 @@ export function topicsSection(l: Lang = lang()): string {
     return `## Sujets
 L'utilisateur suit plusieurs chantiers à la fois dans ta conversation ; le hub la range par sujet avec l'outil \`topic\`.
 - Un sujet = un chantier (une demande et ses suites), jamais plusieurs chantiers regroupés. Plusieurs workers peuvent partager un sujet s'ils travaillent au même chantier.
-- Dans chaque réponse qui porte sur un chantier, appelle \`topic\` en premier dans le même message que ton premier autre outil (appels groupés), jamais seul : un message qui ne contient que \`topic\` coûte une requête entière. \`id\` stable (réutilise celui du sujet existant), \`title\` court (« Paiements · niveau A »), \`workers\` de ce chantier seulement.
+- Dans chaque réponse qui porte sur un chantier, appelle \`topic\` en premier dans le même message que ton premier autre outil (appels groupés), jamais seul : un message qui ne contient que \`topic\` coûte une requête entière. Une réponse sans autre outil (une question à l'utilisateur) l'appelle seul, avec \`awaiting_user\` s'il le faut. \`id\` stable (réutilise celui du sujet existant), \`title\` court (« Paiements · niveau A »), \`workers\` de ce chantier seulement.
 - Réponse qui touche plusieurs chantiers (tu en lances plusieurs, un retour en concerne un autre) : un appel \`topic\` par chantier, chacun juste avant les outils de ce chantier ; le hub range chaque outil et chaque worker sous le dernier sujet nommé.
 - \`awaiting_user: true\`, avec \`question\`, sur le sujet où tu poses une question à l'utilisateur ou attends son go, son avis ou une validation ; sinon \`false\`. Si tu t'en aperçois en cours de réponse, rappelle \`topic\` pour ce sujet à la fin.
 - Un message général (point sur tout, question sans chantier) : pas de \`topic\`, il reste dans « Tout ».
@@ -139,7 +139,7 @@ L'utilisateur suit plusieurs chantiers à la fois dans ta conversation ; le hub 
   return `## Topics
 The user follows several jobs at once in your conversation; the hub sorts it by topic with the \`topic\` tool.
 - A topic = one job (a request and its follow-ups), never several jobs together. Several workers may share a topic when they work on the same job.
-- In every reply about a job, call \`topic\` first in the same message as your first other tool (grouped calls), never alone: a message holding only \`topic\` costs a whole request. A stable \`id\` (reuse the existing topic's), a short \`title\` ("Payments · level A"), the \`workers\` of that job only.
+- In every reply about a job, call \`topic\` first in the same message as your first other tool (grouped calls), never alone: a message holding only \`topic\` costs a whole request. A reply with no other tool (a question to the user) calls it alone, with \`awaiting_user\` when needed. A stable \`id\` (reuse the existing topic's), a short \`title\` ("Payments · level A"), the \`workers\` of that job only.
 - A reply about several jobs (you start several, a report concerns another one): one \`topic\` call per job, each right before that job's tools; the hub files each tool and each worker under the topic named last.
 - \`awaiting_user: true\`, with \`question\`, on the topic where you ask the user a question or wait for their go-ahead, opinion or approval; otherwise \`false\`. If you notice it during your reply, call \`topic\` again for that topic at the end.
 - A general message (an overview, a question about no job): no \`topic\`, it stays in "All".
