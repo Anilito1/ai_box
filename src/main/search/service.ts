@@ -8,7 +8,7 @@ import { userNpm } from '../providers/tools';
 import { Engine, gpuLoad, vramNeed } from './engine';
 import { syncDocs, syncFiles, syncVectors, type Doc } from './indexer';
 import { EMBED_MODEL, modelOf, RERANK_MODEL, type SearchModel } from './models';
-import { answer, formatHits, formatUnsure, ftsQuery, search, stagesOf, type Hit } from './search';
+import { answer, formatHits, formatUnsure, ftsQuery, search, stagesOf, TUNING, type Hit } from './search';
 import { leafOf, SearchStore, type StoredSymbol, type VectorIndex } from './store';
 
 /** Pinned: the engine's binaries are the same files for everyone, and a new version is a change to test. */
@@ -340,10 +340,10 @@ export class SearchService {
     return (await engine.embed(texts)).map((v) => shorten(v, VECTOR_DIMS));
   }
 
-  /** The reranker, when it may run: installed, the card free, and no index being built on it. Null otherwise. */
+  /** The reranker, when it may run: tuned in, installed, the card free, and no index being built on it. Null otherwise. */
   private async judge(): Promise<((query: string, documents: string[]) => Promise<number[]>) | null> {
     const model = this.rerankModel;
-    if (!model || !this.hasModel(model) || this.indexer?.busy || !(await this.cardFree(model))) return null;
+    if (!model || TUNING.rerank === 0 || !this.hasModel(model) || this.indexer?.busy || !(await this.cardFree(model))) return null;
     return (query, documents) => {
       // Two small models share the card; a large one is there alone, and never beside a large embedder.
       if (model.bytes > BIG_MODEL || this.embedModel.bytes > BIG_MODEL) {
