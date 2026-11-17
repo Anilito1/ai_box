@@ -37,6 +37,7 @@ import {
   capEffort,
   freshStartDue,
   fromTemplate,
+  masterRenewalDue,
   needsFreshStart,
   resolveChoice,
   roleKey,
@@ -3027,6 +3028,7 @@ export class SessionManager extends EventEmitter {
       const limits = await q.rateLimits();
       if (s.query !== q) return;
       this.usage.set(account, usageRead(limits, Date.now()));
+      if (limits) this.opts.costLog.limits(Date.now(), account, limits);
     } catch {
       // Experimental API unavailable, signed out, offline: the status bar leaves the figure out.
       if (s.query === q) this.usage.set(account, usageFailed(this.usage.get(account)));
@@ -3158,10 +3160,10 @@ export class SessionManager extends EventEmitter {
       if (s.id === MASTER_ID) {
         const previous = this.memoryTopic;
         const switching = previous !== topic;
-        const hard = (s.metrics?.contextPct ?? 0) >= 90;
+        const due = masterRenewalDue({ switching, contextPct: s.metrics?.contextPct ?? 0, contextTokens: s.metrics?.contextTokens ?? 0, idleMs: Date.now() - s.activeAt });
         // On restart previous is unknown: only renew if the destination has a saved handoff.
         const safeHandoff = this.contextMemory.hasFreshSummary(switching && previous ? previous : topic);
-        if ((switching || hard) && safeHandoff && (!s.inbox || this.settled(s)) && s.queued === 0) {
+        if (due && safeHandoff && (!s.inbox || this.settled(s)) && s.queued === 0) {
           this.stop(s.id);
           this.freshStart(s);
         }

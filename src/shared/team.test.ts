@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FRESH_START_PCT, FRESH_START_WORK, freshStartDue, needsFreshStart, normalizeRole, STALE_CACHE_MS, workTokens } from './team';
+import { FRESH_START_PCT, FRESH_START_WORK, freshStartDue, masterRenewalDue, needsFreshStart, normalizeRole, STALE_CACHE_MS, STALE_RENEW_TOKENS, workTokens } from './team';
 import type { Metrics } from './types';
 
 const at = (tokens: number): Metrics => ({ contextTokens: tokens, contextSize: 1_000_000, contextPct: tokens / 10_000, costUsd: 0 });
@@ -42,4 +42,14 @@ test('a permanent worker woken after its cache expired starts afresh, not before
 test('a post keeps its Ultracode only when it is exactly true', () => {
   assert.equal(normalizeRole({ name: 'a', ultracode: true }).ultracode, true);
   for (const v of [false, 'true', 1, null, undefined]) assert.equal(normalizeRole({ name: 'a', ultracode: v }).ultracode, false, String(v));
+});
+
+test('the master renews on a topic switch, at 90%, or woken after its cache expired with a large context', () => {
+  const idle = { switching: false, contextPct: 20, contextTokens: 200_000, idleMs: 0 };
+  assert.equal(masterRenewalDue(idle), false);
+  assert.equal(masterRenewalDue({ ...idle, switching: true }), true);
+  assert.equal(masterRenewalDue({ ...idle, contextPct: 90 }), true);
+  assert.equal(masterRenewalDue({ ...idle, idleMs: STALE_CACHE_MS }), true);
+  assert.equal(masterRenewalDue({ ...idle, idleMs: STALE_CACHE_MS - 1 }), false); // the cache still holds it
+  assert.equal(masterRenewalDue({ ...idle, idleMs: 3 * STALE_CACHE_MS, contextTokens: STALE_RENEW_TOKENS - 1 }), false); // small: rewriting it is cheap
 });

@@ -289,6 +289,16 @@ export const workTokens = (m: Metrics | null, base: ContextBase | null, sessionI
 export const freshStartDue = (o: { working: boolean; worked: number; idleMs?: number }) =>
   !o.working && o.worked > FRESH_START_WORK && (o.idleMs === undefined || o.idleMs >= STALE_CACHE_MS);
 
+/** Context past which a master woken after its prompt cache expired starts afresh rather than rewrite it all. */
+export const STALE_RENEW_TOKENS = 150_000;
+
+/**
+ * The master starts a fresh conversation (the caller also requires a saved topic summary): on a topic switch, at 90% of
+ * its window, or woken after its prompt cache expired with a large context, which the next request would rewrite whole.
+ */
+export const masterRenewalDue = (o: { switching: boolean; contextPct: number; contextTokens: number; idleMs: number }) =>
+  o.switching || o.contextPct >= 90 || (o.idleMs >= STALE_CACHE_MS && o.contextTokens >= STALE_RENEW_TOKENS);
+
 // ---------- Claude Code subagent files ----------
 
 /** Frontmatter (a YAML subset: scalars, quoted strings, block scalars, lists) and body of a .claude/agents/*.md file. */
