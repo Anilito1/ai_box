@@ -12,8 +12,16 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-17
 
+### Ajouté
+
+- Un avis prévient quand un hook de tes réglages Claude Code échoue sans cesse : jusqu'ici ces échecs ralentissaient les sessions sans que rien ne le dise.
+
 ### Modifié
 
+- Les sessions Fable gardent toute leur fenêtre de contexte (1M) : elles ne se compactent plus vers 170 K.
+- Les workers démarrent plus légers : une liste de skills plus courte, et sans MasterTools, qu'ils n'utilisaient pas.
+- La liste des workers que lit le maître tient en une ligne par worker ; le détail reste disponible sur demande.
+- La mémoire des sujets fonctionne pour les workers : chacun connaît son sujet, et les écritures ne sont plus refusées pour un numéro de version oublié.
 - /clear n'est plus refusé à tort quand plusieurs messages sont arrivés pendant un tour. Si la session travaille vraiment, il dit ce qu'elle fait encore et propose « Effacer quand même ».
 
 ## 2026-11-16
