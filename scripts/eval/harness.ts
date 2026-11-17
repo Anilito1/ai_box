@@ -243,3 +243,5 @@ export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signa
 import * as adapter from '../../src/main/providers/claude/adapter';
 export const launchSettings = adapter.launchSettings;
 export const fullWindow = (adapter as unknown as { fullWindow?: (model: string) => string }).fullWindow;
+import * as team from '../../src/shared/team';
+export const renewal = team as unknown as { FRESH_START_PCT?: number; STALE_CACHE_MS?: number };

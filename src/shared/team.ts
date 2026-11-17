@@ -263,14 +263,12 @@ export function modelGrid(allowed: string[], maxEffort: Effort): GridRow[] {
 
 // ---------- context of a worker ----------
 
-/** An ad-hoc worker settling with more than this share of its window starts its next mission afresh. */
-export const FRESH_START_PCT = 50;
+/** An ad-hoc worker settling with more than this share of its window starts its next mission afresh, like the master. */
+export const FRESH_START_PCT = 90;
 export const needsFreshStart = (m: Metrics | null) => (m?.contextPct ?? 0) >= FRESH_START_PCT;
 
 /** Tokens of work past the first reading of a conversation beyond which a permanent worker's next mission starts afresh. */
 export const FRESH_START_WORK = 20_000;
-/** Prompt cache lifetime: a permanent worker woken later than this rereads its whole conversation at full price. */
-export const STALE_CACHE_MS = 60 * 60_000;
 
 /** Context of a conversation at its first reading: its prompts and first message, before any work. */
 export interface ContextBase {
@@ -283,11 +281,10 @@ export const workTokens = (m: Metrics | null, base: ContextBase | null, sessionI
   base?.id === sessionId ? Math.max(0, (m?.contextTokens ?? 0) - base.tokens) : 0;
 
 /**
- * A permanent worker starts its next mission in a fresh conversation, with its handoff note, after real work: when it
- * falls asleep, or (`idleMs`) when it wakes after its prompt cache expired. Never while it works.
+ * A permanent worker falling asleep after real work starts its next mission in a fresh conversation, with its handoff
+ * note. Never while it works.
  */
-export const freshStartDue = (o: { working: boolean; worked: number; idleMs?: number }) =>
-  !o.working && o.worked > FRESH_START_WORK && (o.idleMs === undefined || o.idleMs >= STALE_CACHE_MS);
+export const freshStartDue = (o: { working: boolean; worked: number }) => !o.working && o.worked > FRESH_START_WORK;
 
 // ---------- Claude Code subagent files ----------
 

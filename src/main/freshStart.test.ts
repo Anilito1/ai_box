@@ -35,7 +35,7 @@ interface Inner {
   askHandoff(s: Fake): boolean;
   onEvent(s: Fake, q: unknown, ev: unknown): void;
   closeIfDone(s: Fake, q: unknown): void;
-  renewStale(s: Fake): void;
+  deliver(s: Fake, prompt: { text: string; images: never[]; from: string }): void;
   messageWorker(args: { name: string; message: string }): Promise<string>;
 }
 
@@ -128,18 +128,15 @@ test('a worker at work or with background tasks is never asked for its note', as
   }
 });
 
-test('woken after more than an hour, a worker that was not renewed starts afresh with a note the hub writes', async () => {
+test('woken after more than an hour, a worker that was not renewed resumes its whole conversation', async () => {
   const { inner, s, run, done } = await hub();
   try {
     run('conv-1', 52_000, 400_000);
-    Object.assign(s, { query: null, inbox: null, status: 'exited', note: 'Earlier: the CORS allowlist', activeAt: Date.now() - HOUR / 2 });
-    inner.renewStale(s);
-    assert.equal(s.sessionId, 'conv-1', 'within the hour its cache still holds');
-    s.activeAt = Date.now() - 2 * HOUR;
-    inner.renewStale(s);
-    assert.notEqual(s.sessionId, 'conv-1');
-    assert.equal(s.started, false);
-    assert.match(s.note, /asleep for over an hour[\s\S]*Your previous note:\nEarlier: the CORS allowlist/);
+    Object.assign(s, { query: null, inbox: null, status: 'exited', note: 'Earlier: the CORS allowlist', activeAt: Date.now() - 2 * HOUR });
+    inner.deliver(s, { text: 'Next mission', images: [], from: 'master' });
+    assert.equal(s.sessionId, 'conv-1');
+    assert.equal(s.started, true);
+    assert.equal(s.note, 'Earlier: the CORS allowlist');
   } finally {
     done();
   }

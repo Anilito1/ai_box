@@ -36,7 +36,6 @@ interface Inner {
   askHandoff(s: Fake): boolean;
   onEvent(s: Fake, q: unknown, ev: unknown): void;
   closeIfDone(s: Fake, q: unknown): void;
-  renewStale(s: Fake): void;
   messageWorker(args: { name: string; message: string }): Promise<string>;
 }
 

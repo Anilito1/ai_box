@@ -82,12 +82,14 @@ function check(sc, r) {
   return failed;
 }
 
-/** S11: no conversation brought under the model's 1M window by the hub's own settings. */
+/** S11: no conversation brought under the model's 1M window, nor renewed early, by the hub's own settings. */
 function staticChecks(h) {
   const out = [];
   const worker = h.launchSettings?.({ role: 'worker', ultracode: false }) ?? {};
   if (worker.autoCompactWindow !== 1_000_000) out.push(`worker autoCompactWindow ${worker.autoCompactWindow}`);
   if (!h.fullWindow || !/\[1m\]$/.test(h.fullWindow('claude-fable-5-2'))) out.push('Fable launched without its 1M variant');
+  if ((h.renewal?.FRESH_START_PCT ?? 90) < 90) out.push(`ad-hoc worker renewed at ${h.renewal.FRESH_START_PCT}%`);
+  if (h.renewal?.STALE_CACHE_MS) out.push('permanent worker renewed after an idle hour');
   return out;
 }
 

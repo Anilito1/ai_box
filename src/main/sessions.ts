@@ -20,7 +20,7 @@ import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
-import { buildHandoff, staleNote } from '../shared/passation';
+import { buildHandoff } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
 import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
@@ -806,7 +806,6 @@ export class SessionManager extends EventEmitter {
   resume(id: string): void {
     const s = this.sessions.get(id);
     if (!s || s.inbox || this.ended(s) || this.orphan(s)) return;
-    this.renewStale(s);
     if (s.remoteRun?.interrupted) return this.continueInterrupted(s);
     void this.launch(s, s.started);
   }
@@ -3174,7 +3173,6 @@ export class SessionManager extends EventEmitter {
     // limited at this very moment: it goes on elsewhere, with a summary.
     if (s.transitioning) { this.pushUser(s, prompt); return; }
     if (!prompt.command && !prompt.handoff && this.fallbackRoute(s, prompt)) return;
-    if (!prompt.command) this.renewStale(s);
     if (s.backNote && s.inbox) {
       prompt = { ...prompt, text: `${s.backNote}\n\n${prompt.text}` };
       s.backNote = '';
@@ -3187,7 +3185,7 @@ export class SessionManager extends EventEmitter {
     void this.launch(s, s.started, lostMission ? { ...prompt, command: false, text:`${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
-  /** Only a saved handoff permits renewal. Never stop a working/queued master to switch topics. */
+  /** The master starts afresh only at 90% of its window, with a saved handoff, never while it works or has messages queued. */
   private withTopicMemory(s: Session, prompt: Prompt): Prompt {
     if (prompt.command || prompt.handoff || this.contextMemory.status.mode !== 'sqlite') return prompt;
     const topic = prompt.topic ?? (s.role === 'worker' ? this.topics.linkOf(s.name) : null);
@@ -3200,7 +3198,7 @@ export class SessionManager extends EventEmitter {
         const hard = (s.metrics?.contextPct ?? 0) >= 90;
         // On restart previous is unknown: only renew if the destination has a saved handoff.
         const safeHandoff = this.contextMemory.hasFreshSummary(switching && previous ? previous : topic);
-        if ((switching || hard) && safeHandoff && (!s.inbox || this.settled(s)) && s.queued === 0) {
+        if (hard && safeHandoff && (!s.inbox || this.settled(s)) && s.queued === 0) {
           this.stop(s.id);
           this.freshStart(s);
         }
@@ -3671,17 +3669,6 @@ export class SessionManager extends EventEmitter {
 
   private worked(s: Session): number {
     return workTokens(s.metrics, s.contextBase, s.sessionId);
-  }
-
-  /**
-   * A permanent worker woken after its prompt cache expired, still in a conversation that grew: it starts afresh, with
-   * a note the hub writes from its last note and steps (asking the model would reread the whole conversation).
-   */
-  private renewStale(s: Session): void {
-    if (s.inbox || this.inFlight(s) > 0 || !s.roleId || !s.started || s.noteFresh) return;
-    if (!freshStartDue({ working: false, worked: this.worked(s), idleMs: Date.now() - s.activeAt })) return;
-    s.note = staleNote(s.note, [...s.items.values()], lang()).slice(0, NOTE_MAX);
-    this.freshStart(s);
   }
 
   /** A worker closing after real work first writes its handoff note, then closes. True while it writes it. */

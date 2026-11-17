@@ -20,6 +20,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Les conversations ne repartent plus à neuf au changement de sujet ni après une heure de pause : le maître et les workers ponctuels ne repartent à neuf qu'à 90 % de leur contexte.
 - Les sessions Fable gardent toute leur fenêtre de contexte (1M) : elles ne se compactent plus vers 170 K.
 - Le maître confie les analyses et les rapports à des modèles plus économes, et range ses réponses par sujet sans requête de plus.
 - Les workers démarrent plus légers : une liste de skills plus courte, et sans MasterTools, qu'ils n'utilisaient pas.

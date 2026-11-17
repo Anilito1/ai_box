@@ -35,9 +35,19 @@ test('targeted retrieval is hidden from UI, escapes note delimiters and honors c
   } finally { memory.close(); }
 });
 
-test('saved handoff renews idle master only; busy and queued work is preserved', () => {
+test('a topic switch keeps the master conversation, even with a saved summary', () => {
   const { memory, manager, session } = fixture();
   try {
+    manager.withTopicMemory(session, { text: 'Next', topic: 'b' });
+    assert.equal(session.sessionId, 'old');
+    assert.equal(manager.memoryTopic, 'b');
+  } finally { memory.close(); }
+});
+
+test('at 90% a saved handoff renews the idle master only; busy and queued work is preserved', () => {
+  const { memory, manager, session } = fixture();
+  try {
+    session.metrics.contextPct = 90;
     session.status = 'busy';
     manager.withTopicMemory(session, { text: 'Next', topic: 'b' }); assert.equal(session.sessionId, 'old');
     session.status = 'idle'; session.queued = 1;
@@ -78,6 +88,7 @@ test('SQLite unavailable leaves ordinary prompts unchanged', () => {
 test('new activity after the last handoff prevents master renewal', () => {
   const { memory, manager, session } = fixture();
   try {
+    session.metrics.contextPct = 90;
     memory.trackEvent('a');
     manager.withTopicMemory(session, { text: 'Next', topic: 'b' });
     assert.equal(session.sessionId, 'old');
