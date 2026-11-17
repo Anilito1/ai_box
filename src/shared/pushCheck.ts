@@ -1,13 +1,13 @@
 /** Words that say a commit is on the remote; on a line with a commit id, the report claims it was pushed. */
-const PUSHED = /(^|[^a-z])(push(ed)?|pouss[ée]e?s?|merg(ed|[ée]e?s?)|publi[ée]e?s?|published|sur (main|master|origin)|on (main|master|origin))(?![a-z])/i;
+const PUSHED = /(^|[^a-z])(pushed|pouss[ée]e?s?|merged|merg[ée]e?s?|publi[ée]e?s?|published|sur (main|master|origin)|on (main|master|origin))(?![a-z])/i;
 /** ...unless the line says the opposite. */
-const NOT_PUSHED = /non pouss|pas (encore )?pouss|not (yet )?pushed|unpushed|en local|locally|local only|à pousser|to push/i;
+const NOT_PUSHED = /non pouss|pas (encore )?pouss|not (yet )?pushed|unpushed|en local|locally|local only|à pousser|to push|à merger|to merge|will push|va pousser|failed|échou|refus|rejected/i;
 /** A commit id: 7 to 40 hex characters, with a letter and a digit (a plain number or word is not one). */
-const SHA = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/gi;
+const SHA = /(?<![\w-])(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}(?![\w-])/gi;
 
 /**
  * The commits a worker's report says are pushed: an id on a line that speaks of a push, a merge or the remote branch,
- * without saying it is not pushed. At most five, in order: the hub checks them on the remote before the master reads.
+ * without saying it is not pushed. At most five, in order: the hub then checks them on the remote.
  */
 export function announcedCommits(text: string): string[] {
   const out: string[] = [];

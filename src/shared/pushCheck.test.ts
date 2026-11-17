@@ -11,4 +11,6 @@ test('a report that says a commit is pushed names it; one that says it is not, o
   // Not commit ids: a number, a word, a too short id.
   assert.deepEqual(announcedCommits('Poussé sur main : 1234567 lignes, facade, abc12.'), []);
   assert.deepEqual(announcedCommits(Array.from({ length: 8 }, (_, i) => `pushed ${i}abcdef0`).join('\n')).length, 5);
+  // Intent or failure is no claim; an id inside another name is no commit.
+  for (const line of ['Commit a1b2c3d prêt, à merger sur main.', 'Push failed for a1b2c3d.', 'I will push a1b2c3d to main.', 'Mission m-1a2b3c4d poussée sur main.']) assert.deepEqual(announcedCommits(line), [], line);
 });

@@ -131,9 +131,9 @@ export class CostLog {
     for (const name of names) {
       const m = MISSIONS.exec(name);
       if (!m) continue;
-      const start = Date.UTC(Number(m[1]), Number(m[2]) - 2, 1);
+      const start = Date.UTC(Number(m[1]), Number(m[2]) - 1, 1);
       const end = Date.UTC(Number(m[1]), Number(m[2]), 1);
-      if (end <= from || start >= to) continue;
+      if (end <= from - 31 * 86_400_000 || start >= to) continue;
       const text = await readFile(join(this.dir, name), 'utf8').catch(() => '');
       for (const line of text.split('\n')) {
         const e = line ? decodeMission(line) : null;

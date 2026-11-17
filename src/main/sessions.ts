@@ -630,10 +630,8 @@ export class SessionManager extends EventEmitter {
   private readonly hookFailures = new HookFailures();
   /** Per session and topic, the memory version and event it last saw: what an omitted version or covered_event means. */
   private readonly memorySeen = new Map<string, { version: number; event: number }>();
-  /** Per worker, its report on its way to the master (a pushed commit is checked first): the next one waits for it. */
-  private readonly reports = new Map<string, Promise<void>>();
   /** Per worker, its current mission (missions log) and the tool calls and failures of its turn in progress. */
-  private readonly missions = new Map<string, { id: string; tools: number; errors: number }>();
+  private readonly missions = new Map<string, { id: string; tools: number; errors: number; since: number }>();
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -654,8 +652,9 @@ export class SessionManager extends EventEmitter {
     this.stateFile = join(opts.dataDir, 'state.json');
     this.attachDir = join(opts.dataDir, 'attachments');
     this.contextMemory = new TopicMemory(join(opts.dataDir, 'context-memory.sqlite'));
-    for (const [id, mission] of opts.costLog.lastMissions?.() ?? []) this.missions.set(id, { id: mission, tools: 0, errors: 0 });
     this.restore();
+    // Each session's current mission, from the log: a restart keeps adding its turns to it.
+    for (const [id, mission] of opts.costLog.lastMissions?.() ?? []) if (this.sessions.has(id)) this.missions.set(id, { id: mission, tools: 0, errors: 0, since: 0 });
     this.syncTeam();
     // The figure follows the user's other uses of the account too (a terminal, claude.ai): asked now and then, turn or not.
     setInterval(() => this.pollUsage(), USAGE_POLL_MS).unref();
@@ -823,6 +822,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s || s.role !== 'worker' || s.roleId || s.inbox) return;
     this.sessions.delete(id);
+    this.missions.delete(id);
     s.subagentTails.stop();
     if (!s.instanceOf) this.dropFromGroups(s.name);
     this.changed();
@@ -2631,7 +2631,10 @@ export class SessionManager extends EventEmitter {
         if (!ev.error) s.limit = null;
         this.markBusy(s, true);
         const mission = this.missions.get(s.id);
-        if (mission) mission.tools += ev.blocks.filter((b) => b.type === 'tool_use').length;
+        if (mission) {
+          mission.since ||= Date.now();
+          mission.tools += ev.blocks.filter((b) => b.type === 'tool_use').length;
+        }
         // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
         const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
@@ -3011,8 +3014,8 @@ export class SessionManager extends EventEmitter {
     const role = this.costRole(s);
     // What the turn did, for the missions in the cost panel: counted since the last turn, then started over.
     const m = this.missions.get(s.id);
-    const work = { ...(m ? { mission: m.id, tools: m.tools, errors: m.errors } : {}), ...(s.effort ? { effort: s.effort } : {}), ...(s.busySince ? { ms: at - s.busySince } : {}) };
-    if (m) Object.assign(m, { tools: 0, errors: 0 });
+    const work = { ...(m ? { mission: m.id, tools: m.tools, errors: m.errors, ...(m.since ? { ms: at - m.since } : {}) } : {}), ...(s.effort ? { effort: s.effort } : {}) };
+    if (m) Object.assign(m, { tools: 0, errors: 0, since: 0 });
     void (prev ? Promise.resolve(prev) : s.usageBase).then((before) => {
       if (before === 'unknown') return;
       const models = turnDelta(before, totals);
@@ -4177,7 +4180,7 @@ export class SessionManager extends EventEmitter {
   private openMission(s: Session, kind: MissionEvent['kind'], by: MissionEvent['by']): void {
     const current = kind === 'follow' ? this.missions.get(s.id) : undefined;
     const id = current?.id ?? `m-${randomUUID().slice(0, 8)}`;
-    if (!current) this.missions.set(s.id, { id, tools: 0, errors: 0 });
+    if (!current) this.missions.set(s.id, { id, tools: 0, errors: 0, since: 0 });
     this.opts.costLog.mission?.({ at: Date.now(), mission: id, id: s.id, name: s.name, kind: current ? 'follow' : 'start', model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '', by });
   }
 
@@ -4679,23 +4682,25 @@ export class SessionManager extends EventEmitter {
     const note = t('hub.workerMessage', { tag, text: inside(text.slice(0, 20_000)) });
     // A diagnosis goes with the topic of the worker it looked into.
     const topic = this.workerTopic(s.diagOf ? this.sessions.get(s.diagOf.target) ?? s : s);
-    const send = (checked: string) =>
-      this.deliver(master, {
-        text: `${tags().worker(s.name)}\n<hub-note>\n${note}${checked ? `\n${checked}` : ''}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
-        images: [],
-        from: s.name,
-        shown: text,
-        ...(topic ? { topic: topic.id } : {}),
-      });
-    // A report that says commits are pushed reaches the master once they are checked on the remote (a few seconds),
-    // after the worker's earlier reports: a claim that does not hold is said with it.
-    const shas = announcedCommits(text);
-    const before = this.reports.get(s.id) ?? Promise.resolve();
-    const done = before.then(() => (shas.length ? this.pushCheck(s, shas).catch(() => '') : '')).then(send);
-    this.reports.set(s.id, done);
-    void done.finally(() => {
-      if (this.reports.get(s.id) === done) this.reports.delete(s.id);
+    this.deliver(master, {
+      text: `${tags().worker(s.name)}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
+      images: [],
+      from: s.name,
+      shown: text,
+      ...(topic ? { topic: topic.id } : {}),
     });
+    // Commits the report says are pushed are checked on the remote afterwards (a few seconds): only a claim that does
+    // not hold reaches the master, as a hub note of its own, to whatever master session runs then.
+    const shas = announcedCommits(text);
+    if (shas.length > 0) {
+      void this.pushCheck(s, shas)
+        .then((missing) => {
+          const now = this.sessions.get(MASTER_ID);
+          if (!missing || !now || this.quitting) return;
+          this.deliver(now, { text: `${tags().hub}\n<hub-note>\n${missing}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`, images: [], from: 'hub', shown: missing, ...(topic ? { topic: topic.id } : {}) });
+        })
+        .catch(() => undefined); // The check could not run (offline, no remote): nothing is claimed either way.
+    }
     return t('master.delivered');
   }
 
@@ -4707,8 +4712,8 @@ export class SessionManager extends EventEmitter {
     if (!(await fetchRemote(s.cwd, { quiet: true, timeout: 20_000 }))) return '';
     const missing: string[] = [];
     for (const sha of shas) {
-      const held = (await git(s.cwd, ['branch', '-r', '--contains', sha], { hooks: false }).catch(() => '')).trim();
-      if (!held) missing.push(sha);
+      const held = await git(s.cwd, ['branch', '-r', '--contains', sha], { hooks: false }).catch(() => null);
+      if (held !== null && !held.trim()) missing.push(sha);
     }
     return missing.length ? t('hub.pushUnverified', { list: missing.join(', ') }) : '';
   }
