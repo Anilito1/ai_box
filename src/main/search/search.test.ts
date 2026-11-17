@@ -219,6 +219,9 @@ test('words and fusion: identifiers are found by their parts, lists are merged b
   assert.equal(ftsQuery('Où est géré hubTools ?'), '"hubtools" OR "hub" OR "tools"');
   assert.equal(ftsQuery('a "quoted" AND (weird) NEAR/2 thing*'), '"quoted" OR "weird" OR "near" OR "thing"');
   assert.equal(ftsQuery('où est le'), '');
+  // A French question also asks for the English words code is written with, after its own words.
+  assert.equal(ftsQuery('Où se fait la mise à jour du jeton ?'), '"mise" OR "jour" OR "update" OR "jeton" OR "token"');
+  assert.equal(ftsQuery('Où se fait la mise à jour du jeton ?', false), '"mise" OR "jour" OR "jeton"');
   assert.deepEqual(rrf([[1, 2, 3], [3, 4], [3, 1]]), [3, 1, 2, 4]);
   assert.deepEqual(rrf([[1, 2], [3, 4]], [0.5, 1]), [3, 4, 1, 2]);
   const data = new Int8Array(6);
@@ -320,6 +323,9 @@ test('index: follows git, leaves secrets out, and computes only what changed', a
     const plain = await search(store, root, 'fake', 'invoice refund login', 5, stages, engines);
     assert.deepEqual(reversed.map((h) => h.id), plain.map((h) => h.id).reverse());
     assert.equal(reversed[0].by, 'reranker');
+    // One piece per file leaves room for the other files.
+    const spread = await search(store, root, 'fake', 'invoice refund login', 5, { ...stages, perFile: 1 }, engines);
+    assert.deepEqual([plain.length > spread.length, new Set(spread.map((h) => h.path)).size === spread.length], [true, true]);
     // …and is not asked at all when it fails, or when the order by meaning is already clear.
     let asked = 0;
     const counting = { ...engines, rerank: async (_q: string, docs: string[]) => (asked++, docs.map(() => 0)) };

@@ -2,9 +2,10 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { Engine } from '../src/main/search/engine';
-import { syncFiles, syncVectors } from '../src/main/search/indexer';
+import { syncDocs, syncFiles, syncVectors, type Doc } from '../src/main/search/indexer';
 import { MODELS, modelOf, type SearchModel } from '../src/main/search/models';
 import { answer, formatHits, formatUnsure, ftsQuery, lookup, routeOf, search, stagesOf, TUNING, type Hit, type Stages, type Tuning } from '../src/main/search/search';
 import { quantize, SearchStore, type VectorIndex } from '../src/main/search/store';
@@ -108,7 +109,7 @@ function truncated(index: VectorIndex, dims: number): VectorIndex {
  * One row of the tables: how the app would answer (`answer`, the routing of search_code) with these stages and this
  * tuning. `vec` rows skip the routing: what the model alone is worth.
  */
-interface Config { name: string; lexical: boolean; vectors: boolean; rerank: boolean; tuning: Tuning; candidates?: number; rrfK?: number; routed: boolean; /** Results that are a file's outline are dropped: what the outlines are worth. */ noOutline?: boolean }
+interface Config { name: string; lexical: boolean; vectors: boolean; rerank: boolean; tuning: Tuning; candidates?: number; rrfK?: number; expand?: boolean; routed: boolean; /** Results that are a file's outline are dropped: what the outlines are worth. */ noOutline?: boolean }
 
 const app = (name: string, tuning: Partial<Tuning> = {}, more: Partial<Config> = {}): Config => ({ name, lexical: (tuning.lexicalWeight ?? TUNING.lexicalWeight) > 0, vectors: true, rerank: false, tuning: { ...TUNING, ...tuning }, routed: true, ...more });
 
@@ -129,6 +130,8 @@ function configs(grid: string, tag: string, rerankId: string): Config[] {
       ...[0, 0.1, 0.25, 0.5, 1].map((w) => app(`app ${tag} w${w}`, { lexicalWeight: w })),
       ...[0.25, 0.5].flatMap((w) => [10, 120].map((k) => app(`app ${tag} w${w} k${k}`, { lexicalWeight: w }, { rrfK: k }))),
       ...[0.25, 0.5].map((w) => app(`app ${tag} w${w} c60`, { lexicalWeight: w }, { candidates: 60 })),
+      ...[1, 2].map((n) => app(`app ${tag} w0.5 perFile${n}`, { lexicalWeight: 0.5, perFile: n })),
+      app(`app ${tag} w0.5 no-expand`, { lexicalWeight: 0.5 }, { expand: false }),
     ];
   }
   if (grid === 'rerank') {
@@ -211,6 +214,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
   };
   if (grid !== 'final' || !embedIds.length) {
     await run('bm25', (q, s, tree) => search(s, tree, '', q.q, TOP, { lexical: true, vectors: false, rerank: 0 }, {}));
+    await run('bm25 no-expand', (q, s, tree) => search(s, tree, '', q.q, TOP, { lexical: true, vectors: false, rerank: 0, expand: false }, {}));
     await run('bm25 app', async (q, s, tree) => (await answer(s, tree, q.q, TOP, '', (within) => search(s, tree, '', q.q, TOP, { lexical: true, vectors: false, rerank: 0 }, {}, within))).hits);
   }
   for (const id of embedIds) {
@@ -258,7 +262,7 @@ async function evaluate(embedIds: string[], rerankIds: string[], set: string, di
       for (const c of configs(grid, tag, rid)) {
         // The rows without a reranker are the same whatever the reranker: measured once.
         if (!c.rerank && rid !== (rerankIds[0] ?? '')) continue;
-        const stages: Stages = { ...stagesOf(c.vectors, c.rerank, c.tuning), lexical: c.lexical, ...(c.candidates ? { candidates: c.candidates } : {}), ...(c.rrfK ? { rrfK: c.rrfK } : {}) };
+        const stages: Stages = { ...stagesOf(c.vectors, c.rerank, c.tuning), lexical: c.lexical, ...(c.candidates ? { candidates: c.candidates } : {}), ...(c.rrfK ? { rrfK: c.rrfK } : {}), ...(c.expand === false ? { expand: false } : {}) };
         const engines = { embedQuery, ...(c.rerank ? { rerank } : {}) };
         await run(c.name, async (q, s, tree) => {
           const find = async (within: string) => (await search(s, tree, id, q.q, c.noOutline ? TOP * 2 : TOP, stages, engines, within, () => vectorsOf(s, tree))).filter((h) => !c.noOutline || h.kind !== 'outline');
@@ -287,7 +291,7 @@ function report(set: string): void {
       const idx = r.answerable.map((ok, i) => (ok ? i : -1)).filter((i) => i >= 0);
       const of = (source: string) => idx.filter((i) => r.sources[i] === source);
       const hit = (is: number[], k: number, ranks = r.ranks) => pct(is.map((i) => ranks[i] > 0 && ranks[i] <= k));
-      return { config: r.config, n: idx.length, 'hit@1': hit(idx, 1), 'hit@3': hit(idx, 3), 'hit@5': hit(idx, 5), 'file@5': hit(idx, 5, r.fileRanks), mrr: Number((idx.reduce((s, i) => s + (r.ranks[i] > 0 && r.ranks[i] <= 10 ? 1 / r.ranks[i] : 0), 0) / Math.max(1, idx.length)).toFixed(3)), 'manual@5': hit(of('manual'), 5), 'commit@5': hit(of('commit'), 5), 'session@5': hit(of('session'), 5), ms: r.msMedian, tok: r.tokPerQuery, 'tok/useful': r.tokPerUseful };
+      return { config: r.config, n: idx.length, 'hit@1': hit(idx, 1), 'hit@3': hit(idx, 3), 'hit@5': hit(idx, 5), 'file@5': hit(idx, 5, r.fileRanks), mrr: Number((idx.reduce((s, i) => s + (r.ranks[i] > 0 && r.ranks[i] <= 10 ? 1 / r.ranks[i] : 0), 0) / Math.max(1, idx.length)).toFixed(3)), 'manual@5': hit(of('manual'), 5), 'commit@5': hit(of('commit'), 5), 'session@5': hit(of('session'), 5), ms: r.msMedian, tok: r.tokPerQuery };
     }),
   );
 }
@@ -387,6 +391,100 @@ async function freshness(): Promise<void> {
   }
 }
 
+/**
+ * Questions that are a name or a path, as agents ask them instead of Grep or Glob: drawn from what each index
+ * defines (one name in `per`, by a hash of the name), asked bare, in a French sentence and in an English one, and
+ * answered as the app does, with no model. Measures the routing and the lookup, not an understanding of the code.
+ */
+async function names(per: number): Promise<void> {
+  const rows: Record<string, unknown>[] = [];
+  const pick = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % per === 0;
+  const results = new Map<string, { ranks: number[]; ms: number[]; kinds: string[] }>();
+  for (const repo of REPOS) {
+    const store = storeOf(repo);
+    const tree = join(REPOS_DIR, repo);
+    const db = new (createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite')).DatabaseSync(join(LAB, 'index', `${repo}.sqlite`), { readOnly: true });
+    const defs = db.prepare("SELECT name, leaf, path, start, end FROM symbols WHERE tree=? AND kind IN ('function','method','class','type','edge','table','cron') AND length(leaf) >= 6").all(tree) as { name: string; leaf: string; path: string; start: number; end: number }[];
+    const files = (db.prepare("SELECT path FROM files WHERE tree=? AND skipped=''").all(tree) as { path: string }[]).map((f) => f.path);
+    db.close();
+    const asks: { form: string; q: string; ok: (h: Hit) => boolean }[] = [];
+    for (const leaf of [...new Set(defs.map((d) => d.leaf))].filter(pick)) {
+      const at = defs.filter((d) => d.leaf === leaf);
+      const ok = (h: Hit) => at.some((d) => d.path === h.path && h.start <= d.end && h.end >= d.start);
+      asks.push({ form: 'name', q: leaf, ok }, { form: 'name fr', q: `où est défini ${leaf} ?`, ok }, { form: 'name en', q: `where is ${leaf} implemented`, ok });
+    }
+    for (const path of files.filter(pick)) {
+      const ok = (h: Hit) => h.path === path;
+      asks.push({ form: 'path', q: path, ok }, { form: 'file fr', q: `que fait ${path.split('/').pop()} ?`, ok });
+    }
+    for (const a of asks) {
+      const t = performance.now();
+      const found = await answer(store, tree, a.q, 5, '', async (within) => search(store, tree, '', a.q, 5, { lexical: true, vectors: false, rerank: 0 }, {}, within));
+      const r = results.get(a.form) ?? { ranks: [], ms: [], kinds: [] };
+      r.ms.push(performance.now() - t);
+      const at = found.hits.findIndex(a.ok);
+      r.ranks.push(at < 0 ? 0 : at + 1);
+      r.kinds.push(found.known ? 'index' : 'search');
+      results.set(a.form, r);
+    }
+    store.close();
+  }
+  for (const [form, r] of results) {
+    const hit = (k: number) => Math.round((1000 * r.ranks.filter((x) => x > 0 && x <= k).length) / r.ranks.length) / 10;
+    rows.push({ op: 'names', form, n: r.ranks.length, 'hit@1': hit(1), 'hit@5': hit(5), fromIndex: `${Math.round((100 * r.kinds.filter((k) => k === 'index').length) / r.kinds.length)}%`, msMedian: Number(median(r.ms).toFixed(1)), msMax: Number(Math.max(...r.ms).toFixed(1)) });
+  }
+  for (const row of rows) record(row);
+  console.table(rows.map(({ op: _op, ...r }) => r));
+}
+
+/**
+ * search_memory on notes like the ones the hub keeps (topic memory, decisions, handoff notes): exact words alone, as
+ * the app answers, against meaning and both. The notes are read from AIBOX_BENCH_MEMORY_DIR (folders of `*.md`, one
+ * per project), the questions from lab/questions/memory.json; a note whose name says it holds secrets is left out.
+ */
+async function memory(embedId: string): Promise<void> {
+  const dir = process.env.AIBOX_BENCH_MEMORY_DIR;
+  if (!dir) throw new Error('Set AIBOX_BENCH_MEMORY_DIR');
+  const docs: Doc[] = [];
+  for (const project of readdirSync(dir)) {
+    const notes = join(dir, project, 'memory');
+    if (!existsSync(notes)) continue;
+    for (const file of readdirSync(notes).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md' && !/credential|secret|password|token/i.test(f))) docs.push({ id: `${project.replace(/^C--Users-[^-]+-/, '')}/${file.replace(/\.md$/, '')}`, text: readFileSync(join(notes, file), 'utf8') });
+  }
+  const qs = JSON.parse(readFileSync(join(LAB, 'questions', 'memory.json'), 'utf8')) as { q: string; expect: string[] }[];
+  const store = new SearchStore(join(LAB, 'index', 'memory.sqlite'));
+  const tree = 'memory:bench';
+  await syncDocs(store, tree, docs);
+  const model = need(embedId);
+  const engine = engineOf(model);
+  await syncVectors(store, tree, model.id, (texts) => engine.embed(texts), { root: LAB, passage: model.passage });
+  const queries = new Map<string, Float32Array>();
+  for (const q of qs) queries.set(q.q, (await engine.embed([(model.query ?? '') + q.q]))[0]);
+  engine.stop();
+  const embedQuery = async (q: string) => queries.get(q)!;
+  const rows: Record<string, unknown>[] = [];
+  const run = async (name: string, stages: Stages) => {
+    const ranks: number[] = [];
+    for (const q of qs) {
+      // A note is the answer, whichever of its sections comes first.
+      const notes = [...new Set((await search(store, tree, model.id, q.q, 20, stages, { embedQuery })).map((h) => h.path))];
+      const at = notes.findIndex((n) => q.expect.includes(n));
+      ranks.push(at < 0 ? 0 : at + 1);
+    }
+    const hit = (k: number) => Math.round((1000 * ranks.filter((r) => r > 0 && r <= k).length) / ranks.length) / 10;
+    const row = { op: 'memory', config: name, docs: docs.length, n: qs.length, 'hit@1': hit(1), 'hit@3': hit(3), 'hit@5': hit(5), mrr: Number((ranks.reduce((s, r) => s + (r ? 1 / r : 0), 0) / ranks.length).toFixed(3)) };
+    rows.push(row);
+    record({ ...row, ranks });
+  };
+  const words = { lexical: true, vectors: false, rerank: 0 };
+  await run('bm25 (app)', words);
+  await run('bm25 no-expand', { ...words, expand: false });
+  await run(`vec ${model.id}`, { ...words, lexical: false, vectors: true });
+  for (const w of [1, 0.5, 0.25]) await run(`bm25+vec ${model.id} w${w}`, { ...words, vectors: true, lexicalWeight: w });
+  store.close();
+  console.table(rows.map(({ op: _op, ...r }) => r));
+}
+
 async function ask(repo: string, embedId: string, rerankId: string, query: string): Promise<void> {
   const model = need(embedId);
   const tree = join(REPOS_DIR, repo);
@@ -448,6 +546,8 @@ else if (command === 'resources') await resources(args[0], args[1] === '-' ? '' 
 else if (command === 'freshness') await freshness();
 else if (command === 'ask') await ask(args[0], args[1], args[2] === '-' ? '' : (args[2] ?? ''), args.slice(3).join(' '));
 else if (command === 'questions') checkQuestions();
+else if (command === 'names') await names(Number(args[0] ?? 8));
+else if (command === 'memory') await memory(args[0] ?? 'qwen3-embed-0.6b');
 else if (command === 'split') split();
-else console.log('index <model|none> [repo…] [bare] | eval <embed,…|-> [rerank,…|-] [dev|test|all] [dims] [models|fusion|rerank|final] | report [set] | calibrate <config> [set] | stats <config a> <config b> [set] [hit@5|hit@1|file@5|mrr] | resources <embed> [rerank|-] [auto|gpu|cpu] | freshness | ask <repo> <embed> <rerank|-> <question> | questions | split');
+else console.log('index <model|none> [repo…] [bare] | eval <embed,…|-> [rerank,…|-] [dev|test|all] [dims] [models|fusion|rerank|final] | report [set] | calibrate <config> [set] | stats <config a> <config b> [set] [hit@5|hit@1|file@5|mrr] | resources <embed> [rerank|-] [auto|gpu|cpu] | freshness | ask <repo> <embed> <rerank|-> <question> | questions | split | memory <embed> | names [one in n]');
 process.exit(0);

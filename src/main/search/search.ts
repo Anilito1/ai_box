@@ -25,6 +25,10 @@ export interface Stages {
   rerankGap?: number;
   /** The fusion's constant: lower, the first ranks of each list count more (60 when absent). */
   rrfK?: number;
+  /** French words also look for their English words in the code (on when absent). */
+  expand?: boolean;
+  /** At most this many results of one file (no limit when absent). */
+  perFile?: number;
 }
 
 /** How many candidates each of the two searches gives to the fusion. */
@@ -35,6 +39,26 @@ export const RERANK_CHARS = 2000;
 const STOP = new Set(
   'a an and are as at be by do does for from how in is it of on or that the this to what when where which who why with le la les l un une des du de d et ou où est sont que qui quoi quel quelle quels quelles comment pourquoi dans sur pour par avec au aux ce cet cette ces se sa son ses on y en il elle ne pas plus fait faire gere geree gerer géré gérée gérer code fichier file'.split(' '),
 );
+/**
+ * French words of a question and the English words code is written with: exact words then find code asked about in
+ * French. General vocabulary of software, not the words of any repo.
+ */
+const GLOSSARY: Record<string, string> = {
+  'mise a jour': 'update', 'mot de passe': 'password', "file d attente": 'queue', 'carte graphique': 'gpu', 'base de donnees': 'database', 'tache de fond': 'background', 'pilote automatique': 'autopilot', 'rendez vous': 'appointment booking', 'mise en cache': 'cache',
+  dossier: 'folder directory', chemin: 'path', nom: 'name', branche: 'branch', depot: 'repo repository', jeton: 'token', cle: 'key', utilisateur: 'user', compte: 'account', droit: 'permission', droits: 'permissions', role: 'role',
+  connexion: 'login connection', deconnexion: 'logout', authentification: 'auth', envoyer: 'send', envoi: 'send', recevoir: 'receive', courriel: 'email', appel: 'call', appels: 'calls', appeler: 'call', raccrocher: 'hangup', raccroche: 'hangup', decrocher: 'pickup answer', decroche: 'pickup answer', sonnerie: 'ring', repondeur: 'voicemail', numero: 'number phone',
+  recherche: 'search', chercher: 'search find', trouver: 'find', lire: 'read', ecrire: 'write', supprimer: 'delete remove', suppression: 'delete remove', ajouter: 'add', ajout: 'add', creer: 'create', creation: 'create', modifier: 'edit update', enregistrer: 'save record', sauvegarder: 'save backup', charger: 'load', chargement: 'load loading', telecharger: 'download', televerser: 'upload',
+  afficher: 'show display render', affichage: 'display render', affiche: 'show display', masquer: 'hide', cacher: 'hide', ouvrir: 'open', fermer: 'close', ferme: 'close', fermeture: 'close', demarrer: 'start', demarrage: 'start startup boot', arreter: 'stop', arret: 'stop', redemarrer: 'restart', relancer: 'restart retry', attendre: 'wait', annuler: 'cancel',
+  verifier: 'check verify', verifie: 'check verify', verification: 'check verify', valider: 'validate', bloquer: 'block', bloque: 'blocked', autoriser: 'allow', refuser: 'reject deny', refuse: 'rejected', erreur: 'error', echec: 'fail failure', journal: 'log', tache: 'task job', taches: 'tasks jobs', planifier: 'schedule', delai: 'timeout delay', minuterie: 'timer', duree: 'duration',
+  version: 'version', installer: 'install', installation: 'install', parametre: 'setting option', parametres: 'settings', reglage: 'setting', reglages: 'settings', liste: 'list', tableau: 'table array', colonne: 'column', ligne: 'line row', lignes: 'lines rows', champ: 'field', valeur: 'value', requete: 'query request', reponse: 'response reply', serveur: 'server',
+  commande: 'order command', commandes: 'orders', produit: 'product', produits: 'products', prix: 'price', facture: 'invoice', paiement: 'payment', payer: 'pay', remboursement: 'refund', panier: 'cart', livraison: 'shipping delivery', colis: 'parcel shipment', fiche: 'record card', client: 'customer client', clients: 'customers',
+  fenetre: 'window', bouton: 'button', boutons: 'buttons', barre: 'bar', onglet: 'tab', ecran: 'screen', panneau: 'panel', formulaire: 'form', couleur: 'color', couleurs: 'colors', theme: 'theme', police: 'font', icone: 'icon', mascotte: 'mascot', glisser: 'drag',
+  modele: 'model template', modeles: 'models', fournisseur: 'provider', travailleur: 'worker', travailleurs: 'workers', maitre: 'master', sujet: 'topic', memoire: 'memory', passation: 'handoff', resume: 'summary', fusionner: 'merge', fusion: 'merge',
+  signature: 'signature', empreinte: 'hash fingerprint', chiffrer: 'encrypt', politique: 'policy', fonction: 'function', declencheur: 'trigger', schema: 'schema', navigateur: 'browser', lien: 'link url', liens: 'links urls', temporaire: 'temporary', temporaires: 'temporary', partage: 'share', regrouper: 'batch group', cout: 'cost', limite: 'limit',
+  inscription: 'signup register', conversation: 'conversation thread', conversations: 'conversations', vocal: 'voice audio', enregistrement: 'recording',
+};
+const PHRASES = new RegExp(Object.keys(GLOSSARY).filter((k) => k.includes(' ')).map((k) => k.replace(/ /g, "[\\s'’-]+")).join('|'), 'gi');
+const deaccent = (s: string): string => s.normalize('NFD').replace(/\p{M}/gu, '');
 const FILE_EXT = /\.(?:[cm]?[jt]sx?|py|cs|sql|md|json|ya?ml|toml|html|s?css|vue|go|rs|java|rb|php|sh|ps1)$/i;
 
 export interface Route {
@@ -72,14 +96,17 @@ export function routeOf(query: string): Route {
  * The question as an FTS5 query: its words, and the parts of its identifiers, any of them. Each is quoted, so no
  * character of the question is read as FTS5 syntax.
  */
-export function ftsQuery(query: string): string {
+export function ftsQuery(query: string, expand = true): string {
   const words = new Set<string>();
-  for (const raw of query.match(/[\p{L}\p{N}_$]{2,}/gu) ?? []) {
+  const english = new Set<string>();
+  const text = expand ? deaccent(query).replace(PHRASES, (p) => ` ${p} ${GLOSSARY[p.toLowerCase().replace(/[\s'’-]+/g, ' ')] ?? ''} `) : query;
+  for (const raw of text.match(/[\p{L}\p{N}_$]{2,}/gu) ?? []) {
     const w = raw.toLowerCase();
     if (!STOP.has(w)) words.add(w);
     for (const p of identifierParts(raw).split(' ')) if (p && !STOP.has(p)) words.add(p);
+    if (expand) for (const t of GLOSSARY[w]?.split(' ') ?? []) english.add(t);
   }
-  return [...words].slice(0, 24).map((w) => `"${w.replace(/"/g, '')}"`).join(' OR ');
+  return [...words].slice(0, 24).concat([...english].filter((w) => !words.has(w)).slice(0, 12)).map((w) => `"${w.replace(/"/g, '')}"`).join(' OR ');
 }
 
 /** Reciprocal rank fusion: a chunk high in several lists beats one that tops a single list. */
@@ -159,7 +186,7 @@ export async function search(
   const cosine = new Map<number, number>();
   let near: { id: number; score: number }[] = [];
   if (stages.lexical) {
-    lists.push(store.lexical(tree, ftsQuery(query), candidates, under));
+    lists.push(store.lexical(tree, ftsQuery(query, stages.expand ?? true), candidates, under));
     weights.push(stages.lexicalWeight ?? 1);
   }
   if (stages.vectors && engines.embedQuery) {
@@ -184,12 +211,18 @@ export async function search(
       ids = [...top.map((h) => h.id).sort((a, b) => (judged.get(b) ?? 0) - (judged.get(a) ?? 0)), ...ids.slice(stages.rerank)];
     }
   }
-  return ids.slice(0, limit).flatMap((id): Hit[] => {
+  const hits: Hit[] = [];
+  const perFile = new Map<string, number>();
+  for (const id of ids) {
+    if (hits.length >= limit) break;
     const c = store.chunk(id);
-    if (!c) return [];
+    // A few pieces of one file leave room for other files: the next ones of that file are one Read away.
+    if (!c || (stages.perFile && (perFile.get(c.path) ?? 0) >= stages.perFile)) continue;
+    perFile.set(c.path, (perFile.get(c.path) ?? 0) + 1);
     const rel = judged.get(id);
-    return [{ ...c, score: rel ?? cosine.get(id) ?? 0, by: rel !== undefined ? 'reranker' : cosine.has(id) ? 'meaning' : 'words' }];
-  });
+    hits.push({ ...c, score: rel ?? cosine.get(id) ?? 0, by: rel !== undefined ? 'reranker' : cosine.has(id) ? 'meaning' : 'words' });
+  }
+  return hits;
 }
 
 /**
@@ -209,11 +242,13 @@ export const TUNING = {
   minReranker: 0,
   /** Definitions of the names a described behaviour holds, shown before what the search finds. */
   pinned: 2,
+  /** At most this many results of one file; 0, no limit. */
+  perFile: 0,
 };
 export type Tuning = typeof TUNING;
 
 /** The stages of a search for a described behaviour, as tuned. */
-export const stagesOf = (vectors: boolean, rerank: boolean, tuning: Tuning = TUNING): Stages => ({ lexical: true, vectors, rerank: rerank ? tuning.rerank : 0, rerankChars: tuning.rerankChars, rerankGap: tuning.rerankGap, lexicalWeight: tuning.lexicalWeight });
+export const stagesOf = (vectors: boolean, rerank: boolean, tuning: Tuning = TUNING): Stages => ({ lexical: true, vectors, rerank: rerank ? tuning.rerank : 0, rerankChars: tuning.rerankChars, rerankGap: tuning.rerankGap, lexicalWeight: tuning.lexicalWeight, ...(tuning.perFile ? { perFile: tuning.perFile } : {}) });
 
 export interface Answer {
   hits: Hit[];
