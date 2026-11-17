@@ -33,7 +33,7 @@ interface Inner {
   groupAsked(before: unknown, args: { name?: string; lead?: string; members?: string[] }): string;
   findGroup(name: string): unknown;
   listGroups(): string;
-  listWorkers(lead?: Fake): string;
+  listWorkers(lead?: Fake, opts?: { detail?: boolean; name?: string }): string;
   messageWorker(args: { name: string; message: string }, by?: Fake): Promise<string>;
   workerReport(name: string, lead?: Fake): Promise<string>;
   messageLead(s: Fake, message: string): string;
@@ -141,7 +141,15 @@ test('a lead reaches its members only; their report comes back to it, a later ma
     // The master keeps the hand on everyone: its own message makes the report its own again.
     await inner.messageWorker({ name: 'openai-lbc1', message: 'Stop' });
     assert.equal(member.reportTo, null);
-    assert.match(inner.listWorkers(), /group lbc · lead hub-sous-chef-lbc/);
+    // One line per worker by default; the groups stay in the header, each member's group in the full cards.
+    const brief = inner.listWorkers();
+    assert.match(brief, /^- lbc : /m);
+    assert.match(brief, /list_workers with detail=true/);
+    assert.doesNotMatch(brief, /group lbc · lead/);
+    assert.match(inner.listWorkers(undefined, { detail: true }), /group lbc · lead hub-sous-chef-lbc/);
+    assert.match(inner.listWorkers(undefined, { name: 'openai-lbc1' }), /group lbc · lead hub-sous-chef-lbc/);
+    assert.doesNotMatch(inner.listWorkers(undefined, { name: 'hub-openai-lbc1' }), /hub-other/);
+    assert.match(inner.listWorkers(undefined, { name: 'nobody' }), /No worker named nobody/);
 
     // The lead's post deleted: the group goes, the member reports to the master.
     lead.status = 'exited';

@@ -158,3 +158,14 @@ export class TopicMemory {
     result.estimatedTokens = estimateTokens(result) + 4; return result;
   }
 }
+
+/** The topic a call works on: a worker's own (it may leave it out, never name another one), the one the master names. */
+export function memoryTopicOf(role: string, linked: string | undefined, asked: string | undefined): string {
+  if (role === 'worker') {
+    if (!linked) throw new Error('No topic is linked to this worker');
+    if (asked && asked !== linked) throw new Error(`Your topic is ${linked}: leave topic out or pass that id`);
+    return linked;
+  }
+  if (!asked) throw new Error('Name the topic: its id, as the topic tool gives it');
+  return asked;
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import { ClaudeProcess, disallowedTools, launchSettings } from './adapter';
+import { ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
 
 test('a worker has no Workflow tool, unless it runs in Ultracode', () => {
   assert.ok(disallowedTools({ role: 'worker', readOnly: false, ultracode: false }).includes('Workflow'));
@@ -21,6 +21,19 @@ test('Ultracode goes to Claude Code in the flag settings of the launch, only whe
   assert.equal(worker.ultracode, true);
   assert.equal(worker.autoCompactWindow, 1_000_000);
   assert.ok(!('ultracode' in launchSettings({ role: 'worker', ultracode: false })));
+});
+
+test('Fable is asked for in its 1M variant: an older Claude Code would give it 200k and compact near 170k', () => {
+  assert.equal(fullWindow('claude-fable-5-2'), 'claude-fable-5-2[1m]');
+  assert.equal(fullWindow('claude-fable-5-2[1m]'), 'claude-fable-5-2[1m]');
+  // Aliases are resolved by Claude Code itself, other models already run their whole window.
+  for (const m of ['fable', 'opus', 'claude-opus-5-5', 'claude-sonnet-5-5', 'deepseek-v4-1-flash']) assert.equal(fullWindow(m), m);
+});
+
+test('a worker gets neither the unused claude.ai connectors nor MasterTools; the master keeps them', () => {
+  const denied = (launchSettings({ role: 'worker', ultracode: false }).deniedMcpServers ?? []).map((d) => d.serverName);
+  assert.ok(denied.includes('claude.ai MasterTools') && denied.includes('higgsfield'));
+  assert.equal(launchSettings({ role: 'master', ultracode: false }).deniedMcpServers, undefined);
 });
 
 function fakeQuery() {

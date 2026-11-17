@@ -26,6 +26,7 @@ const en = {
   'notice.imagesNotSaved': 'The images could not be saved to disk: only this session sees them.',
   'notice.fileNotSaved': 'The file “{name}” could not be attached: the session will not receive it.',
   'notice.modelRefused': 'The model could not be changed.',
+  'notice.hookFailing': 'A hook of your Claude Code settings keeps failing ({n} failures since the app started: {hooks}). Each failure slows down the sessions; check that hook in your settings.',
   'notice.effortRefused': 'The effort could not be changed.',
   'notice.modeMismatch': 'Mode differs from the other hub sessions: this session will hold the SendMessage exchanged with them.',
   'notice.modeRefused': 'The mode could not be changed.',
@@ -111,7 +112,9 @@ const en = {
   'hub.noText': '(no text)',
   'tool.byName': 'Worker name (e.g. "hub-fix-api")',
   'tool.listWorkers':
-    'Every hub worker, the team (permanent workers) first: status (asleep, ready, working…), folder (cwd), post, mission, model, effort, context, cost, background tasks, preview of its last message.',
+    'Every hub worker, the team (permanent workers) first, one line each: status (asleep, ready, working…), model, effort, context, mission. detail=true adds post, folder (cwd), account, cost, background tasks and the preview of its last message; name=<worker> gives one worker in full.',
+  'tool.listWorkers.detail': 'Full cards (post, folder, account, cost, background tasks, last message) instead of one line per worker.',
+  'tool.listWorkers.name': 'One worker only (hub-xxx or xxx), in full.',
   'tool.listRepos': "Local git repositories under {roots} (worktrees included): name, path, remote, current branch. A worker's cwd = the folder's root.",
   'tool.searchCode':
     'Use first when you do not know which file holds something: a behaviour or a feature described in French or English, a name you are unsure of, a path. One call replaces several rounds of Grep, Glob and exploratory reads. Answers the best places as `path:start-end symbol (score)` with a short excerpt, about {budget} tokens; then Read only those lines. "No confident match": use Grep. Local, nothing leaves this computer. Not exhaustive: Grep lists every occurrence of an exact string.',
@@ -219,6 +222,18 @@ const en = {
   'repos.unreadable': 'unreadable',
   'repos.detached': 'detached ({sha})',
   'workers.none': 'No worker.',
+  'workers.unknown': 'No worker named {name}.',
+  'workers.more': 'Post, folder, account, cost, background tasks, last message: list_workers with detail=true, or name=<worker>.',
+  'workers.busyBackground': '{n} background task(s)',
+  'memory.unavailable': 'Local topic memory unavailable: use ordinary handoff notes.',
+  'memory.rules.master':
+    '## Topic memory\ntopic_memory keeps a short, anonymized state per topic (its id comes from topic). Read it at the start of a topic. At the end of meaningful work, update the state (objective, constraints, tasks, blockers, artifacts, nextStep), then compact a handoff (text, at most 1600 tokens) before changing topic; the hub fills version and covered_event when you leave them out. A user decision goes with decision and its message as source; a correction supersedes it, never erases it. Never client content, transcripts or secrets. Pressure: warning = prepare a handoff, compact = compact now, hard = nothing more is stored. With a saved summary the hub may start you a fresh conversation on a topic switch or at 90% of your context; without one it keeps the conversation.',
+  'memory.rules.worker':
+    '## Topic memory\nYour work belongs to topic {topic}: topic_memory reads and writes its memory (leave topic out). Read it when you start; at the end of meaningful work, update the state (tasks, blockers, artifacts, nextStep) and compact a short handoff (text). Anonymized only: never client content, transcripts or secrets.',
+  'tool.topicMemory':
+    'Short local memory of a topic, anonymized: read (bounded packet, never a transcript), update (structured state), decision (a user decision, append-only, source = its message), remember (short note), compact (handoff summary in text). version and covered_event are optional: the hub fills the current ones. No client data or secrets.',
+  'tool.topicMemory.worker':
+    'Short local memory of your topic, anonymized (topic can be left out): read (bounded packet), update (structured state), remember (short note), compact (handoff summary in text), decision (a user decision, source = its message). version and covered_event are optional: the hub fills the current ones. No client data or secrets.',
   'workers.team': 'Team (permanent workers):',
   'workers.adhoc': 'Ad-hoc workers:',
   'workers.post': '  post: {text} · model {model}, effort {effort}',
@@ -544,7 +559,7 @@ const en = {
   'workers.leads': '  lead of group {list}',
   'workers.groups': 'Groups (lead → members): {list}',
   'workers.notMine': '{n} other worker(s) outside your group: ask the master.',
-  'tool.lead.listWorkers': 'The workers of your group(s): you first, then your members with status, post, mission, model, provider account, context, cost, preview of their last message.',
+  'tool.lead.listWorkers': 'The workers of your group(s), you first, one line each: status, model, effort, context, mission. detail=true adds post, account, cost and the preview of their last message.',
   'tool.lead.message':
     'Writes to a member of your group: precise instruction, answer to its question. It receives it as an instruction from you, its lead. A sleeping or closed member is woken or restarted with its whole conversation, on its own provider; a working one reads it at the end of its current step. Its report comes back to you as a message. Only your members.',
   'tool.lead.report': "A member's mission, state, recent activity (tools, messages) and full last message. Only your members.",
@@ -609,6 +624,7 @@ const fr: Record<Key, string> = {
   'notice.imagesNotSaved': 'Les images n’ont pas pu être enregistrées sur le disque : seule cette session les voit.',
   'notice.fileNotSaved': 'Le fichier « {name} » n’a pas pu être joint : la session ne le recevra pas.',
   'notice.modelRefused': 'Le modèle n’a pas pu être changé.',
+  'notice.hookFailing': 'Un hook de tes réglages Claude Code échoue sans cesse ({n} échecs depuis le démarrage de l’app : {hooks}). Chaque échec ralentit les sessions ; vérifie ce hook dans tes réglages.',
   'notice.effortRefused': 'L’effort n’a pas pu être changé.',
   'notice.modeMismatch': 'Mode différent des autres sessions du hub : cette session retiendra les SendMessage échangés avec elles.',
   'notice.modeRefused': 'Le mode n’a pas pu être changé.',
@@ -694,7 +710,9 @@ const fr: Record<Key, string> = {
   'hub.noText': '(aucun texte)',
   'tool.byName': 'Nom du worker (ex. "hub-fix-api")',
   'tool.listWorkers':
-    "Tous les workers du hub, l'équipe (workers permanents) d'abord : statut (endormi, prêt, en cours…), dossier (cwd), poste, mission, modèle, effort, contexte, coût, tâches de fond, aperçu du dernier message.",
+    "Tous les workers du hub, l'équipe (workers permanents) d'abord, une ligne chacun : statut (endormi, prêt, en cours…), modèle, effort, contexte, mission. detail=true ajoute poste, dossier (cwd), compte, coût, tâches de fond et aperçu du dernier message ; name=<worker> donne un seul worker en entier.",
+  'tool.listWorkers.detail': 'Fiches complètes (poste, dossier, compte, coût, tâches de fond, dernier message) au lieu d’une ligne par worker.',
+  'tool.listWorkers.name': 'Un seul worker (hub-xxx ou xxx), en entier.',
   'tool.listRepos': "Dépôts git locaux sous {roots} (worktrees compris) : nom, chemin, remote, branche courante. Le cwd d'un worker = la racine du dossier.",
   'tool.searchCode':
     "À utiliser d'abord quand tu ne sais pas quel fichier contient quelque chose : un comportement ou une fonctionnalité décrits en français ou en anglais, un nom dont tu n'es pas sûr, un chemin. Un appel remplace plusieurs tours de Grep, Glob et lectures d'exploration. Répond les meilleurs endroits sous la forme `chemin:début-fin symbole (score)` avec un court extrait, environ {budget} tokens ; lis ensuite seulement ces lignes. « No confident match » : utilise Grep. Local, rien ne sort de cet ordinateur. Non exhaustif : Grep liste toutes les occurrences d'une chaîne exacte.",
@@ -804,6 +822,18 @@ const fr: Record<Key, string> = {
   'repos.unreadable': 'illisible',
   'repos.detached': 'détachée ({sha})',
   'workers.none': 'Aucun worker.',
+  'workers.unknown': 'Aucun worker nommé {name}.',
+  'workers.more': 'Poste, dossier, compte, coût, tâches de fond, dernier message : list_workers avec detail=true, ou name=<worker>.',
+  'workers.busyBackground': '{n} tâche(s) de fond',
+  'memory.unavailable': 'Mémoire locale des sujets indisponible : utilise les notes de passation habituelles.',
+  'memory.rules.master':
+    "## Mémoire des sujets\ntopic_memory garde un état court et anonymisé par sujet (son id vient de topic). Lis-la au début d'un sujet. À la fin d'un travail utile, mets l'état à jour (objective, constraints, tasks, blockers, artifacts, nextStep), puis compacte une passation (text, 1600 tokens au plus) avant de changer de sujet ; le hub remplit version et covered_event si tu les omets. Une décision de l'utilisateur passe par decision, avec son message comme source ; une correction la remplace, sans l'effacer. Jamais de contenu client, de transcription ni de secret. Pression : warning = prépare une passation, compact = compacte maintenant, hard = plus rien n'est stocké. Avec un résumé enregistré, le hub peut te faire repartir sur une conversation neuve au changement de sujet ou à 90 % de ton contexte ; sans résumé, il garde la conversation.",
+  'memory.rules.worker':
+    "## Mémoire du sujet\nTon travail relève du sujet {topic} : topic_memory lit et écrit sa mémoire (omets topic). Lis-la en commençant ; à la fin d'un travail utile, mets l'état à jour (tasks, blockers, artifacts, nextStep) et compacte une courte passation (text). Anonymisé seulement : jamais de contenu client, de transcription ni de secret.",
+  'tool.topicMemory':
+    "Mémoire locale courte d'un sujet, anonymisée : read (paquet borné, jamais une transcription), update (état structuré), decision (décision de l'utilisateur, en ajout seul, source = son message), remember (note courte), compact (résumé de passation dans text). version et covered_event sont facultatifs : le hub met les valeurs courantes. Ni donnée client ni secret.",
+  'tool.topicMemory.worker':
+    "Mémoire locale courte de ton sujet, anonymisée (topic peut être omis) : read (paquet borné), update (état structuré), remember (note courte), compact (résumé de passation dans text), decision (décision de l'utilisateur, source = son message). version et covered_event sont facultatifs : le hub met les valeurs courantes. Ni donnée client ni secret.",
   'workers.team': 'Équipe (workers permanents) :',
   'workers.adhoc': 'Workers ponctuels :',
   'workers.post': '  poste : {text} · modèle {model}, effort {effort}',
@@ -1135,7 +1165,7 @@ const fr: Record<Key, string> = {
   'workers.leads': '  chef du groupe {list}',
   'workers.groups': 'Groupes (chef → membres) : {list}',
   'workers.notMine': '{n} autre(s) worker(s) hors de ton groupe : passe par le maître.',
-  'tool.lead.listWorkers': "Les workers de ton ou tes groupes : toi d'abord, puis tes membres avec état, poste, mission, modèle, compte, contexte, coût, aperçu de leur dernier message.",
+  'tool.lead.listWorkers': "Les workers de ton ou tes groupes, toi d'abord, une ligne chacun : état, modèle, effort, contexte, mission. detail=true ajoute poste, compte, coût et aperçu de leur dernier message.",
   'tool.lead.message':
     "Écrit à un membre de ton groupe : consigne précise, réponse à sa question. Il la reçoit comme une consigne de toi, son chef. Un membre endormi ou fermé est réveillé ou relancé avec toute sa conversation, sur son propre fournisseur ; un membre au travail la lit à la fin de son étape. Son rapport te revient en message. Tes membres seulement.",
   'tool.lead.report': "Mission, état, activité récente (outils, messages) et dernier message complet d'un membre. Tes membres seulement.",

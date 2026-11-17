@@ -91,6 +91,8 @@ export type AgentEvent =
   /** The context in use and the model's window, said during a turn by a program whose replies do not carry it. */
   | { type: 'context'; tokens: number; size: number }
   | { type: 'retry' }
+  /** A hook of the user's settings failed (Claude Code goes on without it): its name and the end of what it said. */
+  | { type: 'hookFailed'; hook: string; detail: string }
   /** Level signal: the background tasks running now (their descriptions). */
   | { type: 'background'; tasks: string[] }
   /**
