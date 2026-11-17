@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url';
  * indexer sends its texts longest first, which changes bucket a handful of times per repo.
  */
 
-interface Tensor { dims: readonly number[]; data: Float32Array }
+interface Tensor { type: string; dims: readonly number[]; data: Float32Array }
 interface Session {
   inputNames: readonly string[];
   run(feeds: Record<string, unknown>, fetches: string[]): Promise<Record<string, Tensor>>;
@@ -31,6 +31,7 @@ export const bucketOf = (tokens: number): number => BUCKETS.find((b) => b >= tok
 
 /** The ids a text goes in with: cut to `max` tokens, still closed by the end marker the vector is read on. */
 export function clip(ids: number[], max: number, eos: number): number[] {
+  if (!ids.length) return [eos];
   if (ids.length <= max) return ids;
   return [...ids.slice(0, max - 1), eos];
 }
@@ -85,6 +86,7 @@ export async function openOnnx(o: { runtime: string; folder: string; gpu: boolea
       ['last_hidden_state'],
     );
     // Causal attention: the tokens padded after the last one do not change its state.
+    if (out.last_hidden_state.type !== 'float32') throw new Error(`Unexpected output type ${out.last_hidden_state.type}`);
     const d = out.last_hidden_state.dims[2];
     const v = Float32Array.from(out.last_hidden_state.data.subarray((n - 1) * d, n * d));
     let sum = 0;
@@ -93,7 +95,9 @@ export async function openOnnx(o: { runtime: string; folder: string; gpu: boolea
     for (let i = 0; i < v.length; i++) v[i] /= norm;
     return v;
   };
-  const idsOf = (text: string): number[] => clip(tokenizer.encode(text).ids, o.maxTokens, cfg.eos_token_id);
+  // Never past the longest session.
+  const maxTokens = Math.min(o.maxTokens, BUCKETS[BUCKETS.length - 1]);
+  const idsOf = (text: string): number[] => clip(tokenizer.encode(text).ids, maxTokens, cfg.eos_token_id);
 
   const onCardModel = async (adapter: number): Promise<OnnxModel | null> => {
     // Most recently used last. Two at most: a batch of the index straddles two buckets (its texts are sorted by
@@ -191,7 +195,8 @@ async function pickAdapter(runtime: string, open: (adapter: number, length: numb
     try {
       s = await open(adapter, BUCKETS[0]);
     } catch {
-      break;
+      // No such adapter, or one that refuses the model: the next one may take it.
+      continue;
     }
     try {
       await probe(s);

@@ -76,7 +76,7 @@ async function run(mission, arm) {
   const ruled = tool && arm !== 'tool-bare';
   const rules = [arm === 'bounded' || ruled ? BOUNDED_RULE : '', ruled ? SEARCH_RULE : ''].filter(Boolean).join('\n');
   const expose = process.env.AIBOX_SEARCH_EXPOSE ? { AIBOX_SEARCH_EXPOSE: process.env.AIBOX_SEARCH_EXPOSE } : {};
-  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, AIBOX_SEARCH_CWD: mission.cwd, ...expose } } } }));
+  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, AIBOX_SEARCH_CWD: mission.cwd, ...(process.env.AIBOX_SEARCH_EMBED ? { AIBOX_SEARCH_EMBED: process.env.AIBOX_SEARCH_EMBED } : {}), ...expose } } } }));
   const args = [
     '-p', mission.prompt + brief,
     '--model', model,

@@ -13,6 +13,7 @@ test('a text goes to the smallest session that holds it, the longest to the last
 test('a text too long is cut and still ends with the marker its vector is read on', () => {
   assert.deepEqual(clip([1, 2, 3], 4, 9), [1, 2, 3]);
   assert.deepEqual(clip([1, 2, 3, 4, 5, 9], 4, 9), [1, 2, 3, 9]);
+  assert.deepEqual(clip([], 4, 9), [9]);
 });
 
 test('texts are read by session, longest first, keeping their order within one', () => {

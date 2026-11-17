@@ -162,8 +162,8 @@ export class SearchService {
   }
 
   /** Where the engine lives: llama.cpp and ONNX Runtime each in a folder of their own. */
-  private get runtime(): string {
-    return join(this.root, this.embedModel.engine === 'onnx' ? 'runtime-onnx' : 'runtime');
+  private runtimeOf(m: SearchModel): string {
+    return join(this.root, m.engine === 'onnx' ? 'runtime-onnx' : 'runtime');
   }
   private modelPath(m: SearchModel): string {
     return join(this.root, 'models', m.file);
@@ -179,10 +179,10 @@ export class SearchService {
       return false;
     }
   }
-  private hasRuntime(): boolean {
+  private hasRuntime(m: SearchModel): boolean {
     try {
-      const version = (name: string) => (JSON.parse(readFileSync(join(this.runtime, 'node_modules', name, 'package.json'), 'utf8')) as { version?: string }).version;
-      if (this.embedModel.engine === 'onnx') return Object.entries(ONNX_RUNTIME).every(([name, v]) => version(name) === v);
+      const version = (name: string) => (JSON.parse(readFileSync(join(this.runtimeOf(m), 'node_modules', name, 'package.json'), 'utf8')) as { version?: string }).version;
+      if (m.engine === 'onnx') return Object.entries(ONNX_RUNTIME).every(([name, v]) => version(name) === v);
       return version('node-llama-cpp') === RUNTIME_VERSION;
     } catch {
       return false;
@@ -190,7 +190,7 @@ export class SearchService {
   }
   /** The engine and the embedding model are there: meaning can be searched. The reranker is a plus. */
   get installed(): boolean {
-    return this.hasRuntime() && this.hasModel(this.embedModel);
+    return this.hasRuntime(this.embedModel) && this.hasModel(this.embedModel);
   }
 
   /** Tells the page something moved, once for a burst of changes (a download, an index being built). */
@@ -216,18 +216,20 @@ export class SearchService {
     if (this.installing) return 'busy';
     this.error = '';
     try {
-      const packages = runtimePackages(this.embedModel.engine);
-      if (!packages) throw new Error('unsupported');
-      if (!this.hasRuntime()) {
+      for (const m of this.models) {
+        if (this.hasRuntime(m)) continue;
+        const packages = runtimePackages(m.engine);
+        if (!packages) throw new Error('unsupported');
+        const runtime = this.runtimeOf(m);
         this.installing = { step: 'engine', done: 0, total: 0 };
         this.changed();
         const npm = await userNpm(env());
         if (!npm) throw new Error('no-node');
-        mkdirSync(this.runtime, { recursive: true });
+        mkdirSync(runtime, { recursive: true });
         // No install script runs and no optional package comes: only the engine and this platform's binaries.
         await new Promise<void>((done, fail) =>
-          execFile(npm.node, [npm.cli, 'install', '--prefix', this.runtime, '--no-audit', '--no-fund', '--loglevel=error', '--omit=optional', '--ignore-scripts', ...packages], { cwd: this.runtime, windowsHide: true, timeout: 600_000 }, (err) =>
-            err || !this.hasRuntime() ? fail(new Error('install-failed')) : done(),
+          execFile(npm.node, [npm.cli, 'install', '--prefix', runtime, '--no-audit', '--no-fund', '--loglevel=error', '--omit=optional', '--ignore-scripts', ...packages], { cwd: runtime, windowsHide: true, timeout: 600_000 }, (err) =>
+            err || !this.hasRuntime(m) ? fail(new Error('install-failed')) : done(),
           ),
         );
       }
@@ -294,7 +296,7 @@ export class SearchService {
   /** `priority`: `above` for the answers an agent waits for, `below` for building an index (see WorkerInit.priority). */
   private engine(model: SearchModel, device: () => SearchSettings['device'], priority: 'above' | 'below'): Engine {
     const settings = this.opts.settings;
-    return new Engine({ script: this.opts.workerScript, runtime: this.runtime, modelPath: this.modelPath(model), model, device, priority, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
+    return new Engine({ script: this.opts.workerScript, runtime: this.runtimeOf(model), modelPath: this.modelPath(model), model, device, priority, idleMs: () => settings().idleMinutes * 60_000, onState: () => this.changed() });
   }
 
   /** The card is ours to use: the user did not rule it out, and nothing else is working on it or filling it. */

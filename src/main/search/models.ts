@@ -50,7 +50,9 @@ export const MODELS: SearchModel[] = [
 /** What the app installs and uses; the others are there for the measures (scripts/search-bench). */
 // Not nemotron-3-embed-1b: ahead on the dev half, level on the test half (hit@5 +2.8, CI -1.7 to +7.3) for 1.5 GiB of
 // video memory instead of 0.9 and 2.0 GB of memory instead of 1.4.
-export const EMBED_MODEL = 'qwen3-embed-0.6b';
+// Its ONNX export rather than the GGUF: the runtime is signed (Smart App Control blocks llama.cpp's binaries) and the
+// answers are the same (test half, app path: hit@5 73.6 and MRR 0.568 for both).
+export const EMBED_MODEL = 'qwen3-embed-0.6b-onnx';
 /** None: on the dev questions the reranker moved the MRR by noise (0.696 to 0.711) for 640 MiB and up to 0.9 s a question. */
 export const RERANK_MODEL: string | null = null;
 
