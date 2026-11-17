@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { ContextWindows } from '../shared/contextWindow';
-import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type Totals } from '../shared/costs';
+import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type MissionEvent, type Totals } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { pruneFolders } from '../shared/teamFolders';
 import { resolveTopicRepo } from '../shared/topicGroups';
@@ -632,6 +632,8 @@ export class SessionManager extends EventEmitter {
   private readonly memorySeen = new Map<string, { version: number; event: number }>();
   /** Per worker, its report on its way to the master (a pushed commit is checked first): the next one waits for it. */
   private readonly reports = new Map<string, Promise<void>>();
+  /** Per worker, its current mission (missions log) and the tool calls and failures of its turn in progress. */
+  private readonly missions = new Map<string, { id: string; tools: number; errors: number }>();
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -652,6 +654,7 @@ export class SessionManager extends EventEmitter {
     this.stateFile = join(opts.dataDir, 'state.json');
     this.attachDir = join(opts.dataDir, 'attachments');
     this.contextMemory = new TopicMemory(join(opts.dataDir, 'context-memory.sqlite'));
+    for (const [id, mission] of opts.costLog.lastMissions?.() ?? []) this.missions.set(id, { id: mission, tools: 0, errors: 0 });
     this.restore();
     this.syncTeam();
     // The figure follows the user's other uses of the account too (a terminal, claude.ai): asked now and then, turn or not.
@@ -2627,6 +2630,8 @@ export class SessionManager extends EventEmitter {
         // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
         if (!ev.error) s.limit = null;
         this.markBusy(s, true);
+        const mission = this.missions.get(s.id);
+        if (mission) mission.tools += ev.blocks.filter((b) => b.type === 'tool_use').length;
         // A frame carrying an error has the program's own wording as its text ("Invalid API key · Fix external API
         // key"): neither shown nor kept as the last message; the notice below says it for the user.
         const all = ev.blocks.filter((b) => !ev.error || b.type !== 'text');
@@ -2695,6 +2700,8 @@ export class SessionManager extends EventEmitter {
           if (item?.kind !== 'tool') continue;
           const result = resultText(b.content);
           const isError = b.is_error === true;
+          const mission = isError ? this.missions.get(s.id) : undefined;
+          if (mission) mission.errors++;
           this.upsert(s, { ...item, result, isError });
           const outcome = item.name === 'Bash' || item.name === 'PowerShell' ? commandOutcome(item.detail, isError, result) : null;
           if (outcome) this.event(s, outcome);
@@ -3002,11 +3009,15 @@ export class SessionManager extends EventEmitter {
     if (harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'gemini') s.geminiUsage = totals;
     const at = Date.now();
     const role = this.costRole(s);
+    // What the turn did, for the missions in the cost panel: counted since the last turn, then started over.
+    const m = this.missions.get(s.id);
+    const work = { ...(m ? { mission: m.id, tools: m.tools, errors: m.errors } : {}), ...(s.effort ? { effort: s.effort } : {}), ...(s.busySince ? { ms: at - s.busySince } : {}) };
+    if (m) Object.assign(m, { tools: 0, errors: 0 });
     void (prev ? Promise.resolve(prev) : s.usageBase).then((before) => {
       if (before === 'unknown') return;
       const models = turnDelta(before, totals);
       if (!models) return;
-      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '' });
+      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '', ...work });
       if (!s.metrics) return;
       const costBefore = s.metrics.costUsd;
       s.metrics.costUsd += sumUsage(models).cost;
@@ -4055,6 +4066,7 @@ export class SessionManager extends EventEmitter {
     const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
     if (plan && byHub) this.install(s, plan);
     void this.launch(s, false, this.missionPrompt(s, made?.stale));
+    this.openMission(s, 'start', post?.model ? 'post' : args.model ? 'master' : 'auto');
 
     // Other workers of the same repo, in any of its checkouts: worth naming in the briefs.
     const repoKey = (dir: string) => (repoOf(dir)?.main ?? resolve(dir)).toLowerCase();
@@ -4130,6 +4142,7 @@ export class SessionManager extends EventEmitter {
     if (newMission) s.mission = message;
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
+    this.openMission(s, newMission ? 'start' : 'follow', s.userModel ? 'user' : this.postOf(s)?.model ? 'post' : args.model ? 'master' : 'auto');
     let ultracodeNote = '';
     if (args.ultracode != null && args.ultracode !== s.ultracode) {
       ultracodeNote = s.userUltracode ? t('ultracode.locked', { name: s.name }) : this.setUltracode(s.id, args.ultracode, false);
@@ -4155,6 +4168,17 @@ export class SessionManager extends EventEmitter {
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
     return [state, ...runs, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
+  }
+
+  /**
+   * A mission handed to a worker: a new one (spawn_worker, or a post given work while it had none), or more work on its
+   * current one, a relaunch. Logged for the cost panel, which adds up its turns.
+   */
+  private openMission(s: Session, kind: MissionEvent['kind'], by: MissionEvent['by']): void {
+    const current = kind === 'follow' ? this.missions.get(s.id) : undefined;
+    const id = current?.id ?? `m-${randomUUID().slice(0, 8)}`;
+    if (!current) this.missions.set(s.id, { id, tools: 0, errors: 0 });
+    this.opts.costLog.mission?.({ at: Date.now(), mission: id, id: s.id, name: s.name, kind: current ? 'follow' : 'start', model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '', by });
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */

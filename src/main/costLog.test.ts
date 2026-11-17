@@ -42,3 +42,21 @@ test('plan-limit readings: one line per change, per account, in a file of their 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('missions: logged apart from turns, read back by period, and each session\'s current one known at the next start', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hub-costlog-'));
+  try {
+    const at = Date.UTC(2026, 10, 17, 12);
+    const log = new CostLog(dir);
+    const ev = (t: number, mission: string, id: string, kind: 'start' | 'follow') => ({ at: t, mission, id, name: `hub-${id}`, kind, model: 'opus', effort: 'high', by: 'master' as const });
+    log.mission(ev(at, 'm-1', 'w1', 'start'));
+    log.mission(ev(at + 1000, 'm-1', 'w1', 'follow'));
+    log.mission(ev(at + 2000, 'm-2', 'w1', 'start'));
+    log.mission(ev(at + 3000, 'm-3', 'w2', 'start'));
+    assert.deepEqual((await log.readMissions(at, at + 2500)).map((e) => e.mission), ['m-1', 'm-1', 'm-2']);
+    assert.deepEqual(await log.read(0, at + 1e9), []); // not taken for turns
+    assert.deepEqual([...new CostLog(dir).lastMissions(at + 5000)], [['w1', 'm-2'], ['w2', 'm-3']]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

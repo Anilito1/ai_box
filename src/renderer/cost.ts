@@ -1,4 +1,4 @@
-import { PERIODS, periodRange, summarize, type CostSummary, type Period, type RepoCostRow } from '../shared/costs';
+import { missionRows, PERIODS, periodRange, summarize, type CostSummary, type MissionRow, type Period, type RepoCostRow } from '../shared/costs';
 import type { HubApi } from '../shared/types';
 import { fmtCost, h, icon, ICONS } from './dom';
 import { LANG, t, tn } from './i18n';
@@ -6,6 +6,8 @@ import { LANG, t, tn } from './i18n';
 const exactUsd = (v: number) => `$${v.toFixed(4)}`;
 const compact = new Intl.NumberFormat(LANG, { notation: 'compact', maximumFractionDigits: 1 });
 const whole = new Intl.NumberFormat(LANG);
+/** Missions shown, costliest first: the rest of the period is in the total. */
+const MISSIONS_SHOWN = 8;
 
 function storedPeriod(): Period {
   try {
@@ -135,9 +137,9 @@ class CostPanel {
     const request = ++this.request;
     this.body.classList.add('loading');
     try {
-      const { records, since } = await this.hub.costHistory(range.from, range.to);
+      const { records, since, missions } = await this.hub.costHistory(range.from, range.to);
       if (request !== this.request) return;
-      this.render(summarize(records, range), range.from < since ? since : 0);
+      this.render(summarize(records, range), range.from < since ? since : 0, missionRows(records, missions ?? []));
     } catch (err) {
       if (request !== this.request) return;
       this.body.replaceChildren(h('div', 'cost-empty', t('cost.failed')));
@@ -148,13 +150,14 @@ class CostPanel {
   }
 
   /** `since`: when the log started, only if it starts inside the period (earlier days are then not counted). */
-  private render(s: CostSummary, since: number): void {
+  private render(s: CostSummary, since: number, missions: MissionRow[] = []): void {
     const total = h('div', 'cost-total');
     const value = h('span', 'cost-total-value', fmtCost(s.total.cost));
     value.title = exactUsd(s.total.cost);
     total.append(value, h('span', 'cost-sub', tn('cost.turns', s.turns, { n: whole.format(s.turns) })));
     this.body.title = '';
     this.body.replaceChildren(total, s.turns === 0 ? h('div', 'cost-empty', t('cost.none')) : this.list(s));
+    if (missions.length > 0) this.body.append(this.missions(missions, s.total.cost));
     if (since) {
       const date = new Date(since).toLocaleDateString(LANG, { day: 'numeric', month: 'long', year: 'numeric' });
       const note = h('div', 'cost-since', t('cost.since', { date }));
@@ -172,6 +175,29 @@ class CostPanel {
     li.append(h('span', 'cost-name', t('cost.total')), sum);
     list.append(li);
     return list;
+  }
+
+/** The costliest missions of the period: the worker, its model and who chose it, relaunches, errors, length. */
+  private missions(rows: MissionRow[], total: number): HTMLElement {
+    const box = h('div', 'cost-missions');
+    box.append(h('div', 'cost-missions-title', t('cost.missions')));
+    const list = h('ul', 'cost-list');
+    for (const m of rows.slice(0, MISSIONS_SHOWN)) {
+      const li = h('li', 'cost-row');
+      const by = t(`cost.by.${m.by}`);
+      const facts = [`${m.model || '—'}${m.effort ? `/${m.effort}` : ''} · ${by}`];
+      if (m.follows > 0) facts.push(tn('cost.follows', m.follows, { n: m.follows }));
+      if (m.errors > 0) facts.push(tn('cost.errors', m.errors, { n: m.errors }));
+      if (m.ms > 0) facts.push(t('cost.minutes', { n: Math.max(1, Math.round(m.ms / 60_000)) }));
+      li.append(h('span', 'cost-name', m.name.replace(/^hub-/, '')), h('span', 'cost-amount', fmtCost(m.cost)));
+      const bar = h('span', 'cost-share');
+      bar.style.setProperty('--share', String(total > 0 ? m.cost / total : 0));
+      li.append(bar, h('span', 'cost-sub cost-mission-facts', facts.join(' · ')));
+      li.title = [`${m.mission} · ${tn('cost.turns', m.turns, { n: whole.format(m.turns) })} · ${exactUsd(m.cost)}`, tn('cost.tools', m.tools, { n: whole.format(m.tools) })].join('\n');
+      list.append(li);
+    }
+    box.append(list);
+    return box;
   }
 
   private row(row: RepoCostRow, total: number): HTMLElement {

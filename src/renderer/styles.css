@@ -3918,6 +3918,19 @@ kbd,
   color: var(--text-3);
   font-size: var(--fs-sm);
 }
+.cost-missions {
+  margin-top: 12px;
+}
+.cost-missions-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0 0 4px;
+}
+.cost-mission-facts {
+  grid-column: 1 / -1;
+  font-size: 11px;
+}
+
 .cost-list {
   display: flex;
   flex-direction: column;

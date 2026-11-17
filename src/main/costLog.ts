@@ -1,10 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { appendFile, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { dayOf, decodeRecord, encodeRecord, sumUsage, type DayCost, type TurnRecord } from '../shared/costs';
+import { dayOf, decodeMission, decodeRecord, encodeMission, encodeRecord, sumUsage, type DayCost, type MissionEvent, type TurnRecord } from '../shared/costs';
 import type { RateLimits } from '../shared/types';
 
 const FILE = /^turns-(\d{4})-(\d{2})\.jsonl$/;
+const MISSIONS = /^missions-(\d{4})-(\d{2})\.jsonl$/;
 const monthFile = (at: number, kind = 'turns') => {
   const d = new Date(at);
   return `${kind}-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}.jsonl`;
@@ -104,6 +105,61 @@ export class CostLog {
         await appendFile(join(this.dir, monthFile(at, 'limits')), line, 'utf8');
       })
       .catch(() => undefined); // Disk full or locked: one reading less, the next change is written.
+  }
+
+  /** A mission handed out (missions-YYYY-MM.jsonl): its turns carry its id, the cost panel puts them together. */
+  mission(e: MissionEvent): void {
+    const line = `${encodeMission(e)}\n`;
+    this.tail = this.tail
+      .then(async () => {
+        await mkdir(this.dir, { recursive: true });
+        await appendFile(join(this.dir, monthFile(e.at, 'missions')), line, 'utf8');
+      })
+      .catch(() => undefined); // Disk full or locked: this mission's turns go uncounted as a mission, not lost as turns.
+  }
+
+  /** Mission events in [from, to), oldest first, from the months the range touches and the one before (a mission may start earlier). */
+  async readMissions(from: number, to: number): Promise<MissionEvent[]> {
+    await this.tail;
+    let names: string[];
+    try {
+      names = await readdir(this.dir);
+    } catch {
+      return [];
+    }
+    const out: MissionEvent[] = [];
+    for (const name of names) {
+      const m = MISSIONS.exec(name);
+      if (!m) continue;
+      const start = Date.UTC(Number(m[1]), Number(m[2]) - 2, 1);
+      const end = Date.UTC(Number(m[1]), Number(m[2]), 1);
+      if (end <= from || start >= to) continue;
+      const text = await readFile(join(this.dir, name), 'utf8').catch(() => '');
+      for (const line of text.split('\n')) {
+        const e = line ? decodeMission(line) : null;
+        if (e && e.at < to) out.push(e);
+      }
+    }
+    return out.sort((a, b) => a.at - b.at);
+  }
+
+  /** Each session's current mission, from this month's and last month's log: read once at start, so a restart keeps it. */
+  lastMissions(now = Date.now()): Map<string, string> {
+    const out = new Map<string, string>();
+    const d = new Date(now);
+    for (const at of [Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 15), now]) {
+      let text = '';
+      try {
+        text = readFileSync(join(this.dir, monthFile(at, 'missions')), 'utf8');
+      } catch {
+        continue;
+      }
+      for (const line of text.split('\n')) {
+        const e = line ? decodeMission(line) : null;
+        if (e) out.set(e.id, e.mission);
+      }
+    }
+    return out;
   }
 
   /** Turns in [from, to), oldest first; only the months the range touches are read. */

@@ -2,7 +2,7 @@ import type { AttachedFile, FileInput } from './attachments';
 import type { RemoteSetting, RemoteView } from './vps';
 import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from './capabilities';
 import type { PurgeLogEntry, PurgeProject, PurgeReport, PurgeRestoreResult, PurgeSettingsView, PurgeTrashResult } from './purge';
-import type { DayCost, TurnRecord } from './costs';
+import type { DayCost, MissionEvent, TurnRecord } from './costs';
 import type { DiagnosisView } from './diagnosis';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
@@ -907,7 +907,7 @@ export interface HubApi {
   /** Starts a read-only worker that finds out why this worker has been silent; resolves to the refusal, '' once started. */
   analyze(id: string): Promise<string>;
   /** Turns logged in [from, to), oldest first, and when the log started. */
-  costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number }>;
+  costHistory(from: number, to: number): Promise<{ records: TurnRecord[]; since: number; missions?: MissionEvent[] }>;
   /** Loads the conversation of a closed session so it can be read without resuming it. */
   open(id: string): void;
   /** `topic`: the master's topic the message is written in, else null. */
