@@ -15,10 +15,13 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Ajouté
 
 - Un avis prévient quand un hook de tes réglages Claude Code échoue sans cesse : jusqu'ici ces échecs ralentissaient les sessions sans que rien ne le dise.
+- Le panneau des coûts montre les missions de la période : le worker, son modèle et qui l'a choisi, les relances, les erreurs et le temps de travail.
+- Quand un worker annonce un commit poussé, le hub vérifie qu'il est bien sur le dépôt distant et prévient le maître sinon.
 
 ### Modifié
 
 - Les sessions Fable gardent toute leur fenêtre de contexte (1M) : elles ne se compactent plus vers 170 K.
+- Le maître confie les analyses et les rapports à des modèles plus économes, et range ses réponses par sujet sans requête de plus.
 - Les workers démarrent plus légers : une liste de skills plus courte, et sans MasterTools, qu'ils n'utilisaient pas.
 - La liste des workers que lit le maître tient en une ligne par worker ; le détail reste disponible sur demande.
 - La mémoire des sujets fonctionne pour les workers : chacun sait à quel sujet il travaille, et ses notes ne sont plus refusées à tort.
