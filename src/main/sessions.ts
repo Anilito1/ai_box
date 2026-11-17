@@ -30,6 +30,7 @@ import { outputFileOf, portOfRun, runFor, runOf, type BackgroundRun } from './ba
 import { busyReasons, type BusyReason } from './busy';
 import { Subagents } from './subagents';
 import { memoryTopicOf, TopicMemory, type Provenance } from './topicMemory';
+import { HookFailures } from './hookFailures';
 import { requireAppliedPolicy } from './providers/capabilities';
 import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
@@ -622,6 +623,8 @@ export class SessionManager extends EventEmitter {
   private quitting = false;
   private readonly stateFile: string;
   private readonly contextMemory: TopicMemory;
+  /** Failed hook runs of every session: told once, past a threshold. */
+  private readonly hookFailures = new HookFailures();
   private memoryTopic: string | null = null;
   private readonly attachDir: string;
   /** Posts whose worker the sidebar shows: one coming back from a disabled post gets its conversation sent again. */
@@ -2554,6 +2557,11 @@ export class SessionManager extends EventEmitter {
         s.retrying = true;
         this.event(s, 'retry');
         break;
+      case 'hookFailed': {
+        const told = this.hookFailures.add(ev.hook);
+        if (told) this.notice(s, t('notice.hookFailing', { n: told.count, hooks: told.hooks.slice(0, 3).join(', ') }), 'error', ev.detail);
+        break;
+      }
       case 'background':
         s.background = ev.tasks;
         this.scanPorts(s);

@@ -194,6 +194,8 @@ export const claudeAdapter: ProviderAdapter = {
       // replay-user-messages surfaces incoming cross-session messages (origin.kind === 'peer') on the stream.
       extraArgs: { name: spec.name, 'replay-user-messages': null },
       includePartialMessages: true,
+      // Hook runs come on the stream: the hub counts the failed ones (hookFailures.ts).
+      includeHookEvents: true,
       // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups,
       // unless it was asked to run in Ultracode: that mode is the Workflow tool, used for every task of weight.
       disallowedTools: disallowedTools(spec),

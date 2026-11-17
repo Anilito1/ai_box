@@ -137,3 +137,10 @@ test('subagent tasks carry what the CLI says of them; their own frames become th
   const res = [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }];
   assert.deepEqual(translate(msg({ type: 'user', parent_tool_use_id: 'toolu_1', message: { content: res } })), [{ type: 'agentSteps', parent: 'toolu_1', blocks: res }]);
 });
+
+test('a failed hook run is said with its name and the end of its error; a run that worked is only a sign of life', () => {
+  const hook = (outcome: string, stderr = '') => translate(msg({ type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: '', stdout: '', stderr, outcome }));
+  assert.deepEqual(hook('error', 'python: cannot open file'), [{ type: 'hookFailed', hook: 'PreToolUse:Bash', detail: 'python: cannot open file' }]);
+  assert.deepEqual(hook('success'), [{ type: 'activity' }]);
+  assert.deepEqual(hook('cancelled'), [{ type: 'activity' }]);
+});
