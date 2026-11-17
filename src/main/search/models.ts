@@ -35,7 +35,9 @@ export const MODELS: SearchModel[] = [
 ];
 
 /** What the app installs and uses; the others are there for the measures (scripts/search-bench). */
-export const EMBED_MODEL = 'nemotron-3-embed-1b';
+// Not nemotron-3-embed-1b: ahead on the dev half, level on the test half (hit@5 +2.8, CI -1.7 to +7.3) for 1.5 GiB of
+// video memory instead of 0.9 and 2.0 GB of memory instead of 1.4.
+export const EMBED_MODEL = 'qwen3-embed-0.6b';
 /** None: on the dev questions the reranker moved the MRR by noise (0.696 to 0.711) for 640 MiB and up to 0.9 s a question. */
 export const RERANK_MODEL: string | null = null;
 
