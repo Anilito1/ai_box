@@ -165,7 +165,7 @@ async function measure(kind: 'embed' | 'rerank', id: string, device: Device, loa
 /** A search host as the app starts it, on a data folder of the lab (search/runtime and search/models linked there). */
 function startHost(device: Device, repo: string, rerank: boolean) {
   const settings = { enabled: true, idleMinutes: 5, device, repos: [repo], budget: 800 };
-  const init = { dataDir: join(LAB, 'data'), workerScript: SCRIPT, settings };
+  const init = { dataDir: resolve(process.env.AIBOX_SEARCH_DATA ?? join(LAB, 'data')), workerScript: SCRIPT, settings };
   const child = fork(HOST, [], { env: { ...process.env, AIBOX_SEARCH_RERANK: rerank ? '' : 'none', AIBOX_SEARCH_HOST: JSON.stringify(init) }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
   let seq = 0;
   const waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
