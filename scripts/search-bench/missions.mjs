@@ -1,13 +1,15 @@
 // The same missions run by Claude Code under several conditions, to compare tokens, time and success
 // (docs/recherche-semantique.md). `npm run build` first; the repos must already be indexed in AIBOX_SEARCH_DATA.
 //   node scripts/search-bench/missions.mjs <missions.json> <out.jsonl> [runs=3] [model=sonnet] [arms=current,bounded,brief,tool]
-// missions.json: [{ "id": "…", "cwd": "C:/…/repo", "prompt": "…", "expect": ["path/that/must/be/cited.ts"] }]
+// missions.json: [{ "id": "…", "cwd": "C:/…/repo" or "repo": "name under AIBOX_BENCH_REPOS", "prompt": "…", "expect": ["path/cited.ts"] }]
+//   AIBOX_SEARCH_EXPOSE  how the tool arms show the search tools (scripts/search-mcp.mjs); BENCH_MAX_TURNS cuts each run short
 // Arms (nothing here touches the hub's prompts: each condition is given by this test's own configuration):
 //   current     Claude Code as the workers run today
 //   bounded     + the bounded-reading rule
 //   brief       + 5 to 10 likely places added to the mission, found by the search before the launch
 //   tool        + the search tools and the bounded-reading rule
 //   tool+brief  + the tools, the brief and the rule
+//   tool-bare   + the tools alone, as they would ship without a word in the prompts
 import { fork, spawnSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -16,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 const [missionsFile, outFile, runs = '3', model = 'sonnet', arms = 'current,bounded,brief,tool'] = process.argv.slice(2);
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = join(here, '..', '..', 'dist');
-const missions = JSON.parse(readFileSync(missionsFile, 'utf8'));
+const missions = JSON.parse(readFileSync(missionsFile, 'utf8')).map((m) => ({ ...m, cwd: m.cwd ?? join(resolve(process.env.AIBOX_BENCH_REPOS ?? ''), m.repo) }));
 const dataDir = resolve(process.env.AIBOX_SEARCH_DATA ?? '');
 // The program itself, not npm's shim: no shell stands between the prompt and Claude Code.
 const CLAUDE = process.env.CLAUDE_BIN ?? (process.platform === 'win32' ? join(process.env.APPDATA ?? '', 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe') : 'claude');
@@ -30,8 +32,8 @@ export const SEARCH_RULE =
 
 const scratch = join(here, '..', '..', 'node_modules', '.search-bench');
 mkdirSync(scratch, { recursive: true });
-const mcpWith = join(scratch, 'mcp-with.json');
-const mcpWithout = join(scratch, 'mcp-without.json');
+const mcpWith = join(scratch, `mcp-with-${process.pid}.json`);
+const mcpWithout = join(scratch, `mcp-without-${process.pid}.json`);
 writeFileSync(mcpWithout, JSON.stringify({ mcpServers: {} }));
 
 /** The places the search gives for a mission, as the master would add them to a brief: locations only, 300 tokens at most. */
@@ -59,27 +61,45 @@ function briefOf(mission) {
 async function run(mission, arm) {
   const tool = arm.startsWith('tool');
   const brief = arm.includes('brief') ? await briefOf(mission) : '';
-  const rules = [arm === 'bounded' || tool ? BOUNDED_RULE : '', tool ? SEARCH_RULE : ''].filter(Boolean).join('\n');
-  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd } } } }));
+  const ruled = tool && arm !== 'tool-bare';
+  const rules = [arm === 'bounded' || ruled ? BOUNDED_RULE : '', ruled ? SEARCH_RULE : ''].filter(Boolean).join('\n');
+  const expose = process.env.AIBOX_SEARCH_EXPOSE ? { AIBOX_SEARCH_EXPOSE: process.env.AIBOX_SEARCH_EXPOSE } : {};
+  if (tool) writeFileSync(mcpWith, JSON.stringify({ mcpServers: { search: { command: process.execPath, args: [join(here, '..', 'search-mcp.mjs')], env: { AIBOX_SEARCH_DATA: dataDir, AIBOX_SEARCH_REPOS: mission.cwd, ...expose } } } }));
   const args = [
     '-p', mission.prompt + brief,
     '--model', model,
-    '--output-format', 'json',
+    '--output-format', 'stream-json', '--verbose',
+    ...(process.env.BENCH_MAX_TURNS ? ['--max-turns', process.env.BENCH_MAX_TURNS] : []),
     '--strict-mcp-config', '--mcp-config', tool ? mcpWith : mcpWithout,
-    '--tools', 'Read,Grep,Glob,Bash',
-    '--allowedTools', tool ? 'Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__search__search_code,mcp__search__where_is' : 'Read,Grep,Glob,Bash(git log:*),Bash(git show:*),Bash(ls:*)',
+    '--tools', 'Read,Grep,Glob,Bash,ToolSearch',
+    '--allowedTools', tool ? 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*),mcp__search__search_code,mcp__search__where_is' : 'Read,Grep,Glob,ToolSearch,Bash(git log:*),Bash(git show:*),Bash(ls:*)',
     ...(rules ? ['--append-system-prompt', rules] : []),
   ];
   const t0 = Date.now();
   const r = spawnSync(CLAUDE, args, { cwd: mission.cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 1_200_000 });
   const wallMs = Date.now() - t0;
   try {
-    const out = JSON.parse(r.stdout);
+    // The calls the session made, in order: what it explored with, and whether it took up the search.
+    const events = String(r.stdout)
+      .split('\n')
+      .flatMap((l) => {
+        try {
+          return [JSON.parse(l)];
+        } catch {
+          return [];
+        }
+      });
+    const seen = new Set();
+    const calls = events.filter((e) => e.type === 'assistant').flatMap((e) => (e.message?.content ?? []).filter((b) => b.type === 'tool_use' && !seen.has(b.id) && seen.add(b.id)).map((b) => b.name.replace(/^mcp__search__/, '')));
+    const count = (names) => calls.filter((c) => names.includes(c)).length;
+    const out = events.find((e) => e.type === 'result');
     const u = out.usage ?? {};
     const answer = String(out.result ?? '');
     return {
       mission: mission.id, arm, model, wallMs, durationMs: out.duration_ms, apiMs: out.duration_api_ms, turns: out.num_turns, costUsd: out.total_cost_usd, error: out.is_error === true,
-      input: u.input_tokens, cacheCreation: u.cache_creation_input_tokens, cacheRead: u.cache_read_input_tokens, output: u.output_tokens, briefTokens: Math.ceil(brief.length / 3.6),
+      calls: calls.length, searchCalls: count(['search_code', 'where_is']), grep: count(['Grep', 'Glob']), reads: count(['Read']), bash: count(['Bash']), toolSearch: count(['ToolSearch']),
+      firstLook: calls.find((c) => c !== 'ToolSearch') ?? null,
+      input: u.input_tokens, cacheCreation: u.cache_creation_input_tokens, cacheRead: u.cache_read_input_tokens, output: u.output_tokens, briefTokens: Math.ceil(brief.length / 2.25),
       // Success, where the mission says what a right answer cites: one of the expected files is named.
       ...(mission.expect ? { success: mission.expect.some((p) => answer.includes(p) || answer.includes(p.split('/').pop())) } : {}),
       answer: answer.slice(0, 6000),
