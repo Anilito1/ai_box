@@ -97,8 +97,11 @@ export function signInPage(url: string | undefined, claudeAi: boolean): string {
   return u?.protocol === 'https:' ? u.toString() : '';
 }
 
-/** Connectors a worker never needs: their tool schemas would weigh on each of its turns. */
-export const WORKER_DENIED_MCP = ['higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs', 'claude.ai MasterTools'];
+/**
+ * Connectors a worker never needs: their tool schemas would weigh on each of its turns. Playwright too (its server also
+ * weighs ~265 MB per worker): a worker drives a browser with playwright-cli when it needs one.
+ */
+export const WORKER_DENIED_MCP = ['playwright', 'higgsfield', 'claude.ai Coupler.io', 'claude.ai Notion', 'claude.ai Asana', 'claude.ai Gmail', 'claude.ai Claude Docs', 'claude.ai MasterTools'];
 
 export const MCP_NAME = /^[A-Za-z0-9][\w-]{0,63}$/;
 export const SKILL_NAME = /^(?!.*\.\.)[A-Za-z0-9][\w.-]{0,99}$/;

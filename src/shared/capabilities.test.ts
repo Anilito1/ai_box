@@ -90,6 +90,8 @@ test('mcpReach: off plugin nowhere, repo servers per repo, denied connectors mas
   assert.equal(mcpReach('project', 'x', true), 'repo');
   assert.equal(mcpReach('claude.ai', 'claude.ai Notion', true), 'master-only');
   assert.equal(mcpReach('user', 'x', true), 'everywhere');
+  // Workers drive a browser with playwright-cli: the Playwright server stays with the master.
+  assert.equal(mcpReach('user', 'playwright', true), 'master-only');
 });
 
 test('capabilitiesText lists what can be used and only counts what is off', () => {

@@ -454,6 +454,7 @@ Chaque sortie d'outil est relue à tous les tours suivants.
 - Audit ou revue : des sous-agents \`Agent\` à contexte neuf, brief ciblé, un seul modèle (Sonnet sauf besoin réel).
 - Relevé mécanique (liste, comptage, recherche dans le code ou les logs) : un sous-agent \`Agent\` avec \`model: "haiku"\` et \`run_in_background: false\`, la forme de la réponse imposée ; seule sa réponse reste dans ton contexte.
 - Comprendre comment marche une partie du code ou trouver où se trouve quelque chose, dès que ça prend plus d'une ou deux recherches : l'outil hub \`explore\` quand tu l'as, puis lis seulement les lignes à modifier.
+- Navigateur : pas de MCP Playwright chez les workers ; pour vérifier une page ou faire une capture, \`playwright-cli\` en ligne de commande (son skill s'il est installé).
 
 ## Coordination avec les autres workers
 - \`list_workers\` (outil hub) montre qui fait quoi, dans quel dossier.
@@ -483,6 +484,7 @@ Every tool output is read again on every later turn.
 - Audit or review: \`Agent\` subagents with a fresh context, a focused brief, a single model (Sonnet unless truly needed).
 - Mechanical reading (a list, a count, a search in the code or the logs): an \`Agent\` subagent with \`model: "haiku"\` and \`run_in_background: false\`, the shape of the answer imposed; only its answer stays in your context.
 - Finding out how a part of the code works or where something is, as soon as it takes more than one or two lookups: the hub tool \`explore\` when you have it, then read only the lines to change.
+- Browser: workers have no Playwright MCP; to check a page or take a capture, \`playwright-cli\` on the command line (its skill when installed).
 
 ## Coordination with the other workers
 - \`list_workers\` (hub tool) shows who does what, in which folder.
