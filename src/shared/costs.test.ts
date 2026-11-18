@@ -151,3 +151,9 @@ test('a follow-up sent after a failed delivery is kept as a retry, and counted o
   const rows = missionRows([{ at: 30, id: 'w', name: 'hub-w', role: 'worker', models: { a: usage }, mission: 'm-1' }], [ev(5, 'start'), ev(15, 'follow'), ev(20, 'follow', true)]);
   assert.deepEqual({ follows: rows[0].follows, retries: rows[0].retries }, { follows: 2, retries: 1 });
 });
+
+test('a keep-alive is logged as such and counts in the totals; a turn of work carries no mark', () => {
+  const r: TurnRecord = { at: 1, id: 'm', name: 'master', role: 'master', models: { 'claude-opus-5-5': u(0.08, 3, 40, 400_000, 0) }, keepAlive: true };
+  assert.equal(decodeRecord(encodeRecord(r))?.keepAlive, true);
+  assert.equal('keepAlive' in (decodeRecord(encodeRecord({ ...r, keepAlive: undefined })) ?? {}), false);
+});

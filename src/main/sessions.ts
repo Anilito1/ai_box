@@ -20,6 +20,7 @@ import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
 import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
+import { keepAlive, KEEP_ALIVE_MAX_PINGS, MAX_PINGS, pingRead, programStamp, sameProgram } from '../shared/keepAlive';
 import { buildHandoff } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
 import { faultWait, FAULT_WAITS_MS, passingFault } from '../shared/providerFault';
@@ -141,6 +142,7 @@ import type {
   ElicitationAnswer,
   ElicitationRequest,
   HubTool,
+  LaunchSpec,
   LimitSignal,
   PermissionAnswer,
   PermissionRequest,
@@ -223,6 +225,18 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   closeWhenDone: boolean;
   /** Last message, turn or prompt: the idle timer runs from here. */
   activeAt: number;
+  /**
+   * Its last launch, when its prompt cache can be kept alive (Claude Code on a plan, on this PC); null otherwise, and
+   * after a change of model or effort, which the launch no longer describes.
+   */
+  warmSpec: LaunchSpec | null;
+  /** When the provider last read its conversation's prefix: its last reply, or its last keep-alive. */
+  warmAt: number;
+  /** Keep-alives since its last reply; one is running. */
+  pings: number;
+  pinging: boolean;
+  /** The Claude Code its conversation was last read with (programStamp): kept with warmAt across a restart. */
+  warmProgram: string;
   /** Ids of the subagent tasks still running (task_started until their notification). */
   agentTasks: Set<string>;
   /** The subagents it launched, with their activity: what the sidebar and its view list under it. */
@@ -350,6 +364,9 @@ type Persisted = {
   | 'started'
   | 'fixedModel'
   | 'fixedEffort'
+  | 'warmAt'
+  | 'pings'
+  | 'warmProgram'
   | 'roleId'
   | 'note'
   | 'noteFresh'
@@ -632,6 +649,8 @@ export class SessionManager extends EventEmitter {
   private readonly diagnoses = new Map<string, DiagnosisView>();
   private pulseTimer: NodeJS.Timeout | null = null;
   private sweepTimer: NodeJS.Timeout | null = null;
+  /** Keep-alives whose process is running: ended with the hub. */
+  private readonly pingsInFlight = new Set<AbortController>();
   private quitting = false;
   private readonly stateFile: string;
   private readonly contextMemory: TopicMemory;
@@ -696,6 +715,7 @@ export class SessionManager extends EventEmitter {
     this.sweepTimer = setInterval(() => {
       this.closeIdle();
       this.returnIdle();
+      this.keepWarm();
     }, 60_000);
     if (this.contextMemory.status.mode === 'unavailable') this.notice(master, this.contextMemory.status.reason!, 'error');
     this.pruneAttachments();
@@ -857,6 +877,7 @@ export class SessionManager extends EventEmitter {
       // State not saved (disk full, file locked): the sessions must still be closed.
     }
     this.contextMemory.close();
+    for (const ping of this.pingsInFlight) ping.abort();
     for (const s of this.sessions.values()) {
       s.inbox?.close();
       s.query?.close();
@@ -928,6 +949,7 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userModel = true;
     s.fixedModel = model;
     s.model = model;
+    if (s.warmSpec) s.warmSpec = { ...s.warmSpec, model };
     const own = s.runAccount && this.ownCatalog(s.runAccount) ? this.catalogOf(s.runAccount).find((m) => m.value === model) : undefined;
     s.modelLabel = own?.displayName ?? this.labelFor(model, model);
     if (!s.fixedEffort) {
@@ -948,6 +970,7 @@ export class SessionManager extends EventEmitter {
     if (byUser) s.userEffort = true;
     s.fixedEffort = effort;
     s.effort = effort;
+    if (s.warmSpec) s.warmSpec = { ...s.warmSpec, effort };
     s.query?.setEffort(effort, s.ultracode && s.runUltracode).catch((err: unknown) => this.notice(s, t('notice.effortRefused'), 'error', errorText(err)));
     this.changed();
   }
@@ -1864,7 +1887,7 @@ export class SessionManager extends EventEmitter {
     s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
     // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
-    const q = adapter.start({
+    const spec: LaunchSpec = {
       role: s.role,
       name: s.name,
       cwd: s.cwd,
@@ -1909,7 +1932,15 @@ export class SessionManager extends EventEmitter {
       },
       onPermission: (req) => this.askPermission(s, req, inbox),
       onElicitation: (req, signal) => this.answerElicitation(s, req, signal, inbox),
-    });
+    };
+    const q = adapter.start(spec);
+    // A plan's cache lives an hour; an account billed by the token gets five minutes, which no ping every 45 holds.
+    const byToken = isBuiltinAccount(account) ? this.opts.cfg.provider === 'api-key' : isPaid(this.kindOf(account));
+    s.warmSpec = adapter.keepAlive && !remote && !byToken ? spec : null;
+    // Its cache was written by the program it runs now: a conversation resumed by an updated Claude Code starts cold.
+    const program = programStamp(spec.executable, statSync);
+    if (!resume || !sameProgram(s.warmProgram, program)) Object.assign(s, { warmAt: 0, pings: 0 });
+    s.warmProgram = program;
     s.query = q;
     s.usageSeen = null;
     s.remoteExit = null;
@@ -2554,6 +2585,11 @@ export class SessionManager extends EventEmitter {
 
   private onEvent(s: Session, q: AgentProcess, ev: AgentEvent): void {
     s.activeAt = Date.now();
+    // A reply is coming in: the provider just read the conversation.
+    if (ev.type === 'assistant' || ev.type === 'stream') {
+      s.warmAt = s.activeAt;
+      s.pings = 0;
+    }
     switch (ev.type) {
       case 'conversation':
         s.started = true;
@@ -3612,6 +3648,51 @@ export class SessionManager extends EventEmitter {
     const ends = await Promise.all(live.map((p) => Promise.race([p.catch(() => false), late])));
     clearTimeout(timer);
     return { reached: ends.filter((e) => e === true).length, missed: ends.filter((e) => e === false).length };
+  }
+
+  /**
+   * Conversations whose prompt cache is about to expire are read again, so that the next message does not pay their
+   * whole context as a cache write (src/shared/keepAlive.ts). A worker whose job is over is left alone, and so is a
+   * session whose Claude Code was updated since its launch: the ping would start the new version, whose prompt no
+   * longer matches. Each ping goes to the cost log, marked as such.
+   */
+  private keepWarm(): void {
+    if (this.quitting) return;
+    for (const s of this.sessions.values()) {
+      const spec = s.warmSpec;
+      // Closed by the master, or its handoff note written: what comes next, if anything, is another conversation.
+      // Stopped by a plan limit: a ping would be refused like its turns.
+      if (!spec || s.pinging || !s.started || this.ended(s) || s.closeWhenDone || s.handoffDone || s.limit) continue;
+      const startedAt = Date.now();
+      const role = this.costRole(s);
+      if (keepAlive({ role, warmAt: s.warmAt, pings: s.pings, contextTokens: s.metrics?.contextTokens ?? 0 }, startedAt) !== 'ping') continue;
+      if (!sameProgram(s.warmProgram, programStamp(spec.executable, statSync))) continue;
+      if (this.pingsInFlight.size >= MAX_PINGS) break;
+      s.pinging = true;
+      const { sessionId, warmAt } = s;
+      const abort = new AbortController();
+      this.pingsInFlight.add(abort);
+      void adapterFor('claude')
+        .keepAlive!({ ...spec, conversation: { id: sessionId, resume: true } }, abort.signal)
+        .then(
+          (result) => {
+            if (Object.keys(result.totals.models).length > 0) {
+              this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role, models: result.totals.models, repo: this.repoOfDir(s.cwd) ?? '', keepAlive: true });
+            }
+            return pingRead(result);
+          },
+          () => false,
+        )
+        .then((read) => {
+          this.pingsInFlight.delete(abort);
+          s.pinging = false;
+          // Renewed meanwhile (another conversation, another cache), or a real reply came in: its state stands.
+          if (s.sessionId !== sessionId || s.warmAt !== warmAt) return;
+          // A ping that found the cache cold, or failed: no other until a real reply.
+          s.pings = read ? s.pings + 1 : KEEP_ALIVE_MAX_PINGS[role];
+          if (read) s.warmAt = startedAt;
+        });
+    }
   }
 
   /** Idle workers are closed, permanent ones sooner: their conversation stays on disk and the next message resumes them. */
@@ -5445,6 +5526,11 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       owesReport: false,
       closeWhenDone: false,
       activeAt: Date.now(),
+      warmSpec: null,
+      warmProgram: '',
+      warmAt: 0,
+      pings: 0,
+      pinging: false,
       agentTasks: new Set(),
       subagents,
       subagentTails: new SubagentTails({ subagents, where: () => ({ sessionId: s.sessionId, cwd: s.cwd }), changed: () => this.changed() }),
@@ -5601,6 +5687,9 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       started: s.started,
       fixedModel: s.fixedModel,
       fixedEffort: s.fixedEffort,
+      warmAt: s.warmAt,
+      pings: s.pings,
+      warmProgram: s.warmProgram,
       roleId: s.roleId,
       note: s.note,
       noteFresh: s.noteFresh,

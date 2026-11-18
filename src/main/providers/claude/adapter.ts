@@ -18,7 +18,7 @@ import { limitsOfUsage } from '../../../shared/usage';
 import { remoteSpawner, remoteStore, remoteTranscript } from '../../remote';
 import { blocksOf } from '../blocks';
 import { policyOf, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy, type PolicySpec } from '../capabilities';
-import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, LaunchSpec, ProviderAdapter } from '../types';
+import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, KeepAliveResult, LaunchSpec, ProviderAdapter } from '../types';
 import { toCommands, translate } from './events';
 
 /** The largest autoCompactWindow the CLI accepts: a worker compacts only at the model's own limit. */
@@ -79,6 +79,62 @@ export function launchSettings(spec: Pick<LaunchSpec, 'role' | 'ultracode'>): Se
   return {
     ...(spec.role === 'master' ? {} : { autoCompactWindow: FULL_WINDOW, deniedMcpServers: WORKER_DENIED_MCP.map((serverName) => ({ serverName })) }),
     ...(spec.ultracode ? { ultracode: true } : {}),
+  };
+}
+
+/**
+ * What a launch tells Claude Code about the session itself: its folder, model, prompt, tools and settings. A
+ * keep-alive sends the same, or it would read another cache than the conversation's.
+ */
+function sessionOptions(spec: LaunchSpec): Options {
+  const master = spec.role === 'master';
+  return {
+    // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
+    cwd: spec.remote?.cwd ?? spec.cwd,
+    ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
+    // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
+    ...(spec.model ? { model: fullWindow(spec.model) } : {}),
+    ...(spec.effort ? { effort: spec.effort } : {}),
+    ...(spec.executable ? { pathToClaudeCodeExecutable: spec.executable } : {}),
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.instructions, ...(spec.stableInstructions ? { snapshot: false } : {}) },
+    // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups,
+    // unless it was asked to run in Ultracode: that mode is the Workflow tool, used for every task of weight.
+    disallowedTools: disallowedTools(spec),
+    // Flag-level settings, over the user's own: a worker keeps the model's whole window (the user's own
+    // autoCompactWindow would cut it) and loads none of the unneeded connectors.
+    ...(master && !spec.ultracode ? {} : { settings: launchSettings(spec) }),
+    env: master ? spec.env : { SLASH_COMMAND_TOOL_CHAR_BUDGET: WORKER_SKILL_LIST_CHARS, ...spec.env },
+  };
+}
+
+/** The prompt of a keep-alive: read by a forked copy of the conversation that is never saved. */
+const KEEP_ALIVE_PROMPT = 'Cache keep-alive sent by the hub, not a message from the user: answer with the single word "ok" and call no tool.';
+const KEEP_ALIVE_TIMEOUT_MS = 180_000;
+const NO_TOOL = 'keep-alive: no tool runs';
+
+/**
+ * The options of a keep-alive: the session's own, on a fork of its conversation that leaves no file. The hub's tools
+ * keep their names and descriptions (what the model was shown) but answer nothing, and no tool may run at all: the
+ * one reply is thrown away.
+ */
+export function keepAliveOptions(spec: LaunchSpec, abortController: AbortController): Options {
+  return {
+    ...sessionOptions(spec),
+    abortController,
+    resume: spec.conversation.id,
+    forkSession: true,
+    persistSession: false,
+    maxTurns: 1,
+    mcpServers: {
+      hub: createSdkMcpServer({
+        name: 'hub',
+        version: '0.6.0',
+        tools: spec.tools.map((def) => tool(def.name, def.description, def.shape, async () => ({ content: [{ type: 'text' as const, text: NO_TOOL }], isError: true }))),
+      }),
+    },
+    canUseTool: async () => ({ behavior: 'deny', message: NO_TOOL }),
+    // Before any permission rule, bypass mode included.
+    hooks: { PreToolUse: [{ hooks: [async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: NO_TOOL } })] }] },
   };
 }
 
@@ -204,20 +260,12 @@ export const claudeAdapter: ProviderAdapter = {
         yield { type: 'user', message: { role: 'user', content: m.content as never }, parent_tool_use_id: null, session_id: proc?.id() ?? spec.conversation.id };
       }
     })();
-    const master = spec.role === 'master';
     const options: Options = {
-      // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
-      cwd: spec.remote?.cwd ?? spec.cwd,
+      ...sessionOptions(spec),
       ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, spec.remote) } : {}),
-      ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
-      // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
-      ...(spec.model ? { model: fullWindow(spec.model) } : {}),
-      ...(spec.effort ? { effort: spec.effort } : {}),
       ...(spec.mode ? { permissionMode: spec.mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
       allowDangerouslySkipPermissions: true,
-      ...(spec.executable ? { pathToClaudeCodeExecutable: spec.executable } : {}),
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: spec.instructions, ...(spec.stableInstructions ? { snapshot: false } : {}) },
       // Workers talk to the master and to each other through native cross-session messaging (SendMessage). The master
       // writes to workers through the hub (message_worker), which delivers its words as a user turn: a peer message
       // carries no user authority, so a "go" sent that way would not unblock a commit or a push.
@@ -226,12 +274,6 @@ export const claudeAdapter: ProviderAdapter = {
       includePartialMessages: true,
       // Hook runs come on the stream: the hub counts the failed ones (hookFailures.ts).
       includeHookEvents: true,
-      // A worker gets no Workflow (its subagents would each inherit its whole context) and no self-paced wakeups,
-      // unless it was asked to run in Ultracode: that mode is the Workflow tool, used for every task of weight.
-      disallowedTools: disallowedTools(spec),
-      // Flag-level settings, over the user's own: a worker keeps the model's whole window (the user's own
-      // autoCompactWindow would cut it) and loads none of the unneeded connectors.
-      ...(master && !spec.ultracode ? {} : { settings: launchSettings(spec) }),
       mcpServers: {
         hub: createSdkMcpServer({
           name: 'hub',
@@ -258,7 +300,6 @@ export const claudeAdapter: ProviderAdapter = {
         return { behavior: 'allow', updatedInput: input, ...(answer.always && o.suggestions ? { updatedPermissions: o.suggestions } : {}) };
       },
       onElicitation: (req, o) => spec.onElicitation({ serverName: req.serverName, message: req.message, mode: req.mode, requestedSchema: req.requestedSchema }, o.signal),
-      env: master ? spec.env : { SLASH_COMMAND_TOOL_CHAR_BUDGET: WORKER_SKILL_LIST_CHARS, ...spec.env },
       ...(spec.conversation.resume ? { resume: spec.conversation.id } : { sessionId: spec.conversation.id }),
     };
     // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.
@@ -267,6 +308,21 @@ export const claudeAdapter: ProviderAdapter = {
       mode: spec.mode, readOnly: spec.readOnly, cwd: spec.remote?.cwd ?? spec.cwd, extraDirs: spec.extraDirs, readDirs: spec.readDirs,
     });
     return proc;
+  },
+
+  async keepAlive(spec: LaunchSpec, signal: AbortSignal): Promise<KeepAliveResult> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), KEEP_ALIVE_TIMEOUT_MS);
+    signal.addEventListener('abort', () => abort.abort(), { once: true });
+    try {
+      for await (const msg of query({ prompt: KEEP_ALIVE_PROMPT, options: keepAliveOptions(spec, abort) })) {
+        if (msg.type !== 'result') continue;
+        return { read: msg.usage.cache_read_input_tokens ?? 0, written: msg.usage.cache_creation_input_tokens ?? 0, totals: totalsOf(msg.total_cost_usd, msg.modelUsage) };
+      }
+      throw new Error('keep-alive: the process ended without a result');
+    } finally {
+      clearTimeout(timer);
+    }
   },
 
   // An unreadable check keeps the id rather than dropping the link to the conversation.

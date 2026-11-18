@@ -37,6 +37,8 @@ export interface TurnRecord {
   ms?: number;
   tools?: number;
   errors?: number;
+  /** A keep-alive of the conversation's prompt cache (keepAlive.ts), not a turn of its work. */
+  keepAlive?: true;
 }
 
 /**
@@ -109,7 +111,7 @@ export function turnDelta(prev: Totals | null, cur: Totals): Record<string, Usag
 /** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo}` */
 export function encodeRecord(r: TurnRecord): string {
   const m = Object.fromEntries(Object.entries(r.models).map(([model, u]) => [model, FIELDS.map((f) => (f === 'cost' ? +u[f].toFixed(8) : u[f]))]));
-  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors };
+  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors, ka: r.keepAlive ? 1 : undefined };
   return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) });
 }
 
@@ -130,7 +132,7 @@ export function decodeRecord(line: string): TurnRecord | null {
     models[model] = Object.fromEntries(FIELDS.map((f, i) => [f, num(arr[i])])) as unknown as Usage;
   }
   const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
-  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x) };
+  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x), keepAlive: o.ka === 1 ? (true as const) : undefined };
   return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) };
 }
 

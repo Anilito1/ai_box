@@ -449,6 +449,7 @@ Tu es un worker d'un hub local ; ton nom de session est dans ton premier message
 ## Sobriété tokens
 Chaque sortie d'outil est relue à tous les tours suivants.
 - Sorties bornées : \`head\`/\`tail\`, \`head_limit\` sur Grep, Read avec offset/limit sur un gros fichier, \`LIMIT\` en SQL. Jamais de relecture complète d'un fichier déjà lu.
+- Chaque appel d'outil isolé relit toute la conversation. Des actions indépendantes (lire plusieurs fichiers, lancer tests et lint, plusieurs modifications) partent dans le même message, en plusieurs appels d'outils ; une suite dont tu connais déjà les étapes tient en une commande (\`a && b\`).
 - Pas de \`sleep\` ni de boucle de polling : une tâche de fond, puis sa notification.
 - Audit ou revue : des sous-agents \`Agent\` à contexte neuf, brief ciblé, un seul modèle (Sonnet sauf besoin réel).
 - Relevé mécanique (liste, comptage, recherche dans le code ou les logs) : un sous-agent \`Agent\` avec \`model: "haiku"\` et \`run_in_background: false\`, la forme de la réponse imposée ; seule sa réponse reste dans ton contexte.
@@ -476,6 +477,7 @@ You are a worker of a local hub; your session name is in your first message. You
 ## Token economy
 Every tool output is read again on every later turn.
 - Bounded outputs: \`head\`/\`tail\`, \`head_limit\` on Grep, Read with offset/limit on a large file, \`LIMIT\` in SQL. Never read a file you already read in full again.
+- Each tool call made alone reads the whole conversation again. Independent actions (reading several files, running tests and lint, several edits) go in the same message, as several tool calls; a sequence whose steps you already know fits in one command (\`a && b\`).
 - No \`sleep\` and no polling loop: a background task, then its notification.
 - Audit or review: \`Agent\` subagents with a fresh context, a focused brief, a single model (Sonnet unless truly needed).
 - Mechanical reading (a list, a count, a search in the code or the logs): an \`Agent\` subagent with \`model: "haiku"\` and \`run_in_background: false\`, the shape of the answer imposed; only its answer stays in your context.

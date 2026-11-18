@@ -24,6 +24,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - En mode « Tout autoriser », une commande en plusieurs parties passe aussi sans carte quand seule une règle de confirmation du projet l'arrêtait. Si l'une de ses parties déclenche un contrôle de sécurité, la carte reste.
 - Quand l'un de tes hooks demande une confirmation, la carte s'affiche même en « Tout autoriser » : jusqu'ici, une règle de confirmation du projet sur la même commande la faisait passer sans te demander.
 - Sous Windows, ce qu'un worker a lancé (serveur de dev, navigateur de test, calcul sur la carte graphique) s'arrête avec lui, et plus rien ne reste en marche après la fermeture de l'app.
+- Une conversation au repos garde son cache plusieurs heures : le premier message après une longue pause coûte bien moins cher. Ces relances discrètes comptent dans le panneau des coûts.
 
 ## 2026-11-17
 
