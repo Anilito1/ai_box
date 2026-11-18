@@ -283,10 +283,11 @@ export function escalate(cur: { model: string; effort: Effort | '' }, allowed: s
   const high = capEffort('high', maxEffort);
   const effort = cur.effort || 'medium';
   if (rank(effort) < rank(high)) return { model: cur.model, effort: high, switches: false };
-  const strong = prefer(allowed.filter((m) => familyOf(m) !== 'fable'), ['opus', 'sonnet', 'haiku']);
   const from = FAMILIES.indexOf(familyOf(cur.model));
-  if (from < 0 || !strong || FAMILIES.indexOf(familyOf(strong)) <= from) return null;
-  return { model: strong, effort: capEffort(effort, maxEffort), switches: true };
+  // The next family up among the allowed ones: Haiku goes to Sonnet before Opus.
+  const next = from < 0 ? undefined : FAMILIES.slice(from + 1, FAMILIES.indexOf('fable')).flatMap((f) => allowed.filter((m) => familyOf(m) === f))[0];
+  if (!next) return null;
+  return { model: next, effort: capEffort(effort, maxEffort), switches: true };
 }
 
 // ---------- context of a worker ----------

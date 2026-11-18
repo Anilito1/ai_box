@@ -65,3 +65,8 @@ test('the grid: routine code on the fast model at medium, risk on the strong one
   assert.deepEqual(grid[1].alt, { model: 'opus', effort: 'medium' });
   assert.deepEqual(modelGrid(['sonnet'], 'low').map((r) => `${r.model} ${r.effort}`), ['sonnet low', 'sonnet low', 'sonnet low', 'sonnet low']);
 });
+
+test('the step up takes the next family allowed: Haiku goes to Sonnet before Opus', () => {
+  assert.deepEqual(escalate({ model: 'claude-haiku-5-5', effort: 'high' }, ['opus', 'sonnet', 'haiku'], 'xhigh'), { model: 'sonnet', effort: 'high', switches: true });
+  assert.deepEqual(escalate({ model: 'haiku', effort: 'high' }, ['opus', 'haiku', 'fable'], 'xhigh'), { model: 'opus', effort: 'high', switches: true });
+});
