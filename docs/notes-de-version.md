@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-18
+
+### Ajouté
+
+- Quand le fournisseur coupe un tour (surcharge, panne passagère), la session le reprend toute seule un peu plus tard, jusqu'à trois fois, au lieu de rester arrêtée en plein travail.
+
 ## 2026-11-17
 
 ### Ajouté

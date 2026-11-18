@@ -22,6 +22,7 @@ import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { buildHandoff } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
+import { faultWait, FAULT_WAITS_MS, passingFault } from '../shared/providerFault';
 import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
 import { SCRATCH_DIR, SCRATCH_ENV, SCRATCH_PARENT, scratchName } from '../shared/purge';
@@ -175,6 +176,12 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   fallbackPending: { step: FallbackStep; signal: LimitSignal } | null;
   /** What happened on the account it was away on, told with its next message once it is back. */
   backNote: string;
+  /** The provider's error of the reply in progress, if any: what its turn ends on. */
+  fault: string;
+  /** Turns in a row that the provider cut. */
+  faults: number;
+  /** The wait before the hub asks it to take up a turn the provider cut. */
+  faultTimer: NodeJS.Timeout | null;
   /** The hub's tools served over HTTP to its running process (programs that cannot take them in-process), else null. */
   mcpLease: McpLease | null;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
@@ -765,6 +772,8 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s) return;
     s.owesReport = false; // Stopped by the user on purpose: nothing for the master to chase.
+    if (this.clearFault(s)) this.changed();
+    s.faults = 0;
     s.query?.interrupt().catch(() => undefined);
   }
 
@@ -1647,7 +1656,7 @@ export class SessionManager extends EventEmitter {
         subagents: s.subagents.views(),
         busy: this.busyText(this.busyOf(s)),
         compacting: s.compacting,
-        retrying: s.retrying,
+        retrying: s.retrying || !!s.faultTimer,
         limit: s.limit,
         tool: s.tools.values().next().value ?? null,
         approvedAt: s.approvedAt,
@@ -2469,6 +2478,7 @@ export class SessionManager extends EventEmitter {
     s.busySince = null;
     s.handoff = false;
     s.noteSending = false;
+    this.clearFault(s);
     this.resetActivity(s);
     if (s.noteFresh && !this.quitting) this.freshStart(s);
   }
@@ -2628,6 +2638,7 @@ export class SessionManager extends EventEmitter {
         s.retrying = false;
         // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
         if (!ev.error) s.limit = null;
+        s.fault = ev.error;
         this.markBusy(s, true);
         const mission = this.missions.get(s.id);
         if (mission) {
@@ -2755,6 +2766,7 @@ export class SessionManager extends EventEmitter {
         this.windows.learn(ev.contextWindows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, this.windows.ofTurn(ev.contextWindows, model));
         this.countTurn(s, ev.usage);
+        this.afterFault(s, q, ok, ev.subtype === 'success' ? ev.result : '', handoff);
         this.lookAgainSoon(s, q);
         if (s.switchPending || s.ultracodePending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
         if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
@@ -2773,6 +2785,44 @@ export class SessionManager extends EventEmitter {
         break;
     }
     this.changed();
+  }
+
+  /** Ends the wait for a turn to be taken up again; true when there was one. */
+  private clearFault(s: Session): boolean {
+    if (!s.faultTimer) return false;
+    clearTimeout(s.faultTimer);
+    s.faultTimer = null;
+    return true;
+  }
+
+  /**
+   * A turn the provider cut (overload, server error, network) after the program's own retries: the hub asks the session
+   * to take it up again, a few times, further and further apart. Until then it counts as working: it is neither put to
+   * sleep nor reported silent. A turn that ends well clears the count; the handoff note has its own retry.
+   */
+  private afterFault(s: Session, q: AgentProcess, ok: boolean, result: string, handoff: boolean): void {
+    const fault = s.fault;
+    s.fault = '';
+    if (ok) s.faults = 0;
+    // A limit moves the session to another account; a queued message starts the next turn by itself.
+    if (ok || handoff || !result || !passingFault(fault, result) || s.fallbackPending || s.queued > 0) return;
+    const wait = faultWait(++s.faults);
+    if (wait === null) {
+      s.faults = 0;
+      this.notice(s, t('notice.faultGaveUp', { n: FAULT_WAITS_MS.length }), 'error');
+      if (s.role === 'worker') this.notifyMaster(t('hub.faultGaveUp', { name: displayName(s), n: FAULT_WAITS_MS.length }), t('hub.faultGaveUp.note'), s);
+      return;
+    }
+    this.notice(s, t('notice.faultRetry', { min: Math.max(1, Math.round(wait / 60_000)) }), 'info');
+    s.faultTimer = setTimeout(() => this.resumeAfterFault(s, q), wait);
+  }
+
+  private resumeAfterFault(s: Session, q: AgentProcess): void {
+    s.faultTimer = null;
+    if (s.query !== q || this.quitting) return;
+    // Set to work again meanwhile (a message of a peer, a task that came back): that turn takes it up.
+    if (s.status !== 'idle' || s.queued > 0) return this.changed();
+    this.deliver(s, { text: `${tags().hub} ${t('hub.faultResume')}`, images: [], from: 'hub' });
   }
 
   private wentIdle(s: Session): void {
@@ -3302,6 +3352,7 @@ export class SessionManager extends EventEmitter {
       try { this.contextMemory.trackEvent(memoryTopic); } catch { /* preserve the ordinary session */ }
     }
     s.activeAt = Date.now();
+    this.clearFault(s);
     this.markBusy(s);
     this.event(s, 'message_in');
     this.changed();
@@ -5350,6 +5401,9 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       bgScan: null,
       tokens: new TurnTokens(),
       limit: null,
+      fault: '',
+      faults: 0,
+      faultTimer: null,
       error: '',
       sessionId: randomUUID(),
       started: false,
