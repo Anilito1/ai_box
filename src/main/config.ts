@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFile
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccount, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
+import { SEARCH_BUDGET_MAX, SEARCH_BUDGET_MIN, SEARCH_DEFAULTS, SEARCH_DEVICES, SEARCH_IDLE_MAX, SEARCH_IDLE_MIN, SEARCH_REPOS_MAX, type SearchDevice } from '../shared/search';
 import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage, isSttEngine, isSttModel, isSttPreset, isSttUrl } from '../shared/dictation';
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
@@ -66,6 +67,7 @@ function defaults(lang: Lang): HubConfig {
     teamFolders: { folders: [], root: [] },
     background: '',
     dictation: { ...DICTATION_DEFAULTS },
+    search: { ...SEARCH_DEFAULTS },
     remoteWorkers: structuredClone(REMOTE_DEFAULTS),
   };
 }
@@ -127,6 +129,15 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     take('dictation.preset', d.preset, isSttPreset, (v) => (cfg.dictation.preset = v));
     take('dictation.model', d.model, isSttModel, (v) => (cfg.dictation.model = v));
     take('dictation.baseUrl', d.baseUrl, isSttUrl, (v) => (cfg.dictation.baseUrl = v));
+  }
+  if (raw.search !== undefined) {
+    const s = obj(raw.search);
+    const within = (min: number, max: number) => (v: unknown): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+    take('search.enabled', s.enabled, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.search.enabled = v));
+    take('search.idleMinutes', s.idleMinutes, within(SEARCH_IDLE_MIN, SEARCH_IDLE_MAX), (v) => (cfg.search.idleMinutes = v));
+    take('search.device', s.device, (v): v is SearchDevice => SEARCH_DEVICES.includes(v as SearchDevice), (v) => (cfg.search.device = v));
+    take('search.repos', s.repos, paths(SEARCH_REPOS_MAX), (v) => (cfg.search.repos = [...new Set(v.map((p) => resolve(p)))]));
+    take('search.budget', s.budget, within(SEARCH_BUDGET_MIN, SEARCH_BUDGET_MAX), (v) => (cfg.search.budget = v));
   }
   if (raw.github !== undefined) {
     const g = obj(raw.github);

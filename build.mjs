@@ -28,6 +28,9 @@ await Promise.all([
   build({ ...common, entryPoints: ['src/preload/preload.ts'], outfile: 'dist/preload.cjs', platform: 'node', format: 'cjs', external: ['electron'] }),
   // Installs an update once the hub has closed, run by the user's Node.js: Node's own modules only.
   build({ ...common, entryPoints: ['src/main/updateHelper.ts'], outfile: 'dist/update-helper.mjs', platform: 'node', format: 'esm' }),
+  // The local search runs in processes of its own (main/search): its host, and one per model loaded.
+  build({ ...common, entryPoints: ['src/main/search/host.ts'], outfile: 'dist/search-host.mjs', platform: 'node', format: 'esm' }),
+  build({ ...common, entryPoints: ['src/main/search/worker.ts'], outfile: 'dist/search-worker.mjs', platform: 'node', format: 'esm' }),
   build({ ...renderer, entryPoints: ['src/renderer/app.ts'], outfile: 'dist/renderer/app.js' }),
   // The microphone's audio thread (voice dictation) loads its own file.
   build({ ...renderer, entryPoints: ['src/renderer/dictationWorklet.ts'], outfile: 'dist/renderer/dictation-worklet.js' }),
@@ -51,6 +54,8 @@ cpSync('assets/logo.png', 'dist/renderer/logo.png');
 // Still pictures of every mascot, Clawd's too: placeholders until the 3D one is drawn, and the providers' cards.
 cpSync('assets/mascots', 'dist/renderer/mascots', { recursive: true, filter: (src) => !src.endsWith('.glb') });
 cpSync('THIRD_PARTY_NOTICES.md', 'dist/THIRD_PARTY_NOTICES.md');
+// The grammars the search cuts code with (tree-sitter, WebAssembly): next to the process that loads them.
+cpSync('node_modules/@vscode/tree-sitter-wasm/wasm', 'dist/grammars', { recursive: true, filter: (src) => !src.endsWith('.d.ts') });
 writeFileSync(STAMP_FILE, stamp);
 // The dictation helper (macOS): a Mac without Swift builds the rest and goes without dictation.
 buildNative();

@@ -5042,6 +5042,17 @@ kbd,
   margin: 0;
   min-width: 240px;
 }
+/* The local search (settings, Repos): its choices on one line, its minutes in a short field. */
+.setup-search {
+  margin-top: 22px;
+}
+.setup-search .seg {
+  padding: 0 12px;
+  white-space: nowrap;
+}
+.setup-search .setup-input {
+  width: 84px;
+}
 .setup-bg .setup-input {
   flex: none;
   width: 104px;

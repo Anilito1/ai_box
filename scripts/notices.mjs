@@ -2,7 +2,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 // Bundled into dist/renderer/app.js. The Agent SDK and zod stay in node_modules (installed, not bundled).
-const BUNDLED = ['three', 'marked', 'dompurify'];
+// The grammars of @vscode/tree-sitter-wasm (tree-sitter and its languages, MIT) are copied to dist/grammars.
+const BUNDLED = ['three', 'marked', 'dompurify', '@vscode/tree-sitter-wasm'];
 const VSCODE_MIT = `MIT License
 
 Copyright (c) Microsoft Corporation. All rights reserved.

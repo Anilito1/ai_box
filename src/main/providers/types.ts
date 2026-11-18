@@ -42,6 +42,8 @@ export interface HubTool {
   shape: ZodRawShape;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (args: any, extra?: unknown) => Promise<HubToolResult>;
+  /** Given whole from the start of the conversation instead of behind Claude Code's tool search. */
+  alwaysLoad?: boolean;
 }
 
 /** A message for the agent: text, or text and images, as the Messages API writes it. */

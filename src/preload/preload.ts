@@ -164,6 +164,12 @@ const api: HubApi = {
   onDictation: (cb) => {
     ipcRenderer.on('dictation:event', (_e, event: DictationEvent) => cb(event));
   },
+  searchState: () => ipcRenderer.invoke('search:state'),
+  searchInstall: () => ipcRenderer.invoke('search:install'),
+  searchReindex: (repo) => ipcRenderer.invoke('search:reindex', repo),
+  onSearchState: (cb) => {
+    ipcRenderer.on('search:state', () => cb());
+  },
 };
 
 contextBridge.exposeInMainWorld('hub', api);
