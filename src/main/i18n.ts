@@ -136,6 +136,7 @@ const en = {
     "Writes to a worker: instruction, answer to its question, go-ahead for commit/push/deploy. It receives it as an instruction from the user. A closed worker is restarted, a permanent one woken, with its whole conversation; a working one reads it at the end of its current step. To a permanent worker with nothing in progress, the message is its new mission: give model and effort when its post is in auto.",
   'tool.message.message': 'Precise, self-contained message',
   'tool.message.interrupt': 'true = cuts its turn in progress before handing it the message (urgent course correction)',
+  'tool.message.retry': 'true = its last delivery failed (red tests, a push that is not there, a wrong result) and this message sends it back to it. The hub then moves it one step up by itself (effort first, then the model): leave model and effort out',
   'tool.report': "A worker's mission, state, recent activity (tools, messages) and full last message.",
   'tool.close':
     'Closes a worker that is done (frees its session). Its conversation stays on disk: message_worker restarts it. If it is still finishing its turn or background tasks, it closes as soon as it stops. A permanent worker falls asleep instead: nothing is erased.',
@@ -185,6 +186,7 @@ const en = {
   'message.delivered': '{name} got it and is handling it.',
   'message.woken': '{name} was asleep: woken with its conversation, it is handling your message.',
   'message.runs': 'It runs with {model} · {effort}.',
+  'retry.top': 'No step above for {name} by rule (it is at the top of the grid, or on a model the grid does not rank): one more failure is a question for the user (another approach, or Fable if they ask for it).',
   'choice.badModel': 'Model not allowed: "{model}". Allowed models: {allowed}.',
   'choice.modelLocked': 'ℹ Model kept: the user picked it by hand on this worker.',
   'tool.ultracode': 'Ultracode for this worker (Claude Code, Max plan): it writes and runs a workflow of parallel subagents for every task of weight and checks its work. Slow and costly in tokens: only for a big, risky or multi-phase job. Refused where the account\'s plan does not have it. Omitted: unchanged',
@@ -720,6 +722,7 @@ const fr: Record<Key, string> = {
     "Écrit à un worker : consigne, réponse à sa question, go pour commit/push/deploy. Il le reçoit comme une consigne de l'utilisateur. Un worker fermé est relancé, un permanent réveillé, avec toute sa conversation ; un worker au travail le lit à la fin de son étape en cours. Pour un permanent sans travail en cours, le message est sa nouvelle mission : donne modèle et effort quand son poste est en auto.",
   'tool.message.message': 'Message autonome et précis',
   'tool.message.interrupt': 'true = coupe son tour en cours avant de lui remettre le message (correction de cap urgente)',
+  'tool.message.retry': "true = sa dernière livraison a échoué (tests rouges, push absent, résultat faux) et ce message la lui renvoie. Le hub le monte alors d'un cran de lui-même (l'effort d'abord, puis le modèle) : omets model et effort",
   'tool.report': "Mission, état, activité récente (outils, messages) et dernier message complet d'un worker.",
   'tool.close':
     "Ferme un worker qui a fini (libère sa session). Sa conversation reste sur disque : message_worker le relance. S'il termine encore son tour ou des tâches de fond, il se ferme dès qu'il s'arrête. Un permanent s'endort au lieu de se fermer : rien n'est effacé.",
@@ -771,6 +774,7 @@ const fr: Record<Key, string> = {
   'message.delivered': 'Remis à {name}, qui le traite.',
   'message.woken': '{name} dormait : réveillé avec sa conversation, il traite ton message.',
   'message.runs': 'Il tourne en {model} · {effort}.',
+  'retry.top': "Pas de cran au-dessus pour {name} par règle (il est en haut de la grille, ou sur un modèle qu'elle ne classe pas) : un échec de plus est une question pour l'utilisateur (autre approche, ou Fable s'il le demande).",
   'choice.badModel': 'Modèle non autorisé : "{model}". Modèles autorisés : {allowed}.',
   'choice.modelLocked': "ℹ Modèle gardé : l'utilisateur l'a choisi à la main sur ce worker.",
   'tool.ultracode': "Ultracode pour ce worker (Claude Code, abonnement Max) : il écrit et lance un workflow de sous-agents en parallèle pour toute tâche de poids et vérifie son travail. Lent et coûteux en tokens : seulement pour un chantier gros, risqué ou en plusieurs phases. Refusé si le plan du compte ne l'a pas. Omis : inchangé",

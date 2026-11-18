@@ -255,10 +255,38 @@ export function modelGrid(allowed: string[], maxEffort: Effort): GridRow[] {
   const altOf = (model: string, effort: Effort) => (model && model !== fast ? { model, effort: cap(effort) } : null);
   return [
     row('simple', fast, 'medium', { model: fast, effort: cap('low') }),
-    row('standard', fast, 'high', altOf(strong, 'medium')),
+    // Medium: on twelve past changes of this repo replayed with their tests in place, the fast model passed them all at it.
+    row('standard', fast, 'medium', altOf(strong, 'medium')),
     row('hard', strong, 'high'),
     row('critical', strong, 'high'),
   ];
+}
+
+const FAMILIES = ['haiku', 'sonnet', 'opus', 'fable'];
+/** "claude-sonnet-5-5" and "Sonnet" are the same family; '' for a model of another provider. */
+export const familyOf = (model: string) => FAMILIES.find((f) => model.toLowerCase().includes(f)) ?? '';
+
+export interface Step {
+  model: string;
+  effort: Effort;
+  /** The model changes: the conversation is reread without cache, a fresh one costs less past a small context. */
+  switches: boolean;
+}
+
+/**
+ * One step up after a failed delivery (red tests, a push that is not there, a wrong result). The effort first, up to
+ * high: the conversation keeps its cache. Then the grid's strong model, at the effort it had. Null when no step is
+ * left by rule: at the top, or on a model the grid does not rank (another provider's, or the usual one, unnamed).
+ * Fable is only ever the user's to ask for.
+ */
+export function escalate(cur: { model: string; effort: Effort | '' }, allowed: string[], maxEffort: Effort): Step | null {
+  const high = capEffort('high', maxEffort);
+  const effort = cur.effort || 'medium';
+  if (rank(effort) < rank(high)) return { model: cur.model, effort: high, switches: false };
+  const strong = prefer(allowed.filter((m) => familyOf(m) !== 'fable'), ['opus', 'sonnet', 'haiku']);
+  const from = FAMILIES.indexOf(familyOf(cur.model));
+  if (from < 0 || !strong || FAMILIES.indexOf(familyOf(strong)) <= from) return null;
+  return { model: strong, effort: capEffort(effort, maxEffort), switches: true };
 }
 
 // ---------- context of a worker ----------

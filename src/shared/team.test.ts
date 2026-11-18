@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FRESH_START_PCT, FRESH_START_WORK, freshStartDue, needsFreshStart, normalizeRole, workTokens } from './team';
+import { escalate, FRESH_START_PCT, FRESH_START_WORK, freshStartDue, modelGrid, needsFreshStart, normalizeRole, workTokens } from './team';
 import type { Metrics } from './types';
 
 const at = (tokens: number): Metrics => ({ contextTokens: tokens, contextSize: 1_000_000, contextPct: tokens / 10_000, costUsd: 0 });
@@ -35,4 +35,33 @@ test('a permanent worker at work, or with background tasks, is never renewed', (
 test('a post keeps its Ultracode only when it is exactly true', () => {
   assert.equal(normalizeRole({ name: 'a', ultracode: true }).ultracode, true);
   for (const v of [false, 'true', 1, null, undefined]) assert.equal(normalizeRole({ name: 'a', ultracode: v }).ultracode, false, String(v));
+});
+
+test('a failed delivery moves one step up: the effort first, then the strong model, never Fable', () => {
+  const allowed = ['opus', 'claude-fable-5-2', 'sonnet', 'fable'];
+  assert.deepEqual(escalate({ model: 'claude-sonnet-5-5', effort: 'medium' }, allowed, 'xhigh'), { model: 'claude-sonnet-5-5', effort: 'high', switches: false });
+  assert.deepEqual(escalate({ model: 'sonnet', effort: '' }, allowed, 'xhigh'), { model: 'sonnet', effort: 'high', switches: false });
+  assert.deepEqual(escalate({ model: 'claude-sonnet-5-5', effort: 'high' }, allowed, 'xhigh'), { model: 'opus', effort: 'high', switches: true });
+  // At the top, or on a model the user asked for: nothing by rule.
+  assert.equal(escalate({ model: 'claude-opus-5-5', effort: 'high' }, allowed, 'xhigh'), null);
+  assert.equal(escalate({ model: 'claude-opus-5-5', effort: 'xhigh' }, allowed, 'xhigh'), null);
+  assert.equal(escalate({ model: 'claude-fable-5-2', effort: 'high' }, allowed, 'xhigh'), null);
+  // The step to the strong model never lowers an effort already above high.
+  assert.deepEqual(escalate({ model: 'sonnet', effort: 'xhigh' }, allowed, 'xhigh'), { model: 'opus', effort: 'xhigh', switches: true });
+  assert.equal(escalate({ model: '', effort: 'high' }, allowed, 'xhigh'), null);
+  assert.deepEqual(escalate({ model: 'claude-fable-5-2', effort: 'medium' }, allowed, 'xhigh'), { model: 'claude-fable-5-2', effort: 'high', switches: false });
+});
+
+test('the step up respects the effort ceiling and the allowed models', () => {
+  assert.deepEqual(escalate({ model: 'sonnet', effort: 'low' }, ['sonnet'], 'medium'), { model: 'sonnet', effort: 'medium', switches: false });
+  assert.equal(escalate({ model: 'sonnet', effort: 'medium' }, ['sonnet'], 'medium'), null);
+  assert.equal(escalate({ model: 'sonnet', effort: 'high' }, ['sonnet', 'fable'], 'max'), null);
+  assert.equal(escalate({ model: 'gpt-5.2-codex', effort: 'high' }, ['opus', 'sonnet'], 'max'), null);
+});
+
+test('the grid: routine code on the fast model at medium, risk on the strong one, Fable never when Opus is allowed', () => {
+  const grid = modelGrid(['opus', 'claude-fable-5-2', 'sonnet', 'fable'], 'xhigh');
+  assert.deepEqual(grid.map((r) => `${r.tier} ${r.model} ${r.effort}`), ['simple sonnet medium', 'standard sonnet medium', 'hard opus high', 'critical opus high']);
+  assert.deepEqual(grid[1].alt, { model: 'opus', effort: 'medium' });
+  assert.deepEqual(modelGrid(['sonnet'], 'low').map((r) => `${r.model} ${r.effort}`), ['sonnet low', 'sonnet low', 'sonnet low', 'sonnet low']);
 });

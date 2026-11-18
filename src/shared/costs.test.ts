@@ -143,3 +143,11 @@ test('a turn keeps its mission, effort, length and tool counts; a mission adds u
   assert.equal(rows.length, 1);
   assert.deepEqual({ cost: rows[0].cost, turns: rows[0].turns, follows: rows[0].follows, errors: rows[0].errors, tools: rows[0].tools, by: rows[0].by }, { cost: 2, turns: 2, follows: 1, errors: 1, tools: 8, by: 'master' });
 });
+test('a follow-up sent after a failed delivery is kept as a retry, and counted on its mission', () => {
+  const usage = { cost: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const ev = (at: number, kind: 'start' | 'follow', retry = false) => ({ at, mission: 'm-1', id: 'w', name: 'hub-w', kind, model: 'sonnet', effort: 'medium', by: 'master' as const, ...(retry ? { retry: true as const } : {}) });
+  assert.deepEqual(decodeMission(encodeMission(ev(15, 'follow', true))), ev(15, 'follow', true));
+  assert.equal(decodeMission(encodeMission(ev(15, 'follow')))?.retry, undefined);
+  const rows = missionRows([{ at: 30, id: 'w', name: 'hub-w', role: 'worker', models: { a: usage }, mission: 'm-1' }], [ev(5, 'start'), ev(15, 'follow'), ev(20, 'follow', true)]);
+  assert.deepEqual({ follows: rows[0].follows, retries: rows[0].retries }, { follows: 2, retries: 1 });
+});

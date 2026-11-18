@@ -10,6 +10,16 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-18
+
+### Ajouté
+
+- Quand une livraison échoue, le maître la renvoie au worker et le hub le fait monter d'un cran tout seul : l'effort d'abord, puis le modèle. Le panneau des coûts compte ces relances après un échec.
+
+### Modifié
+
+- Le code courant part en effort moyen, et une mission longue ne passe plus sur un modèle plus cher pour sa seule durée.
+
 ## 2026-11-17
 
 ### Ajouté
