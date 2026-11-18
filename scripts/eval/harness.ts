@@ -42,6 +42,8 @@ export interface Scenario {
   self?: string;
   /** Local repositories list_repos shows (folders of the test workspace). */
   repos?: string[];
+  /** Models the user allows for workers (Settings); the app's default when left out. */
+  models?: string[];
   messages: string[];
   replies?: Record<string, string>;
   model?: string;
@@ -96,13 +98,20 @@ const defaultReply = (name: string, input: Record<string, unknown>): string => {
   return 'ok';
 };
 
-export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signal?: AbortSignal }): Promise<RunResult> {
+/**
+ * `dir`: a folder to run in, emptied first. Runs that follow each other in the same one show the model the same paths,
+ * so they share the cached prefix instead of each writing its own. `model` and `effort`: the master's, for a sweep.
+ */
+export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signal?: AbortSignal; dir?: string; model?: string; effort?: string }): Promise<RunResult> {
   setLang(opts.lang);
-  const dir = mkdtempSync(join(tmpdir(), `hub-eval-${sc.id}-`));
+  const dir = opts.dir ?? mkdtempSync(join(tmpdir(), `hub-eval-${sc.id}-`));
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
   const ws = join(dir, 'ws');
   mkdirSync(ws);
   const cfg = loadConfig(dir, opts.lang);
   cfg.workspaces = [ws];
+  if (sc.models) cfg.workerModels = sc.models;
   const folder = (f: string) => {
     const p = join(ws, f);
     mkdirSync(p, { recursive: true });
@@ -191,8 +200,8 @@ export async function runScenario(sc: Scenario, opts: { lang: 'fr' | 'en'; signa
       prompt: prompts,
       options: {
         cwd: String(self.cwd),
-        model: sc.model ?? (sc.role === 'master' ? 'claude-opus-5-5' : 'claude-sonnet-5-5'),
-        effort: (sc.effort ?? (sc.role === 'master' ? 'high' : 'medium')) as never,
+        model: sc.model ?? (sc.role === 'master' ? (opts.model ?? 'claude-opus-5-5') : 'claude-sonnet-5-5'),
+        effort: (sc.effort ?? (sc.role === 'master' ? (opts.effort ?? 'high') : 'medium')) as never,
         systemPrompt: { type: 'preset', preset: 'claude_code', append },
         disallowedTools: disallowed,
         mcpServers: { hub },
