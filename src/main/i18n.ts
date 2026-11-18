@@ -134,6 +134,12 @@ const en = {
   'tool.effort': 'Effort of this mission: low, medium, high, xhigh, max (capped at the highest effort allowed). Left out: the usual one, or the previous one for a permanent worker',
   'tool.message':
     "Writes to a worker: instruction, answer to its question, go-ahead for commit/push/deploy. It receives it as an instruction from the user. A closed worker is restarted, a permanent one woken, with its whole conversation; a working one reads it at the end of its current step. To a permanent worker with nothing in progress, the message is its new mission: give model and effort when its post is in auto.",
+  'tool.explore':
+    'Ask how something works or where it is in the code you work in; a fast read-only helper explores in its own context (many searches and reads) and answers with `path:lines` references, so your context does not grow with every lookup. Use it instead of a series of Grep, Glob and Read whenever finding out would take more than one or two lookups: how a feature works, where a behaviour, a text or a value is set, what calls what. Put everything you need to know in one call, and say what you will do with it (explain, or change something: it then gives the exact lines). Afterwards Read only the lines you must edit. Not for a file whose path you already know: Read it.',
+  'tool.explore.question': 'What you need to know, and what for (explain, or change something)',
+  'tool.explore.paths': 'Folders or files to look at first',
+  'tool.explore.thorough': 'true = more rounds, for a question that spans several parts of the code',
+  'tool.explore.off': 'No explorer for this session: use Grep, Glob and Read yourself.',
   'tool.message.message': 'Precise, self-contained message',
   'tool.message.interrupt': 'true = cuts its turn in progress before handing it the message (urgent course correction)',
   'tool.message.retry': 'true = its last delivery failed (red tests, a push that is not there, a wrong result) and this message sends it back to it. The hub then moves it one step up by itself (effort first, then the model): leave model and effort out',
@@ -726,6 +732,12 @@ const fr: Record<Key, string> = {
   'tool.effort': "Effort de cette mission : low, medium, high, xhigh, max (plafonné à l'effort maximal autorisé). Omis : l'effort habituel, ou le précédent pour un permanent",
   'tool.message':
     "Écrit à un worker : consigne, réponse à sa question, go pour commit/push/deploy. Il le reçoit comme une consigne de l'utilisateur. Un worker fermé est relancé, un permanent réveillé, avec toute sa conversation ; un worker au travail le lit à la fin de son étape en cours. Pour un permanent sans travail en cours, le message est sa nouvelle mission : donne modèle et effort quand son poste est en auto.",
+  'tool.explore':
+    "Demande comment marche quelque chose ou où il se trouve dans le code où tu travailles ; un assistant rapide en lecture seule explore dans son propre contexte (beaucoup de recherches et de lectures) et répond avec des références `chemin:lignes`, sans que ton contexte grossisse à chaque recherche. Utilise-le au lieu d'une suite de Grep, Glob et Read dès que trouver demanderait plus d'une ou deux recherches : comment marche une fonction, où se règle un comportement, un texte ou une valeur, qui appelle quoi. Mets tout ce que tu dois savoir dans un seul appel, et dis ce que tu en feras (expliquer, ou modifier : il donne alors les lignes exactes). Ensuite, lis seulement les lignes à modifier. Pas pour un fichier dont tu connais le chemin : lis-le.",
+  'tool.explore.question': 'Ce que tu dois savoir, et pour quoi faire (expliquer, ou modifier)',
+  'tool.explore.paths': 'Dossiers ou fichiers à regarder en premier',
+  'tool.explore.thorough': 'true = plus de tours, pour une question qui couvre plusieurs parties du code',
+  'tool.explore.off': "Pas d'explorateur pour cette session : utilise Grep, Glob et Read toi-même.",
   'tool.message.message': 'Message autonome et précis',
   'tool.message.interrupt': 'true = coupe son tour en cours avant de lui remettre le message (correction de cap urgente)',
   'tool.message.retry': "true = sa dernière livraison a échoué (tests rouges, push absent, résultat faux) et ce message la lui renvoie. Le hub le monte alors d'un cran de lui-même (l'effort d'abord, puis le modèle) : omets model et effort",

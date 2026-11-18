@@ -152,8 +152,23 @@ test('a follow-up sent after a failed delivery is kept as a retry, and counted o
   assert.deepEqual({ follows: rows[0].follows, retries: rows[0].retries }, { follows: 2, retries: 1 });
 });
 
-test('a keep-alive is logged as such and counts in the totals; a turn of work carries no mark', () => {
-  const r: TurnRecord = { at: 1, id: 'm', name: 'master', role: 'master', models: { 'claude-opus-5-5': u(0.08, 3, 40, 400_000, 0) }, keepAlive: true };
-  assert.equal(decodeRecord(encodeRecord(r))?.keepAlive, true);
-  assert.equal('keepAlive' in (decodeRecord(encodeRecord({ ...r, keepAlive: undefined })) ?? {}), false);
+test('a keep-alive or an exploration is logged as such; a turn of work carries no mark', () => {
+  const r: TurnRecord = { at: 1, id: 'm', name: 'master', role: 'master', models: { 'claude-opus-5-5': u(0.08, 3, 40, 400_000, 0) }, kind: 'keepAlive' };
+  assert.equal(decodeRecord(encodeRecord(r))?.kind, 'keepAlive');
+  assert.equal(decodeRecord(encodeRecord({ ...r, kind: 'explore' }))?.kind, 'explore');
+  assert.equal('kind' in (decodeRecord(encodeRecord({ ...r, kind: undefined })) ?? {}), false);
+  assert.equal('kind' in (decodeRecord(encodeRecord(r).replace('"kd":"keepAlive"', '"kd":"other"')) ?? {}), false);
+});
+
+test('a keep-alive or an exploration counts in the cost, not in the turns', () => {
+  const day = at(2026, 11, 18, 10);
+  const work: TurnRecord = { at: day, id: 'w', name: 'hub-w', role: 'worker', models: { a: u(1) }, mission: 'm-1' };
+  const helper: TurnRecord = { ...work, at: day + 1, models: { b: u(0.01) }, kind: 'explore' };
+  const ping: TurnRecord = { ...work, at: day + 2, models: { a: u(0.1) }, mission: undefined, kind: 'keepAlive' };
+  const sum = summarize([work, helper, ping], periodRange('today', new Date(day)));
+  assert.equal(sum.turns, 1);
+  assert.equal(sum.sessions[0].turns, 1);
+  assert.equal(+sum.total.cost.toFixed(2), 1.11);
+  const [row] = missionRows([work, helper], [{ at: day - 1, mission: 'm-1', id: 'w', name: 'hub-w', kind: 'start', model: 'opus', effort: 'high', by: 'master' }]);
+  assert.deepEqual([row.turns, +row.cost.toFixed(2)], [1, 1.01]);
 });

@@ -129,6 +129,7 @@ import { claudeLimit } from './providers/claude/events';
 import { Inbox, type InboxEntry } from './providers/inbox';
 import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
 import { winJobs } from './winJobs';
+import { explore, type ExploreHost } from './providers/claude/explore';
 import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
 import { readReport, type DiagnosisView } from '../shared/diagnosis';
 import type { McpHub, McpLease } from './mcpHub';
@@ -142,6 +143,7 @@ import type {
   ElicitationAnswer,
   ElicitationRequest,
   HubTool,
+  HubToolResult,
   LaunchSpec,
   LimitSignal,
   PermissionAnswer,
@@ -237,6 +239,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   pinging: boolean;
   /** The Claude Code its conversation was last read with (programStamp): kept with warmAt across a restart. */
   warmProgram: string;
+  /** Where its `explore` helper runs, as whom: set at each launch on Claude Code on this PC, null elsewhere. */
+  explorer: ExploreHost | null;
   /** Ids of the subagent tasks still running (task_started until their notification). */
   agentTasks: Set<string>;
   /** The subagents it launched, with their activity: what the sidebar and its view list under it. */
@@ -1941,6 +1945,7 @@ export class SessionManager extends EventEmitter {
     const program = programStamp(spec.executable, statSync);
     if (!resume || !sameProgram(s.warmProgram, program)) Object.assign(s, { warmAt: 0, pings: 0 });
     s.warmProgram = program;
+    s.explorer = harness === 'claude' && !remote ? { cwd: spec.cwd, dirs: [...spec.extraDirs, ...spec.readDirs], executable: spec.executable, env: spec.env } : null;
     s.query = q;
     s.usageSeen = null;
     s.remoteExit = null;
@@ -3677,7 +3682,7 @@ export class SessionManager extends EventEmitter {
         .then(
           (result) => {
             if (Object.keys(result.totals.models).length > 0) {
-              this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role, models: result.totals.models, repo: this.repoOfDir(s.cwd) ?? '', keepAlive: true });
+              this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role, models: result.totals.models, repo: this.repoOfDir(s.cwd) ?? '', kind: 'keepAlive' });
             }
             return pingRead(result);
           },
@@ -3938,7 +3943,8 @@ export class SessionManager extends EventEmitter {
         : [];
       // A diagnosis worker reads who does what and reports: no message to a worker, no topic memory to write.
       if (s.diagOf) return [listWorkers, toMaster];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
+      const exploreTool = harness === 'claude' && !remote ? [this.exploreTool(s, run)] : [];
+      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...exploreTool, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -4104,6 +4110,36 @@ export class SessionManager extends EventEmitter {
           (args) => run(() => this.declareTopic(args)),
         ),
     ];
+  }
+
+  /**
+   * `explore` (providers/claude/explore.ts): a cheap read-only helper answers a question about the code in its own
+   * context. Its cost goes to the cost log under the session and its mission, marked as an exploration.
+   */
+  private exploreTool(s: Session, run: (fn: () => Promise<string>) => Promise<HubToolResult>): HubTool {
+    return {
+      name: 'explore',
+      description: t('tool.explore'),
+      shape: {
+        question: z.string().min(8).max(2000).describe(t('tool.explore.question')),
+        paths: z.array(z.string().max(300)).max(8).nullish().describe(t('tool.explore.paths')),
+        thorough: z.boolean().nullish().describe(t('tool.explore.thorough')),
+      },
+      alwaysLoad: true,
+      handler: (a: { question: string; paths?: string[] | null; thorough?: boolean | null }, extra) =>
+        run(async () => {
+          const host = s.explorer;
+          if (!host) throw new Error(t('tool.explore.off'));
+          const signal = (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
+          const r = await explore(host, { question: a.question, paths: a.paths ?? [], thorough: a.thorough === true }, signal);
+          if (r.totals && Object.keys(r.totals.models).length > 0) {
+            const mission = this.missions.get(s.id)?.id;
+            this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role: this.costRole(s), models: r.totals.models, repo: this.repoOfDir(s.cwd) ?? '', ...(mission ? { mission } : {}), kind: 'explore' });
+          }
+          if (r.error) throw new Error(r.text);
+          return r.text;
+        }),
+    };
   }
 
   /**
@@ -5528,6 +5564,7 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       activeAt: Date.now(),
       warmSpec: null,
       warmProgram: '',
+      explorer: null,
       warmAt: 0,
       pings: 0,
       pinging: false,

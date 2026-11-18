@@ -102,9 +102,9 @@ test('the master makes a group: the lead gets its tools, the member message_lead
     assert.match(rosterBlock(cfg, 'en'), /Groups \(lead → members\):\n- lbc : hub-sous-chef-lbc → hub-openai-lbc1/);
 
     const names = (s: Fake) => inner.hubTools(s).map((x) => x.name).sort();
-    assert.deepEqual(names(session('sous-chef-lbc')), ['list_capabilities', 'list_repos', 'list_workers', 'message_master', 'message_worker', 'worker_report']);
-    assert.deepEqual(names(session('openai-lbc1')), ['list_capabilities', 'list_repos', 'list_workers', 'message_lead', 'message_master']);
-    assert.deepEqual(names(session('other')), ['list_capabilities', 'list_repos', 'list_workers', 'message_master']);
+    assert.deepEqual(names(session('sous-chef-lbc')), ['explore', 'list_capabilities', 'list_repos', 'list_workers', 'message_master', 'message_worker', 'worker_report']);
+    assert.deepEqual(names(session('openai-lbc1')), ['explore', 'list_capabilities', 'list_repos', 'list_workers', 'message_lead', 'message_master']);
+    assert.deepEqual(names(session('other')), ['explore', 'list_capabilities', 'list_repos', 'list_workers', 'message_master']);
 
     const lead = workerPrompt(cfg, post('sous-chef-lbc'), undefined, groupInfo(cfg, cfg.groups, null));
     assert.match(lead, /You lead the group "lbc" \(hub-openai-lbc1\)/);

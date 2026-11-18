@@ -42,6 +42,8 @@ export interface HubTool {
   shape: ZodRawShape;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (args: any, extra?: unknown) => Promise<HubToolResult>;
+  /** Always in the prompt, never deferred behind the tool search (Claude Code). */
+  alwaysLoad?: boolean;
 }
 
 /** A message for the agent: text, or text and images, as the Messages API writes it. */

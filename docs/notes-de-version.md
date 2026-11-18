@@ -16,6 +16,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Quand une livraison échoue, le maître la renvoie au worker et le hub le fait monter d'un cran tout seul : l'effort d'abord, puis le modèle, jusqu'à Fable. Le panneau des coûts compte ces relances après un échec.
 - Quand le fournisseur coupe un tour (surcharge, panne passagère), la session le reprend toute seule un peu plus tard, jusqu'à trois fois, au lieu de rester arrêtée en plein travail.
+- Les workers ont un outil d'exploration du code : un assistant rapide (Haiku) cherche et lit à leur place et leur répond en quelques lignes, ce qui allège leurs conversations. Son coût compte dans le panneau des coûts.
 
 ### Modifié
 

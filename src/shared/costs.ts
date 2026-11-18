@@ -37,8 +37,8 @@ export interface TurnRecord {
   ms?: number;
   tools?: number;
   errors?: number;
-  /** A keep-alive of the conversation's prompt cache (keepAlive.ts), not a turn of its work. */
-  keepAlive?: true;
+  /** Not a turn of its work: a keep-alive of its prompt cache (keepAlive.ts), or an exploration it asked for. */
+  kind?: 'keepAlive' | 'explore';
 }
 
 /**
@@ -111,7 +111,7 @@ export function turnDelta(prev: Totals | null, cur: Totals): Record<string, Usag
 /** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo}` */
 export function encodeRecord(r: TurnRecord): string {
   const m = Object.fromEntries(Object.entries(r.models).map(([model, u]) => [model, FIELDS.map((f) => (f === 'cost' ? +u[f].toFixed(8) : u[f]))]));
-  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors, ka: r.keepAlive ? 1 : undefined };
+  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors, kd: r.kind };
   return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) });
 }
 
@@ -132,7 +132,7 @@ export function decodeRecord(line: string): TurnRecord | null {
     models[model] = Object.fromEntries(FIELDS.map((f, i) => [f, num(arr[i])])) as unknown as Usage;
   }
   const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
-  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x), keepAlive: o.ka === 1 ? (true as const) : undefined };
+  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x), kind: o.kd === 'keepAlive' || o.kd === 'explore' ? (o.kd as TurnRecord['kind']) : undefined };
   return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) };
 }
 
@@ -186,7 +186,7 @@ export function missionRows(records: TurnRecord[], events: MissionEvent[]): Miss
     const row = r.mission ? rows.get(r.mission) : undefined;
     if (!row) continue;
     row.cost += sumUsage(r.models).cost;
-    row.turns++;
+    if (!r.kind) row.turns++;
     row.ms += r.ms ?? 0;
     row.tools += r.tools ?? 0;
     row.errors += r.errors ?? 0;
@@ -270,12 +270,13 @@ export function summarize(records: TurnRecord[], range: Range): CostSummary {
     if (r.at < range.from || r.at >= range.to) continue;
     const spent = sumUsage(r.models);
     total = addUsage(total, spent);
-    turns++;
+    const turn = r.kind ? 0 : 1;
+    turns += turn;
     const s = sessions.get(r.id) ?? { key: r.id, label: r.name, role: r.role, usage: ZERO, turns: 0, models: [] };
     // Its latest name wins: a session renamed keeps one row.
     const latest = r.at >= (named.get(r.id) ?? 0);
     if (latest) named.set(r.id, r.at);
-    sessions.set(r.id, { ...s, ...(latest ? { label: r.name, role: r.role } : {}), usage: addUsage(s.usage, spent), turns: s.turns + 1 });
+    sessions.set(r.id, { ...s, ...(latest ? { label: r.name, role: r.role } : {}), usage: addUsage(s.usage, spent), turns: s.turns + turn });
     const costs = byModel.get(r.id) ?? new Map<string, number>();
     for (const [model, u] of Object.entries(r.models)) costs.set(model, (costs.get(model) ?? 0) + u.cost);
     byModel.set(r.id, costs);
