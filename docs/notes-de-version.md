@@ -16,6 +16,11 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Quand le fournisseur coupe un tour (surcharge, panne passagère), la session le reprend toute seule un peu plus tard, jusqu'à trois fois, au lieu de rester arrêtée en plein travail.
 
+### Modifié
+
+- En mode « Tout autoriser », une commande en plusieurs parties (un `cd` suivi d'une commande, un tube) passe sans carte quand seule une règle de confirmation du projet l'arrêtait. Si l'une de ses parties déclenche un contrôle de sécurité, la carte reste.
+- Quand l'un de tes hooks demande une confirmation, la carte s'affiche même en « Tout autoriser » : jusqu'ici, une règle de confirmation du projet sur la même commande la faisait passer sans te demander.
+
 ## 2026-11-17
 
 ### Ajouté

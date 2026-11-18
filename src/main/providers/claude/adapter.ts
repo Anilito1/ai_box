@@ -39,14 +39,24 @@ const WORKER_SKILL_LIST_CHARS = '8000';
  * Whether a permission request comes from a permissions.ask rule alone, from the fields the CLI sends (not all in the
  * SDK's types). `rule`: the rule decided. A compound command (a loop, a `$(…)`) the CLI cannot check part by part keeps
  * its own reason (`other`: "A variable in this command can't be checked") and names the rule in `matchedAskRule`; in
- * bypass mode that reason alone never asks. A safety check, a hook or a mix of reasons per subcommand
- * (`subcommandResults`, whose reasons are not sent) is not the rule alone.
+ * bypass mode that reason alone never asks. A shell command checked part by part (`subcommandResults`) names no rule;
+ * its wrapper has no text of its own, so a reason or a code there is the safety check of one of its parts (sdk.d.ts,
+ * SDKControlPermissionRequest.decision_reason), and without either only a rule on one of its parts still asks in
+ * bypass mode. A safety check, a hook or a question to the user is never the rule alone.
  */
-export function askedByRule(o: { decisionReasonType?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }): boolean {
+export function askedByRule(o: { tool?: string; decisionReasonType?: string; decisionReason?: string; decisionReasonCode?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }): boolean {
   if (o.requiresUserInteraction) return false;
   if (o.decisionReasonType === 'rule') return true;
+  if (o.decisionReasonType === 'subcommandResults') return /^(Bash|PowerShell)$/.test(o.tool ?? '') && !o.decisionReason && !o.decisionReasonCode;
   return o.matchedAskRule != null && (o.decisionReasonType === undefined || o.decisionReasonType === 'other');
 }
+
+/**
+ * A PreToolUse hook answered that a person must decide. When a permissions.ask rule matches the same call, the request
+ * that follows carries the rule's reason and nothing of the hook: only the hook's own output, on the stream, says it.
+ */
+export const hookAsks = (msg: { hook_event: string; stdout: string; output: string }): boolean =>
+  msg.hook_event === 'PreToolUse' && /"permissionDecision"\s*:\s*"ask"/.test(msg.stdout || msg.output);
 
 export const fullWindow = (model: string) => (/^claude-fable-\d/i.test(model) && !model.includes('[') ? `${model}[1m]` : model);
 
@@ -78,6 +88,11 @@ export class ClaudeProcess implements AgentProcess {
   readonly capabilities = PROVIDER_CAPABILITIES.claude;
   private policyState: EffectivePolicy;
   private conversationId: string;
+  /**
+   * A hook asked for a person during this turn. The request it belongs to is not named, so until the turn ends no
+   * request is answered for the user.
+   */
+  hookAsked = false;
 
   constructor(
     private readonly q: Query,
@@ -101,6 +116,8 @@ export class ClaudeProcess implements AgentProcess {
     for await (const msg of this.q) {
       // The CLI's heartbeat ticks every 30 s whatever the tool is doing: it says nothing about the work.
       if (msg.type !== 'tool_progress' || !msg.heartbeat) this.onSignal();
+      if (msg.type === 'system' && msg.subtype === 'hook_response' && hookAsks(msg)) this.hookAsked = true;
+      else if (msg.type === 'result') this.hookAsked = false;
       if (msg.type === 'system' && msg.subtype === 'init') {
         this.conversationId = msg.session_id;
         this.policyState = policyOf('claude', this.policySpec, msg.permissionMode);
@@ -226,13 +243,15 @@ export const claudeAdapter: ProviderAdapter = {
       // The hub's own tools by exact name: a project .mcp.json declaring another server named "hub" gets nothing.
       allowedTools: spec.tools.map((def) => `mcp__hub__${def.name}`),
       canUseTool: async (name, input, o): Promise<PermissionResult> => {
+        // The hook's output comes on the stream just before this request: read first, whatever the order they are handled in.
+        await new Promise((resolve) => setImmediate(resolve));
         const answer = await spec.onPermission({
           tool: name,
           input,
           reason: o.decisionReason ?? '',
           // "Always allow" persists the CLI's suggested rules; without suggestions it would silently be a one-time allow.
           canAlways: (o.suggestions?.length ?? 0) > 0,
-          byRule: askedByRule(o as { decisionReasonType?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }),
+          byRule: !proc?.hookAsked && askedByRule({ tool: name, ...(o as { decisionReasonType?: string; decisionReasonCode?: string; matchedAskRule?: unknown; requiresUserInteraction?: boolean }) }),
           signal: o.signal,
         });
         if (answer.behavior === 'deny') return { behavior: 'deny', message: answer.message };

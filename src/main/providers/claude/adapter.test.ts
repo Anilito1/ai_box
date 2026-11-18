@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import { askedByRule, ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
+import { askedByRule, hookAsks, ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
 
 test('a worker has no Workflow tool, unless it runs in Ultracode', () => {
   assert.ok(disallowedTools({ role: 'worker', readOnly: false, ultracode: false }).includes('Workflow'));
@@ -139,12 +139,50 @@ test('a command substitution whose only ask is a permissions.ask rule is the rul
   assert.equal(askedByRule({ matchedAskRule: askRule }), true);
 });
 
-test('a safety check, a hook, reasons per subcommand or a question to the user are not the rule alone', () => {
+test('a safety check, a hook or a question to the user are not the rule alone', () => {
   assert.equal(askedByRule({ decisionReasonType: 'safetyCheck', matchedAskRule: askRule }), false);
   assert.equal(askedByRule({ decisionReasonType: 'hook', matchedAskRule: askRule }), false);
-  // echo deploy a && echo x > .claude/settings.local.json: the reasons of each part are not sent
-  assert.equal(askedByRule({ decisionReasonType: 'subcommandResults' }), false);
   assert.equal(askedByRule({ decisionReasonType: 'other' }), false);
   assert.equal(askedByRule({ decisionReasonType: 'rule', requiresUserInteraction: true }), false);
   assert.equal(askedByRule({}), false);
+});
+
+// What Claude Code 2.1.308 sends in bypass mode, read from a real session with the ask rule Bash(echo deploy:*).
+test('a command checked part by part is the rule alone only when none of its parts carries a safety check', () => {
+  // cd . && echo deploy a | cat: no reason, no code, no rule named
+  assert.equal(askedByRule({ tool: 'Bash', decisionReasonType: 'subcommandResults' }), true);
+  assert.equal(askedByRule({ tool: 'PowerShell', decisionReasonType: 'subcommandResults' }), true);
+  // echo deploy a && echo x > .claude/settings.local.json: the reason is the warning of the part that writes there
+  assert.equal(askedByRule({ tool: 'Bash', decisionReasonType: 'subcommandResults', decisionReason: "Claude requested permissions to write to .claude/settings.local.json, but you haven't granted it yet." }), false);
+  // Reads outside the working folders are blocked: that check has a code and no text.
+  assert.equal(askedByRule({ tool: 'Bash', decisionReasonType: 'subcommandResults', decisionReasonCode: 'outside_reads_blocked' }), false);
+  assert.equal(askedByRule({ tool: 'Bash', decisionReasonType: 'subcommandResults', requiresUserInteraction: true }), false);
+  // Only a shell command is checked part by part.
+  assert.equal(askedByRule({ tool: 'Edit', decisionReasonType: 'subcommandResults' }), false);
+  assert.equal(askedByRule({ decisionReasonType: 'subcommandResults' }), false);
+});
+
+test('a hook that asks for a person is read from its output, and holds until the turn ends', async () => {
+  const ask = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'a person decides' } });
+  assert.equal(hookAsks({ hook_event: 'PreToolUse', stdout: ask, output: '' }), true);
+  assert.equal(hookAsks({ hook_event: 'PreToolUse', stdout: '', output: ask }), true);
+  assert.equal(hookAsks({ hook_event: 'PreToolUse', stdout: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'allow' } }), output: '' }), false);
+  assert.equal(hookAsks({ hook_event: 'PostToolUse', stdout: ask, output: '' }), false);
+  assert.equal(hookAsks({ hook_event: 'PreToolUse', stdout: '', output: '' }), false);
+
+  const seen: boolean[] = [];
+  const hook = (stdout: string) => ({ type: 'system', subtype: 'hook_response', hook_id: 'h', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: '', stdout, stderr: '', outcome: 'success' });
+  const q = (async function* () {
+    yield hook('');
+    yield hook(ask);
+    yield { type: 'system', subtype: 'status', status: null };
+    yield { type: 'result', subtype: 'success', is_error: false, result: '', total_cost_usd: 0, modelUsage: {} };
+    yield { type: 'system', subtype: 'status', status: null };
+  })() as unknown as Query;
+  // Each message signals before it is read: the flag seen is the one the messages before it left.
+  const held: { proc?: ClaudeProcess } = {};
+  const proc = (held.proc = new ClaudeProcess(q, 'conv', () => seen.push(held.proc?.hookAsked ?? false)));
+  for await (const _ of proc.events);
+  assert.deepEqual(seen, [false, false, true, true, false]);
+  assert.equal(proc.hookAsked, false, 'the end of the turn clears it');
 });
