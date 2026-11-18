@@ -39,6 +39,7 @@ import { projectDirName, projectsRoot, SubagentTails } from './subagentTail';
 import { ultracodeAccess, type UltracodeAccess } from '../shared/ultracode';
 import {
   capEffort,
+  escalate,
   freshStartDue,
   fromTemplate,
   needsFreshStart,
@@ -3860,6 +3861,7 @@ export class SessionManager extends EventEmitter {
             name: byName,
             message: z.string().describe(t('tool.message.message')),
             interrupt: z.boolean().nullish().describe(t('tool.message.interrupt')),
+            retry: z.boolean().nullish().describe(t('tool.message.retry')),
             model,
             effort,
             ultracode,
@@ -4022,7 +4024,8 @@ export class SessionManager extends EventEmitter {
     if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
     const over = this.overCap(post?.id ?? null);
     if (over) throw new Error(over);
-    const choice = this.choose(null, args, post, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
+    // An instance follows the grid, like an ad-hoc worker: the post's fixed model or effort only fills what the master leaves out.
+    const choice = this.choose(null, args, null, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
     const model = choice.model ?? (post?.model || cfg.worker.model);
     const effort = choice.effort ?? (post?.effort || cfg.worker.effort || null);
     const readOnly = !!args.read_only;
@@ -4062,7 +4065,7 @@ export class SessionManager extends EventEmitter {
     const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
     if (plan && byHub) this.install(s, plan);
     void this.launch(s, false, this.missionPrompt(s, made?.stale));
-    this.openMission(s, 'start', post?.model ? 'post' : args.model ? 'master' : 'auto');
+    this.openMission(s, 'start', choice.model ? 'master' : post?.model ? 'post' : 'auto');
 
     // Other workers of the same repo, in any of its checkouts: worth naming in the briefs.
     const repoKey = (dir: string) => (repoOf(dir)?.main ?? resolve(dir)).toLowerCase();
@@ -4111,6 +4114,7 @@ export class SessionManager extends EventEmitter {
     name: string;
     message: string;
     interrupt?: boolean | null;
+    retry?: boolean | null;
     model?: string | null;
     effort?: Effort | null;
     ultracode?: boolean | null;
@@ -4129,7 +4133,9 @@ export class SessionManager extends EventEmitter {
       const over = this.overCap(s.instanceOf);
       if (over) throw new Error(over);
     }
-    const choice = this.choose(s, args, undefined, accountId ?? undefined);
+    // A failed delivery sent back: one step up by rule, unless the master names its own choice. The user's stands.
+    const step = args.retry && !args.model && !args.effort ? escalate({ model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '' }, this.opts.cfg.workerModels, this.opts.cfg.workerMaxEffort) : null;
+    const choice = this.choose(s, step ? { model: step.switches ? step.model : null, effort: step.effort } : args, undefined, accountId ?? undefined);
     const wasClosed = !s.inbox;
     const wasWorking = !wasClosed && this.isWorking(s);
     // A permanent worker handed work while it had none starts a new mission: its card and list_workers show it, and
@@ -4138,7 +4144,7 @@ export class SessionManager extends EventEmitter {
     if (newMission) s.mission = message;
     if (choice.model && choice.model !== s.fixedModel) this.setModel(s.id, choice.model, false);
     if (choice.effort && choice.effort !== s.fixedEffort) this.setEffort(s.id, choice.effort, false);
-    this.openMission(s, newMission ? 'start' : 'follow', s.userModel ? 'user' : this.postOf(s)?.model ? 'post' : args.model ? 'master' : 'auto');
+    this.openMission(s, newMission ? 'start' : 'follow', s.userModel ? 'user' : !s.instanceOf && this.postOf(s)?.model ? 'post' : choice.model ? 'master' : 'auto', !!args.retry);
     let ultracodeNote = '';
     if (args.ultracode != null && args.ultracode !== s.ultracode) {
       ultracodeNote = s.userUltracode ? t('ultracode.locked', { name: s.name }) : this.setUltracode(s.id, args.ultracode, false);
@@ -4163,18 +4169,19 @@ export class SessionManager extends EventEmitter {
         ? t('message.interrupted', { name: s.name })
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
-    return [state, ...runs, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
+    const top = args.retry && !args.model && !args.effort && !step ? [t('retry.top', { name: s.name })] : [];
+    return [state, ...runs, ...top, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   /**
    * A mission handed to a worker: a new one (spawn_worker, or a post given work while it had none), or more work on its
    * current one, a relaunch. Logged for the cost panel, which adds up its turns.
    */
-  private openMission(s: Session, kind: MissionEvent['kind'], by: MissionEvent['by']): void {
+  private openMission(s: Session, kind: MissionEvent['kind'], by: MissionEvent['by'], retry = false): void {
     const current = kind === 'follow' ? this.missions.get(s.id) : undefined;
     const id = current?.id ?? `m-${randomUUID().slice(0, 8)}`;
     if (!current) this.missions.set(s.id, { id, tools: 0, errors: 0, since: 0 });
-    this.opts.costLog.mission?.({ at: Date.now(), mission: id, id: s.id, name: s.name, kind: current ? 'follow' : 'start', model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '', by });
+    this.opts.costLog.mission?.({ at: Date.now(), mission: id, id: s.id, name: s.name, kind: current ? 'follow' : 'start', model: s.fixedModel || s.model || '', effort: s.fixedEffort ?? s.effort ?? '', by, ...(retry ? { retry: true as const } : {}) });
   }
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
@@ -4190,7 +4197,7 @@ export class SessionManager extends EventEmitter {
   }
 
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
-  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
+  private choose(s: Session | null, requested: { model?: string | null; effort?: Effort | null }, post = s && !s.instanceOf ? this.postOf(s) : null, account = s ? this.accountOf(s) : DEFAULT_ACCOUNT) {
     const { cfg } = this.opts;
     const { allowed, model } = this.modelsFor(account, requested.model ?? '');
     if (requested.model) requested = { ...requested, model };

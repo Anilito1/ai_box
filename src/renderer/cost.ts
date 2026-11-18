@@ -187,6 +187,7 @@ class CostPanel {
       const by = t(`cost.by.${m.by}`);
       const facts = [`${m.model || '—'}${m.effort ? `/${m.effort}` : ''} · ${by}`];
       if (m.follows > 0) facts.push(tn('cost.follows', m.follows, { n: m.follows }));
+      if (m.retries > 0) facts.push(tn('cost.retries', m.retries, { n: m.retries }));
       if (m.errors > 0) facts.push(tn('cost.errors', m.errors, { n: m.errors }));
       if (m.ms > 0) facts.push(t('cost.minutes', { n: Math.max(1, Math.round(m.ms / 60_000)) }));
       li.append(h('span', 'cost-name', m.name.replace(/^hub-/, '')), h('span', 'cost-amount', fmtCost(m.cost)));

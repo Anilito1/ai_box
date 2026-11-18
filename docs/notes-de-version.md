@@ -10,6 +10,17 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-18
+
+### Ajouté
+
+- Quand une livraison échoue, le maître la renvoie au worker et le hub le fait monter d'un cran tout seul : l'effort d'abord, puis le modèle, jusqu'à Fable. Le panneau des coûts compte ces relances après un échec.
+
+### Modifié
+
+- Le maître délègue sur les modèles les plus puissants : tout ce qui écrit du code ou des fichiers part au moins en Opus, les gros chantiers en Fable, les recherches et les tests en Sonnet, les petits relevés en Haiku.
+- Les renforts d'un poste suivent ce choix, même quand le poste a un modèle fixé.
+
 ## 2026-11-17
 
 ### Ajouté

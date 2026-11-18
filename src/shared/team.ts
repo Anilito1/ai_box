@@ -235,30 +235,77 @@ export function resolveChoice(i: {
   return { model, effort, notes };
 }
 
-export type Tier = 'simple' | 'standard' | 'hard' | 'critical';
+/** The kinds of mission the user's grid names, from the most demanding to the lightest. */
+export type Mission = 'code' | 'heavy' | 'critical' | 'unknown' | 'design' | 'analysis' | 'research' | 'tests' | 'writing' | 'mechanical';
 export interface GridRow {
-  tier: Tier;
+  mission: Mission;
+  /** The least this mission runs with: the master may go higher, never lower. */
   model: string;
   effort: Effort;
-  /** Second choice for this tier, when another allowed model fits it too. */
+  /** The other choice the user named for it, and when (see the prompt). */
   alt: { model: string; effort: Effort } | null;
 }
 
-const prefer = (allowed: string[], order: string[]) => order.find((m) => allowed.includes(m)) ?? allowed[0] ?? '';
+const FAMILIES = ['haiku', 'sonnet', 'opus', 'fable'];
+/** "claude-sonnet-5-5" and "Sonnet" are the same family; '' for a model of another provider. */
+export const familyOf = (model: string) => FAMILIES.find((f) => model.toLowerCase().includes(f)) ?? '';
 
-/** The decision grid the master's prompt shows, fitted to the models the user allows and the effort ceiling. */
+/** The allowed model of a family as the settings spell it, its 1M variant first ("claude-fable-5-2[1m]"); '' if none. */
+function ofFamily(allowed: string[], family: string): string {
+  const all = allowed.filter((m) => familyOf(m) === family);
+  return all.find((m) => m.includes('[1m]')) ?? all[0] ?? '';
+}
+
+/**
+ * The user's grid (18/11), fitted to the models allowed and the effort ceiling: the strongest models most of the time,
+ * no saving that lowers quality. Anything that writes code, files, config or production runs on Opus at high at
+ * least; the heavy jobs on Fable; research, tests and writing on Sonnet at high; mechanical mini-tasks on Haiku.
+ * A family not allowed gives its place to the nearest one allowed, the stronger first.
+ */
 export function modelGrid(allowed: string[], maxEffort: Effort): GridRow[] {
   const cap = (e: Effort) => capEffort(e, maxEffort);
-  const strong = prefer(allowed, ['opus', 'fable', 'sonnet', 'haiku']);
-  const fast = prefer(allowed, ['sonnet', 'opus', 'fable', 'haiku']);
-  const row = (tier: Tier, model: string, effort: Effort, alt: GridRow['alt'] = null): GridRow => ({ tier, model, effort: cap(effort), alt });
-  const altOf = (model: string, effort: Effort) => (model && model !== fast ? { model, effort: cap(effort) } : null);
+  const [haiku, sonnet, opus, fable] = FAMILIES.map((f) => ofFamily(allowed, f));
+  const strong = opus || fable || sonnet || haiku || allowed[0] || '';
+  const mid = sonnet || strong;
+  const row = (mission: Mission, model: string, effort: Effort, alt: { model: string; effort: Effort } | null = null): GridRow => {
+    const other = alt && alt.model ? { model: alt.model, effort: cap(alt.effort) } : null;
+    return { mission, model, effort: cap(effort), alt: other && (other.model !== model || other.effort !== cap(effort)) ? other : null };
+  };
   return [
-    row('simple', fast, 'medium', { model: fast, effort: cap('low') }),
-    row('standard', fast, 'high', altOf(strong, 'medium')),
-    row('hard', strong, 'high'),
-    row('critical', strong, 'high'),
+    row('code', strong, 'high', { model: strong, effort: 'xhigh' }),
+    fable ? row('heavy', fable, 'high') : row('heavy', strong, 'xhigh'),
+    row('critical', strong, 'xhigh', { model: fable, effort: 'high' }),
+    row('unknown', strong, 'xhigh', { model: fable, effort: 'high' }),
+    row('design', strong, 'high'),
+    row('analysis', strong, 'high', { model: sonnet, effort: 'high' }),
+    row('research', mid, 'high', { model: haiku, effort: 'medium' }),
+    row('tests', mid, 'high', { model: strong, effort: 'high' }),
+    row('writing', mid, 'high', { model: strong, effort: 'high' }),
+    haiku ? row('mechanical', haiku, 'medium', { model: sonnet, effort: 'low' }) : row('mechanical', mid, 'low'),
   ];
+}
+
+export interface Step {
+  model: string;
+  effort: Effort;
+  /** The model changes: the conversation is reread without cache, a fresh one costs less past a small context. */
+  switches: boolean;
+}
+
+/**
+ * One step up after a failed delivery (red tests, a push that is not there, a wrong result). The effort first, up to
+ * high: the conversation keeps its cache. Then the next family allowed (Haiku, Sonnet, Opus, Fable), at the effort it
+ * had. Null when no step is left by rule: at the top, or on a model the grid does not rank (another provider's, or the
+ * usual one, unnamed).
+ */
+export function escalate(cur: { model: string; effort: Effort | '' }, allowed: string[], maxEffort: Effort): Step | null {
+  const high = capEffort('high', maxEffort);
+  const effort = cur.effort || 'medium';
+  if (rank(effort) < rank(high)) return { model: cur.model, effort: high, switches: false };
+  const from = FAMILIES.indexOf(familyOf(cur.model));
+  const next = from < 0 ? undefined : FAMILIES.slice(from + 1).map((f) => ofFamily(allowed, f)).find(Boolean);
+  if (!next) return null;
+  return { model: next, effort: capEffort(effort, maxEffort), switches: true };
 }
 
 // ---------- context of a worker ----------

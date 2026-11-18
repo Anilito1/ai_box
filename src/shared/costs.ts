@@ -53,6 +53,8 @@ export interface MissionEvent {
   model: string;
   effort: string;
   by: 'user' | 'post' | 'master' | 'auto';
+  /** A follow-up the master sent because the delivery before it had failed. */
+  retry?: true;
 }
 
 export const ZERO: Usage = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -134,7 +136,7 @@ export function decodeRecord(line: string): TurnRecord | null {
 
 const BY: MissionEvent['by'][] = ['user', 'post', 'master', 'auto'];
 
-export const encodeMission = (e: MissionEvent) => JSON.stringify({ t: e.at, mi: e.mission, id: e.id, n: e.name, k: e.kind, m: e.model, e: e.effort, by: e.by });
+export const encodeMission = (e: MissionEvent) => JSON.stringify({ t: e.at, mi: e.mission, id: e.id, n: e.name, k: e.kind, m: e.model, e: e.effort, by: e.by, ...(e.retry ? { rt: 1 } : {}) });
 
 /** A line written by encodeMission(), or null. */
 export function decodeMission(line: string): MissionEvent | null {
@@ -146,7 +148,7 @@ export function decodeMission(line: string): MissionEvent | null {
   }
   if (!o || typeof o.t !== 'number' || typeof o.mi !== 'string' || typeof o.id !== 'string' || typeof o.n !== 'string') return null;
   if ((o.k !== 'start' && o.k !== 'follow') || !BY.includes(o.by as MissionEvent['by'])) return null;
-  return { at: o.t, mission: o.mi, id: o.id, name: o.n, kind: o.k, model: String(o.m ?? ''), effort: String(o.e ?? ''), by: o.by as MissionEvent['by'] };
+  return { at: o.t, mission: o.mi, id: o.id, name: o.n, kind: o.k, model: String(o.m ?? ''), effort: String(o.e ?? ''), by: o.by as MissionEvent['by'], ...(o.rt === 1 ? { retry: true as const } : {}) };
 }
 
 /** One mission in the cost panel: who ran it, how, what it cost with its subagents, and how it went. */
@@ -158,8 +160,9 @@ export interface MissionRow {
   by: MissionEvent['by'];
   cost: number;
   turns: number;
-  /** More work sent after the first task. */
+  /** More work sent after the first task; `retries`: those sent because a delivery had failed. */
   follows: number;
+  retries: number;
   ms: number;
   tools: number;
   errors: number;
@@ -170,8 +173,9 @@ export interface MissionRow {
 export function missionRows(records: TurnRecord[], events: MissionEvent[]): MissionRow[] {
   const rows = new Map<string, MissionRow>();
   for (const e of [...events].sort((a, b) => a.at - b.at)) {
-    const row = rows.get(e.mission) ?? { mission: e.mission, name: e.name, model: e.model, effort: e.effort, by: e.by, cost: 0, turns: 0, follows: 0, ms: 0, tools: 0, errors: 0, lastAt: e.at };
+    const row = rows.get(e.mission) ?? { mission: e.mission, name: e.name, model: e.model, effort: e.effort, by: e.by, cost: 0, turns: 0, follows: 0, retries: 0, ms: 0, tools: 0, errors: 0, lastAt: e.at };
     if (e.kind === 'follow') row.follows++;
+    if (e.retry) row.retries++;
     if (e.model) row.model = e.model;
     if (e.effort) row.effort = e.effort;
     rows.set(e.mission, row);

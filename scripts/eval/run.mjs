@@ -5,10 +5,11 @@
 //   npm run eval -- --runs 1 --only S1,S6 --ref none
 //   npm run eval -- --judge             adds a Sonnet reading of each worker brief (completeness, 0-5)
 //   npm run eval -- --baseline <file>   compares with the saved results of an earlier run instead of running the ref
+//   npm run eval -- --master-model claude-sonnet-5-5 --master-effort medium   the master on another model or effort
 //
 // Exit code 1 when a scenario passes fewer runs than on the reference. Costs a few dollars of plan usage per pass.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -22,11 +23,12 @@ const refName = arg('ref', 'origin/main');
 const parallel = Number(arg('parallel', 3));
 const judge = process.argv.includes('--judge');
 const baselineFile = arg('baseline', '');
+const master = { model: arg('master-model', undefined), effort: arg('master-effort', undefined) };
 const outDir = resolve(arg('out', join(process.env.AIBOX_SCRATCH_DIR ?? os.tmpdir(), 'eval')));
 mkdirSync(outDir, { recursive: true });
 
 const { roster, scenarios: all } = JSON.parse(readFileSync(join(root, 'scripts', 'eval', 'scenarios.json'), 'utf8'));
-const scenarios = all.filter((s) => !only || only.includes(s.id)).map((s) => ({ ...s, posts: [...roster.posts, ...(s.posts ?? [])], workers: s.workers ?? roster.workers, repos: roster.repos }));
+const scenarios = all.filter((s) => !only || only.includes(s.id)).map((s) => ({ ...s, posts: [...roster.posts, ...(s.posts ?? [])], workers: s.workers ?? roster.workers, repos: roster.repos, models: s.models ?? roster.models }));
 
 /** harness.ts bundled against the sources of `srcRoot` (the current tree, or a worktree of the reference). */
 async function bundle(srcRoot, tag) {
@@ -54,7 +56,8 @@ async function bundle(srcRoot, tag) {
 const short = (name) => name.replace(/^mcp__hub__/, '');
 const re = (s) => new RegExp(s, 'i');
 const callsOf = (r, tools) => r.calls.filter((c) => new RegExp(`^(${tools})$`).test(short(c.tool)));
-const fits = (c, input) => Object.entries(input ?? {}).every(([k, v]) => re(v).test(String(c.input[k] ?? '')));
+/** `input`: a pattern per field, or a list of such sets when several ways of calling are right. */
+const fits = (c, input) => (Array.isArray(input) ? input.some((alt) => fits(c, alt)) : Object.entries(input ?? {}).every(([k, v]) => re(v).test(String(c.input[k] ?? ''))));
 const bashLike = (c) => String(c.input.command ?? c.input.cmd ?? '');
 
 /** Responses whose only tool call is topic: a whole request spent on filing. */
@@ -76,6 +79,7 @@ function check(sc, r) {
     const names = new Set(callsOf(r, e.distinctTargets.tool).map((c) => String(c.input.name ?? c.input.mission ?? '').slice(0, 40)));
     if (names.size < e.distinctTargets.min) failed.push(`${names.size} target(s) < ${e.distinctTargets.min}`);
   }
+  if (e.maxCalls && callsOf(r, e.maxCalls.tool).length > e.maxCalls.max) failed.push(`${callsOf(r, e.maxCalls.tool).length} ${e.maxCalls.tool} > ${e.maxCalls.max}`);
   if (e.text && !re(e.text).test(r.text)) failed.push(`text !~ ${e.text}`);
   if (e.maxRequests && r.requests.length > e.maxRequests) failed.push(`${r.requests.length} requests > ${e.maxRequests}`);
   if (e.topicNeverAlone && topicAlone(r) > 0) failed.push(`${topicAlone(r)} response(s) with topic alone`);
@@ -109,13 +113,15 @@ async function evaluate(h, tag) {
   const results = [];
   let at = 0;
   const worker = async () => {
+    // One folder per lane: its runs follow each other and share the cached prefix.
+    const dir = mkdtempSync(join(os.tmpdir(), 'hub-eval-lane-'));
     while (at < jobs.length) {
       const { sc, i } = jobs[at++];
       const t0 = Date.now();
-      const r = await h.runScenario(sc, { lang: 'fr' });
+      const r = await h.runScenario(sc, { lang: 'fr', dir, ...master });
       const failed = check(sc, r);
       const briefs = judge ? await Promise.all(callsOf(r, 'spawn_worker').map((c) => scoreBrief(String(c.input.mission ?? '')))) : [];
-      results.push({ id: sc.id, run: i, ok: failed.length === 0, failed, requests: r.requests.length, prefix: r.prefix, topicAlone: topicAlone(r), cost: r.costUsd, ms: Date.now() - t0, briefs, calls: r.calls.map((c) => `${short(c.tool)}${c.refused ? '(refused)' : ''}`), inputs: r.calls.map((c) => JSON.stringify(c.input).slice(0, 300)), text: r.text.slice(-1500) });
+      results.push({ id: sc.id, run: i, ok: failed.length === 0, failed, requests: r.requests.length, prefix: r.prefix, topicAlone: topicAlone(r), cost: r.costUsd, ms: Date.now() - t0, briefs, calls: r.calls.map((c) => `${short(c.tool)}${c.refused ? '(refused)' : ''}`), inputs: r.calls.map((c) => JSON.stringify(Object.fromEntries(Object.entries(c.input).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}…` : v]))).slice(0, 600)), text: r.text.slice(-1500) });
       process.stdout.write(`${tag} ${sc.id}#${i + 1} ${failed.length ? `FAIL ${failed.join(' | ').slice(0, 160)}` : 'ok'}\n`);
     }
   };

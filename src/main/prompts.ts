@@ -4,7 +4,7 @@ import { APP_NAME } from '../shared/brand';
 import { clientDataRule, type ClientDataVariant } from '../shared/clientData';
 import type { Lang } from '../shared/i18n';
 import { refName } from '../shared/groups';
-import { modelGrid, sessionNameOf, type Tier } from '../shared/team';
+import { modelGrid, sessionNameOf, type Mission } from '../shared/team';
 import type { TeamGroup, TeamRole } from '../shared/types';
 import { masterCwd, type HubConfig } from './config';
 import { lang } from './i18n';
@@ -159,29 +159,41 @@ export function rosterBlock(cfg: HubConfig, l: Lang = lang()): string {
   return `<hub-roster>\n${head}\n${teamText(cfg, l)}${groups ? `\n${groups}` : ''}\n${allowedText(cfg, l)}\n</hub-roster>`;
 }
 
-const TIERS: Record<Lang, Record<Tier, { name: string; what: string; alt: string }>> = {
+const MISSIONS: Record<Lang, Record<Mission, { name: string; what: string; alt: string }>> = {
   fr: {
-    simple: { name: 'Simple', what: "collecte d'infos, veille, recherche web, analyse, audit de lecture hors sécurité, rapport, monitoring, export de données ; code simple entièrement spécifié (renommage, bump, formatage, petit correctif)", alt: "si c'est mécanique" },
-    standard: { name: 'Standard', what: 'feature ou correctif clair dans une zone connue, quelques fichiers, tests en place', alt: 'si le code est inconnu ou délicat' },
-    hard: { name: 'Difficile', what: 'débogage à cause inconnue, refonte sur plusieurs modules, migration, concurrence, performance', alt: '' },
-    critical: { name: 'Critique', what: 'sécurité (auth, secrets, RLS, paiement, audit sécu), données de prod, incident en prod, architecture', alt: '' },
+    code: { name: 'Code et fichiers', what: "écrit, modifie ou supprime du code, des fichiers, de la config, une migration, du SQL d'écriture, un deploy, un commit ; petit correctif compris", alt: 'pour du difficile' },
+    heavy: { name: 'Gros chantier', what: 'refonte, plusieurs modules ou repos, longue autonomie, code lourd, 3D et effets, architecture, enquête sur plusieurs systèmes', alt: '' },
+    critical: { name: 'Sécurité et prod', what: "sécurité, prod, données de prod, migration irréversible, argent, incident", alt: "si c'est aussi un gros chantier" },
+    unknown: { name: 'Cause inconnue', what: 'bug dont la cause est inconnue, performance, concurrence', alt: 'si ça couvre plusieurs systèmes' },
+    design: { name: 'UI et conception', what: 'UI et design, conception technique', alt: '' },
+    analysis: { name: 'Analyse', what: "analyse de code ou d'infra, audit, revue de code", alt: "seulement pour une analyse de données simple ou un rapport sur un seul sujet" },
+    research: { name: 'Recherche', what: "recherche web, veille, collecte d'informations, lecture de docs", alt: 'pour une mini-collecte ou un relevé mécanique' },
+    tests: { name: 'Tests', what: 'écrire, exécuter, vérifier des tests, QA', alt: 'si la mission corrige aussi du code' },
+    writing: { name: 'Rédaction', what: 'documents et rapports standards', alt: "si c'est long ou complexe" },
+    mechanical: { name: 'Mini-tâche mécanique', what: 'relevé, export, formatage ou renommage simple, sans toucher au code', alt: 'si elle demande un peu de jugement' },
   },
   en: {
-    simple: { name: 'Simple', what: 'gathering information, monitoring, web research, analysis, read-only audit outside security, reports, data exports; simple, fully specified code (renaming, bump, formatting, small fix)', alt: 'when it is mechanical' },
-    standard: { name: 'Standard', what: 'a clear feature or fix in a known area, a few files, tests in place', alt: 'when the code is unfamiliar or delicate' },
-    hard: { name: 'Hard', what: 'debugging an unknown cause, a refactor across modules, a migration, concurrency, performance', alt: '' },
-    critical: { name: 'Critical', what: 'security (auth, secrets, RLS, payments, security audit), production data, a production incident, architecture', alt: '' },
+    code: { name: 'Code and files', what: 'writes, changes or deletes code, files, config, a migration, writing SQL, a deploy, a commit; a small fix included', alt: 'for hard work' },
+    heavy: { name: 'Heavy job', what: 'a refactor, several modules or repos, long autonomous work, heavy code, 3D and effects, architecture, an investigation across systems', alt: '' },
+    critical: { name: 'Security and production', what: 'security, production, production data, an irreversible migration, money, an incident', alt: 'when it is also a heavy job' },
+    unknown: { name: 'Unknown cause', what: 'a bug whose cause is unknown, performance, concurrency', alt: 'when it spans several systems' },
+    design: { name: 'UI and design', what: 'UI and design, technical design', alt: '' },
+    analysis: { name: 'Analysis', what: 'code or infrastructure analysis, audit, code review', alt: 'only for a simple data analysis or a report on a single subject' },
+    research: { name: 'Research', what: 'web research, monitoring, gathering information, reading docs', alt: 'for a small gathering or a mechanical reading' },
+    tests: { name: 'Tests', what: 'writing, running, checking tests, QA', alt: 'when the mission also fixes code' },
+    writing: { name: 'Writing', what: 'standard documents and reports', alt: 'when it is long or complex' },
+    mechanical: { name: 'Mechanical mini-task', what: 'a reading, an export, simple formatting or renaming, without touching code', alt: 'when it needs some judgment' },
   },
 };
 
-/** The decision grid: the model and effort of each level, fitted to what the user allows. */
+/** The user's grid: the least model and effort of each kind of mission, fitted to what the user allows. */
 function gridText(cfg: HubConfig, l: Lang): string {
   const fr = l === 'fr';
   return modelGrid(cfg.workerModels, cfg.workerMaxEffort)
     .map((row) => {
-      const tier = TIERS[l][row.tier];
-      const alt = row.alt ? (fr ? ` ; ou \`${row.alt.model}\` · \`${row.alt.effort}\` ${tier.alt}` : `; or \`${row.alt.model}\` · \`${row.alt.effort}\` ${tier.alt}`) : '';
-      return `- ${tier.name} (${tier.what}) → \`${row.model}\` · \`${row.effort}\`${alt}`;
+      const m = MISSIONS[l][row.mission];
+      const alt = row.alt ? (fr ? ` ; ou \`${row.alt.model}\` · \`${row.alt.effort}\` ${m.alt}` : `; or \`${row.alt.model}\` · \`${row.alt.effort}\` ${m.alt}`) : '';
+      return `- ${m.name} (${m.what}) → \`${row.model}\` · \`${row.effort}\`${alt}`;
     })
     .join('\n');
 }
@@ -228,65 +240,49 @@ function parallelSection(cfg: HubConfig, l: Lang): string {
   const { perPost, maxWorkers } = cfg.parallel;
   if (l === 'fr') {
     return `## Travail en parallèle (instances d'un poste)
-Une mission qui se découpe en chantiers vraiment indépendants peut aller à plusieurs instances d'un même poste en même temps : \`spawn_worker\` avec \`role: "<poste>"\` lance une instance de plus (mêmes consignes, dossiers et règle de modèle), dans son propre worktree (branche \`<poste>/<sujet>\` depuis origin/main, dossier voisin du repo). Jusqu'à ${perPost} instances par poste, celle du poste comprise ; ${maxWorkers} workers actifs en tout.
-- Parallélise seulement si les chantiers touchent des fichiers ou des modules disjoints et valent chacun au moins un quart d'heure de travail. Pas pour une petite tâche, ni pour des chantiers qui modifient les mêmes fichiers, ni quand l'un a besoin du résultat ou du contexte de l'autre : enchaîne-les avec le même worker.
+Une mission qui se découpe en chantiers vraiment indépendants peut aller à plusieurs instances d'un même poste en même temps : \`spawn_worker\` avec \`role: "<poste>"\` lance une instance de plus (mêmes consignes et dossiers), dans son propre worktree (branche \`<poste>/<sujet>\` depuis origin/main, dossier voisin du repo). Jusqu'à ${perPost} instances par poste, celle du poste comprise ; ${maxWorkers} workers actifs en tout.
+- Parallélise quand les chantiers touchent des fichiers ou des modules disjoints et valent chacun au moins une demi-heure de travail : chaque worker de plus paie son démarrage, sa propre lecture du code et tes tours pour le suivre. Les places ne manquent pas : ce qui limite, c'est le couplage entre chantiers. La lecture et la recherche se partagent bien ; le code couplé, mal. Pas pour une petite tâche, ni pour des chantiers qui modifient les mêmes fichiers, ni quand l'un a besoin du résultat ou du contexte de l'autre : enchaîne-les avec le même worker.
 - Le worker du poste prend le premier chantier (il connaît le code : \`message_worker\`), chaque instance un autre. Nomme l'instance d'après son chantier (\`name: "agenda-api"\` → \`hub-<poste>-agenda-api\`).
 - Chaque brief donne : le chantier et son périmètre de fichiers (ceux qu'il possède, ceux qu'il ne touche pas), le contrat commun (interface, types, schéma) écrit à l'identique dans chaque brief, le nom des autres instances, et l'ordre de merge (qui merge dans main en premier ; les suivants rebasent dessus avant de pousser). Un changement de contrat passe d'abord par toi.
-- Modèle et effort : évalue chaque chantier pour lui-même avec la grille ci-dessous ; une instance garde le modèle ou l'effort fixé de son poste.
+- Modèle et effort : évalue chaque chantier pour lui-même avec la grille ci-dessous et passe-les à chaque instance, même quand son poste a un modèle ou un effort fixé (sans eux, elle prend ceux du poste).
 - Avant de conclure : vérifie que les rapports concordent (contrat, ordre de merge, tests sur le résultat mergé), sinon fais-les s'aligner. Ferme chaque instance dès qu'elle a livré : le hub supprime son worktree si rien ne serait perdu, sinon il le garde et te dit pourquoi.`;
   }
   return `## Parallel work (instances of a post)
-A mission that splits into truly independent jobs can go to several instances of the same post at once: \`spawn_worker\` with \`role: "<post>"\` starts one more instance (same instructions, folders and model rule), in its own worktree (branch \`<post>/<topic>\` from origin/main, folder next to the repo). Up to ${perPost} instances per post, the post's own included; ${maxWorkers} workers running in all.
-- Parallelize only when the jobs touch disjoint files or modules and each is worth at least a quarter of an hour of work. Not for a small task, nor for jobs that change the same files, nor when one needs the other's result or context: chain them with the same worker.
+A mission that splits into truly independent jobs can go to several instances of the same post at once: \`spawn_worker\` with \`role: "<post>"\` starts one more instance (same instructions and folders), in its own worktree (branch \`<post>/<topic>\` from origin/main, folder next to the repo). Up to ${perPost} instances per post, the post's own included; ${maxWorkers} workers running in all.
+- Parallelize when the jobs touch disjoint files or modules and each is worth at least half an hour of work: every extra worker pays for its start, its own reading of the code and your turns to follow it. Places are not short: what limits is the coupling between jobs. Reading and research split well; coupled code does not. Not for a small task, nor for jobs that change the same files, nor when one needs the other's result or context: chain them with the same worker.
 - The post's own worker takes the first job (it knows the code: \`message_worker\`), each instance another one. Name the instance after its job (\`name: "agenda-api"\` → \`hub-<post>-agenda-api\`).
 - Each brief gives: the job and its file scope (the files it owns, those it does not touch), the shared contract (interface, types, schema) written the same way in every brief, the names of the other instances, and the merge order (who merges into main first; the next ones rebase on it before pushing). A contract change goes through you first.
-- Model and effort: rate each job on its own with the grid below; an instance keeps its post's fixed model or effort.
+- Model and effort: rate each job on its own with the grid below and pass them to each instance, even when its post has a fixed model or effort (without them, it takes the post's).
 - Before concluding: check that the reports agree (contract, merge order, tests on the merged result), otherwise have them align. Close each instance as soon as it has delivered: the hub removes its worktree if nothing would be lost, otherwise keeps it and tells you why.`;
 }
 
 function modelsSection(cfg: HubConfig, l: Lang): string {
   if (l === 'fr') {
     return `## Modèles et effort
-Tu choisis le modèle et l'effort de chaque mission (ponctuel, ou permanent en auto) : une qualité suffisante au coût le plus bas. Évalue six critères ; le plus exigeant fixe le niveau.
-- Ambiguïté : spec complète → simple ; quelques choix évidents → standard ; spec à préciser, plusieurs pistes → difficile ; décision d'architecture ou de produit → critique.
-- Étendue : 1-2 fichiers → simple ; une dizaine de fichiers d'un module → standard ; plusieurs modules → difficile ; plusieurs repos ou refonte → critique.
-- Risque prod : aucun (local, lecture) → simple ; réversible et testé → standard ; prod touchée, migration réversible → difficile ; données de prod, migration irréversible, argent → critique.
-- Sécurité : rien → simple ; entrées externes, permissions → difficile ; auth, secrets, RLS, crypto, paiement → critique.
-- Raisonnement : mécanique → simple ; logique connue → standard ; cause inconnue, concurrence, performance → difficile ; conception, enquête sur plusieurs systèmes → critique.
-- Durée : moins de 10 min → simple ; moins de 30 min → standard ; 30 min à 2 h → difficile ; plus de 2 h en autonomie → critique.
-Niveau → modèle · effort :
+Tu tries et tu délègues : tu ne codes pas. L'utilisateur veut les modèles les plus puissants la plupart du temps, son abonnement est fait pour : aucune économie qui dégrade la qualité. La grille donne le minimum de chaque mission : tu peux monter, jamais descendre.
 ${gridText(cfg, l)}
+- Dans le doute entre deux niveaux, le plus haut.
+- Une mission qui relève de plusieurs lignes prend la plus exigeante : recherche puis modification, c'est du code ; du code sur un gros chantier (longue autonomie, des dizaines de fichiers), c'est un gros chantier.
+- Une mission qui écrit du code ne descend jamais sous Opus · high, même petite. Ne choisis jamais un modèle plus faible pour économiser sur du travail qui touche au code ou à la prod.
 - Ponctuel : passe \`model\` et \`effort\` à \`spawn_worker\`. Permanent en auto : passe-les à \`message_worker\` avec la mission ; sans eux, il garde ceux de sa mission précédente.
-- Monte d'un niveau pour un risque prod ou sécurité réel, pas par simple prudence ; sinon prends le plus bas qui convient.
-- Analyse, audit en lecture, rapport : Sonnet · high, même long ; Opus seulement s'il couvre plusieurs repos ou touche la sécurité.
-- Fable : seulement quand l'utilisateur le demande pour cette mission.
-- Effort par défaut : medium. high est réservé au code standard ou difficile et à la sécurité.
-- Poste en auto : Sonnet · high pour l'analyse, les rapports et le code courant ; Opus pour la conception, la sécurité critique et l'UI.
-- Annonce ton choix en une ligne quand tu délègues, ex. « → backend · opus / high : cause inconnue, prod touchée ».
-- Un worker qui patine (deux échecs, boucle, rapport faible) : envoie-lui la suite un niveau plus haut. Suite simple d'une mission difficile : redescends.
-- Changer de modèle fait relire toute sa conversation sans cache ; changer d'effort, non. Sur un worker au contexte déjà grand, garde son modèle et ajuste l'effort.
+- Un poste à modèle fixé garde son modèle pour son propre travail ; ses renforts et les ponctuels suivent la grille.
+- Annonce ton choix en une ligne quand tu délègues, ex. « → backend · opus / xhigh : cause inconnue, prod touchée ».
+- Livraison échouée (tests rouges, push absent, résultat faux, boucle) : renvoie-la au worker avec \`retry: true\`, sans \`model\` ni \`effort\` ; le hub le monte d'un cran à partir du niveau choisi, l'effort d'abord, puis le modèle, jusqu'à Fable. Jamais de retour en arrière.
+- Changer de modèle fait relire toute sa conversation sans cache ; changer d'effort, non. Une suite qui demande un niveau plus haut le prend quand même.
 - Le choix de l'utilisateur prime : un modèle ou un effort fixé sur un poste, ou choisi à la main sur un worker, est gardé ; le hub te le dit.
 - ${allowedText(cfg, l)}`;
   }
   return `## Models and effort
-You pick the model and effort of each mission (ad-hoc worker, or permanent one in auto): good enough quality at the lowest cost. Rate six criteria; the most demanding one sets the level.
-- Ambiguity: complete spec → simple; a few obvious choices → standard; spec to clarify, several leads → hard; architecture or product decision → critical.
-- Scope: 1-2 files → simple; about ten files of one module → standard; several modules → hard; several repos or a rewrite → critical.
-- Production risk: none (local, read-only) → simple; reversible and tested → standard; production touched, reversible migration → hard; production data, irreversible migration, money → critical.
-- Security: nothing → simple; external input, permissions → hard; auth, secrets, RLS, crypto, payments → critical.
-- Reasoning: mechanical → simple; known logic → standard; unknown cause, concurrency, performance → hard; design, investigation across systems → critical.
-- Duration: under 10 min → simple; under 30 min → standard; 30 min to 2 h → hard; over 2 h of autonomous work → critical.
-Level → model · effort:
+You sort and delegate: you do not code. The user wants the strongest models most of the time, their plan is made for it: no saving that lowers quality. The grid gives the least each mission runs with: you may go higher, never lower.
 ${gridText(cfg, l)}
+- In doubt between two levels, the higher one.
+- A mission that fits several lines takes the most demanding one: research then changes is code; code on a heavy job (long autonomous work, dozens of files) is a heavy job.
+- A mission that writes code never goes below Opus · high, however small. Never pick a weaker model to save on work that touches code or production.
 - Ad-hoc worker: pass \`model\` and \`effort\` to \`spawn_worker\`. Permanent worker in auto: pass them to \`message_worker\` with the mission; without them, it keeps those of its previous mission.
-- Go one level up for a real production or security risk, not out of mere caution; otherwise take the lowest level that fits.
-- Analysis, read-only audit, report: Sonnet · high, even a long one; Opus only when it spans several repos or touches security.
-- Fable: only when the user asks for it for that mission.
-- Default effort: medium. high is reserved for standard or hard code and for security.
-- Post in auto: Sonnet · high for analysis, reports and routine code; Opus for design, critical security and UI.
-- Announce your choice in one line when you delegate, e.g. "→ backend · opus / high: unknown cause, production touched".
-- A worker that struggles (two failures, a loop, a weak report): send it the follow-up one level higher. A simple follow-up of a hard mission: go back down.
-- Changing a model makes its whole conversation reread without cache; changing effort does not. On a worker whose context is already large, keep its model and adjust the effort.
+- A post with a fixed model keeps it for its own work; its extra instances and the ad-hoc workers follow the grid.
+- Announce your choice in one line when you delegate, e.g. "→ backend · opus / xhigh: unknown cause, production touched".
+- A failed delivery (red tests, a push that is not there, a wrong result, a loop): send it back to the worker with \`retry: true\`, without \`model\` or \`effort\`; the hub moves it one step up from the level picked, effort first, then the model, up to Fable. Never back down.
+- Changing a model makes its whole conversation reread without cache; changing effort does not. A follow-up that needs a higher level takes it all the same.
 - The user's choice comes first: a model or effort set on a post, or picked by hand on a worker, is kept; the hub tells you.
 - ${allowedText(cfg, l)}`;
 }
@@ -455,6 +451,7 @@ Chaque sortie d'outil est relue à tous les tours suivants.
 - Sorties bornées : \`head\`/\`tail\`, \`head_limit\` sur Grep, Read avec offset/limit sur un gros fichier, \`LIMIT\` en SQL. Jamais de relecture complète d'un fichier déjà lu.
 - Pas de \`sleep\` ni de boucle de polling : une tâche de fond, puis sa notification.
 - Audit ou revue : des sous-agents \`Agent\` à contexte neuf, brief ciblé, un seul modèle (Sonnet sauf besoin réel).
+- Relevé mécanique (liste, comptage, recherche dans le code ou les logs) : un sous-agent \`Agent\` avec \`model: "haiku"\` et \`run_in_background: false\`, la forme de la réponse imposée ; seule sa réponse reste dans ton contexte.
 
 ## Coordination avec les autres workers
 - \`list_workers\` (outil hub) montre qui fait quoi, dans quel dossier.
@@ -481,6 +478,7 @@ Every tool output is read again on every later turn.
 - Bounded outputs: \`head\`/\`tail\`, \`head_limit\` on Grep, Read with offset/limit on a large file, \`LIMIT\` in SQL. Never read a file you already read in full again.
 - No \`sleep\` and no polling loop: a background task, then its notification.
 - Audit or review: \`Agent\` subagents with a fresh context, a focused brief, a single model (Sonnet unless truly needed).
+- Mechanical reading (a list, a count, a search in the code or the logs): an \`Agent\` subagent with \`model: "haiku"\` and \`run_in_background: false\`, the shape of the answer imposed; only its answer stays in your context.
 
 ## Coordination with the other workers
 - \`list_workers\` (hub tool) shows who does what, in which folder.
