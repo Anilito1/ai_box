@@ -248,9 +248,22 @@ export interface AdapterContext {
   remote?: RemoteLaunch;
 }
 
+/** What a keep-alive cost: the tokens it read from the cache, those it wrote, its reply. */
+export interface KeepAliveResult {
+  read: number;
+  written: number;
+  output: number;
+}
+
 export interface ProviderAdapter {
   readonly harness: HarnessId;
   start(spec: LaunchSpec): AgentProcess;
+  /**
+   * Reads the conversation's prompt cache again so that it lives another hour, without adding anything to the
+   * conversation (src/shared/keepAlive.ts). `spec` is the session's last launch; its input and callbacks are not used.
+   * `signal` ends its process early (the hub quits).
+   */
+  keepAlive?(spec: LaunchSpec, signal: AbortSignal): Promise<KeepAliveResult>;
   /** The conversation is still stored (can be resumed); an unreadable check says yes rather than lose the link. */
   hasConversation(id: string, cwd: string, ctx: AdapterContext): Promise<boolean>;
   /** The stored conversation, oldest first; throws when it cannot be read. */

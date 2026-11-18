@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
-import { askedByRule, ClaudeProcess, disallowedTools, fullWindow, launchSettings } from './adapter';
+import type { LaunchSpec } from '../types';
+import { askedByRule, ClaudeProcess, disallowedTools, fullWindow, keepAliveOptions, launchSettings } from './adapter';
 
 test('a worker has no Workflow tool, unless it runs in Ultracode', () => {
   assert.ok(disallowedTools({ role: 'worker', readOnly: false, ultracode: false }).includes('Workflow'));
@@ -147,4 +148,30 @@ test('a safety check, a hook, reasons per subcommand or a question to the user a
   assert.equal(askedByRule({ decisionReasonType: 'other' }), false);
   assert.equal(askedByRule({ decisionReasonType: 'rule', requiresUserInteraction: true }), false);
   assert.equal(askedByRule({}), false);
+});
+
+test('a keep-alive reads the session as it was launched, on a fork that leaves no file and runs no tool', async () => {
+  const spec = {
+    role: 'worker', name: 'hub-x', cwd: '/repo', extraDirs: ['/extra'], readDirs: [], readOnly: false, model: 'claude-fable-5-2', effort: 'high', ultracode: false,
+    mode: 'bypassPermissions', instructions: 'hub rules', stableInstructions: true, mcp: null, executable: '', env: { A: '1' }, conversation: { id: 'c-1', resume: true },
+    tools: [{ name: 'message_master', description: 'Writes to the master.', shape: {}, handler: async () => { throw new Error('a keep-alive ran a hub tool'); } }],
+    input: (async function* () {})(), onSignal: () => undefined, onPermission: async () => ({ behavior: 'allow' }), onElicitation: async () => ({ action: 'decline' }),
+  } as unknown as LaunchSpec;
+  const o = keepAliveOptions(spec, new AbortController());
+  // What the cache is keyed on: the same as the launch.
+  assert.equal(o.model, 'claude-fable-5-2[1m]');
+  assert.equal(o.effort, 'high');
+  assert.deepEqual(o.systemPrompt, { type: 'preset', preset: 'claude_code', append: 'hub rules', snapshot: false });
+  assert.deepEqual(o.disallowedTools, disallowedTools(spec));
+  assert.deepEqual(o.settings, launchSettings(spec));
+  assert.equal((o.env as Record<string, string>).A, '1');
+  // The conversation itself gains nothing.
+  assert.deepEqual([o.resume, o.forkSession, o.persistSession, o.maxTurns], ['c-1', true, false, 1]);
+  // Not under the session's name: a second process of that name would take its peers' messages.
+  assert.equal(o.extraArgs, undefined);
+  assert.equal(o.permissionMode, undefined);
+  const denied = await o.canUseTool!('Bash', {}, { signal: new AbortController().signal } as never);
+  assert.equal(denied?.behavior, 'deny');
+  const hook = await o.hooks!.PreToolUse![0].hooks[0]({} as never, undefined, { signal: new AbortController().signal });
+  assert.equal((hook as { hookSpecificOutput: { permissionDecision: string } }).hookSpecificOutput.permissionDecision, 'deny');
 });
