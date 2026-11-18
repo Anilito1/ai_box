@@ -1,0 +1,14 @@
+[
+  { "id": "T1", "commit": "ae799ec", "tests": ["src/main/costLog.test.ts"] },
+  { "id": "T2", "commit": "d43bdbe", "tests": ["src/main/providers/claude/adapter.test.ts"] },
+  { "id": "T3", "commit": "1deddc2", "tests": ["src/main/providers/claude/adapter.test.ts"] },
+  { "id": "T4", "commit": "e33fd14", "tests": ["src/main/providers/claude/cli.test.ts"] },
+  { "id": "T5", "commit": "b35473b", "tests": ["src/main/pushCheck.test.ts", "src/shared/pushCheck.test.ts"] },
+  { "id": "T6", "commit": "1b81c88", "tests": ["src/main/groups.test.ts"] },
+  { "id": "T7", "commit": "741fc2c", "tests": ["src/shared/usage.test.ts"] },
+  { "id": "T8", "commit": "e1769d1", "tests": ["src/main/hookFailures.test.ts", "src/main/providers/claude/events.test.ts"] },
+  { "id": "T9", "commit": "07c4637", "tests": ["src/shared/usage.test.ts"] },
+  { "id": "T10", "commit": "6f1d35e", "tests": ["src/main/providers/inbox.test.ts", "src/main/sessionResilience.test.ts"] },
+  { "id": "T11", "commit": "b0a2c27", "tests": ["src/main/askRules.test.ts"] },
+  { "id": "T12", "commit": "4b66fae", "tests": ["src/main/topicMemoryIntegration.test.ts"] }
+]
