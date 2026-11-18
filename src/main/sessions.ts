@@ -126,6 +126,7 @@ import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
 import { Inbox, type InboxEntry } from './providers/inbox';
 import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
+import { winJobs } from './winJobs';
 import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
 import { readReport, type DiagnosisView } from '../shared/diagnosis';
 import type { McpHub, McpLease } from './mcpHub';
@@ -1892,10 +1893,18 @@ export class SessionManager extends EventEmitter {
         if (s.inbox === inbox) this.signal(s);
       },
       onSpawn: (pid) => {
-        const proc = { pid, startedAt: Date.now() };
+        const proc: CliProc = { pid, startedAt: Date.now() };
         if (s.inbox !== inbox) return this.reap(s, [{ ...proc, endedAt: proc.startedAt }]); // Replaced while it started: closed already.
         s.procs.push(proc);
         this.changed();
+        // In a job of its own (Windows): what it starts is ended with it, even a process whose parent is gone, and
+        // is found again by the job's name after a restart of the hub.
+        const job = `AIBox-${randomUUID()}`;
+        void winJobs.assign(job, pid).then((held) => {
+          if (!held) return;
+          proc.job = job;
+          this.changed();
+        });
       },
       onPermission: (req) => this.askPermission(s, req, inbox),
       onElicitation: (req, signal) => this.answerElicitation(s, req, signal, inbox),
