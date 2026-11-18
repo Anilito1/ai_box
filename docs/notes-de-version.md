@@ -15,11 +15,15 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 ### Ajouté
 
 - Quand une livraison échoue, le maître la renvoie au worker et le hub le fait monter d'un cran tout seul : l'effort d'abord, puis le modèle, jusqu'à Fable. Le panneau des coûts compte ces relances après un échec.
+- Quand le fournisseur coupe un tour (surcharge, panne passagère), la session le reprend toute seule un peu plus tard, jusqu'à trois fois, au lieu de rester arrêtée en plein travail.
 
 ### Modifié
 
 - Le maître délègue sur les modèles les plus puissants : tout ce qui écrit du code ou des fichiers part au moins en Opus, les gros chantiers en Fable, les recherches et les tests en Sonnet, les petits relevés en Haiku.
 - Les renforts d'un poste suivent ce choix, même quand le poste a un modèle fixé.
+- En mode « Tout autoriser », une commande en plusieurs parties passe aussi sans carte quand seule une règle de confirmation du projet l'arrêtait. Si l'une de ses parties déclenche un contrôle de sécurité, la carte reste.
+- Quand l'un de tes hooks demande une confirmation, la carte s'affiche même en « Tout autoriser » : jusqu'ici, une règle de confirmation du projet sur la même commande la faisait passer sans te demander.
+- Sous Windows, ce qu'un worker a lancé (serveur de dev, navigateur de test, calcul sur la carte graphique) s'arrête avec lui, et plus rien ne reste en marche après la fermeture de l'app.
 
 ## 2026-11-17
 

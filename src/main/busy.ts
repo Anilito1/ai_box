@@ -10,6 +10,8 @@ export interface BusyState {
   agents: number;
   compacting: boolean;
   retrying: boolean;
+  /** A turn the provider cut waits to be taken up again. */
+  faultTimer?: unknown;
   moving: boolean;
   transitioning: boolean;
   installing: unknown;
@@ -31,7 +33,7 @@ export function busyReasons(s: BusyState): BusyReason[] {
   if (s.background.length > 0) why.push({ kind: 'background', labels: s.background });
   if (agents > 0) why.push({ kind: 'agents', count: agents });
   if (s.compacting) why.push({ kind: 'compacting' });
-  if (s.retrying) why.push({ kind: 'retrying' });
+  if (s.retrying || s.faultTimer) why.push({ kind: 'retrying' });
   if (s.moving || s.transitioning) why.push({ kind: 'moving' });
   if (s.installing) why.push({ kind: 'installing' });
   return why;

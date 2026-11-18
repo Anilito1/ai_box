@@ -93,6 +93,7 @@ import { CliUpdater, realRunner, simulatedRunner } from './cliUpdate';
 import { ReleaseNotes } from './releaseNotes';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
+import { winJobs } from './winJobs';
 import { quitNeedsConfirm } from './updateLogic';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1468,6 +1469,8 @@ async function start(): Promise<void> {
   }
   const hub = new Hub();
   dictation = hub.dictation;
+  // Ready before the first session starts: its process goes into its job at once.
+  winJobs.warm();
   await hub.init();
   hub.warmProviders();
   const mgr = hub.mgr;
