@@ -1,4 +1,5 @@
-// Unit tests: each src/**/*.test.ts is bundled with esbuild into a temporary folder, then run by node --test.
+// Unit tests: each src/**/*.test.ts is bundled with esbuild into a temporary folder, then run by node --test, along
+// with scripts/**/*.test.mjs.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
@@ -31,7 +32,9 @@ try {
       }),
     ),
   );
-  const run = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });
+  // The scripts' own tests are plain ESM: they run as they are.
+  const scriptTests = readdirSync('scripts', { recursive: true }).filter((f) => f.endsWith('.test.mjs')).map((f) => join('scripts', f));
+  const run = spawnSync(process.execPath, ['--test', ...files, ...scriptTests], { stdio: 'inherit' });
   process.exitCode = run.status ?? 1;
 } finally {
   rmSync(out, { recursive: true, force: true });
