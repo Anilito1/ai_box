@@ -30,6 +30,8 @@ export interface EnergyManagerOptions {
   /** Shown by the system with the hold. */
   reason(): string;
   publish(view: EnergyView): void;
+  /** The battery guard hibernates the PC: the user is told (a system notification), with the battery's level. */
+  notify?(event: { kind: 'hibernate'; percent: number | null }): void;
   log?(message: string): void;
   timers?: Timers;
   /** How long the PC stays held after the last worker stopped. */
@@ -335,6 +337,7 @@ export class EnergyManager {
       // Plugged in meanwhile: the guard is off again, the PC stays as it is.
       if (this.stopped || !this.guard || !(closed || this.o.idleSeconds() >= AWAY_S)) return;
       this.o.log?.('energy: battery low, nobody at the PC: hibernating');
+      this.o.notify?.({ kind: 'hibernate', percent: b.percent });
       await this.o.platform?.suspend('hibernate').catch((err: unknown) => this.o.log?.(`energy: hibernation refused: ${message(err)}`));
     });
   }

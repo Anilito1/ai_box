@@ -13,6 +13,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  Notification,
   powerMonitor,
   session,
   shell,
@@ -364,6 +365,9 @@ class Hub {
       idleSeconds: () => powerMonitor.getSystemIdleTime(),
       reason: () => t('energy.reason'),
       publish: (view) => send('energy:state', view),
+      notify: ({ percent }) => {
+        if (Notification.isSupported()) new Notification({ title: t('energy.notify.title', { n: percent ?? '?' }), body: t('energy.notify.hibernate') }).show();
+      },
       log: (message) => console.warn(message),
     });
     this.remote = new RemoteServer({

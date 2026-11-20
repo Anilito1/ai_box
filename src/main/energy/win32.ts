@@ -502,12 +502,12 @@ export class Win32Energy implements EnergyPlatform {
 
   async caps(): Promise<EnergyCaps> {
     const { probe, powercfg } = await this.probe();
-    const notes: string[] = [];
-    if (!probe) notes.push(t('energy.note.noHelper'));
-    else if (!probe.lid) notes.push(t('energy.note.noLid'));
-    else if (!powercfg) notes.push(t('energy.note.noPowercfg'));
-    if (probe && !probe.battery) notes.push(t('energy.note.noBattery'));
-    notes.push(t('energy.note.radios'));
+    const why: NonNullable<EnergyCaps['why']> = {};
+    if (!probe) why.holdAwake = t('energy.note.noHelper');
+    else if (!probe.lid) why.lidClosedAwake = t('energy.note.noLid');
+    else if (!powercfg) why.lidClosedAwake = t('energy.note.noPowercfg');
+    if (probe && !probe.battery) why.battery = t('energy.note.noBattery');
+    const notes = [why.holdAwake, why.lidClosedAwake, why.battery, t('energy.note.radios')].filter((n): n is string => !!n);
     return {
       platform: 'win32',
       holdAwake: probe !== null,
@@ -517,6 +517,7 @@ export class Win32Energy implements EnergyPlatform {
       displayOff: probe !== null,
       radios: false,
       notes,
+      why,
     };
   }
 

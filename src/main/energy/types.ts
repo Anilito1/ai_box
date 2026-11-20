@@ -27,6 +27,8 @@ export interface EnergyCaps {
   radios: boolean;
   /** Why a capability is missing, in words the user can be shown. */
   notes: string[];
+  /** The note that explains one missing capability, shown beside its switch (the same text is also in notes). */
+  why?: Partial<Record<'holdAwake' | 'lidClosedAwake' | 'battery', string>>;
 }
 
 export interface HoldOptions {

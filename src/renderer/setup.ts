@@ -284,6 +284,10 @@ export class SetupView {
       foot.append(h('span', 'spacer'));
       if (index < STEPS.length - 1) foot.append(this.button(t('setup.next'), 'btn primary', () => this.go(STEPS[index + 1])));
       else foot.append(this.button(this.startAnyway ? t('setup.finish.anyway') : t('setup.finish'), 'btn primary', () => void this.finish()));
+    } else if (this.section === 'energy') {
+      // Energy acts at once: no session start to wait for, nothing to restart.
+      foot.append(h('span', 'setup-hint', t('energy.appliesNow')), h('span', 'spacer'));
+      foot.append(this.button(t('setup.close'), 'btn primary', () => void this.close()));
     } else {
       foot.append(h('span', 'setup-hint', t('setup.appliesNext')), h('span', 'spacer'));
       foot.append(busyNote(this.hub, 'setup-hint'), this.button(t('setup.restart'), 'btn ghost', () => this.hub.relaunch()));

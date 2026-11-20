@@ -367,6 +367,30 @@ test('workers starting at or under the floor on battery: no hold, no hibernation
   assert.equal(p.live().length, 1);
 });
 
+test('the user is told when the battery guard hibernates the PC, not when it only lets go', async () => {
+  const p = new FakePlatform();
+  const told: (number | null)[] = [];
+  let idle = 0;
+  const clock = new Clock();
+  const m = new EnergyManager({ platform: p, settings: () => ENERGY_DEFAULTS, idleSeconds: () => idle, reason: () => 'r', publish: () => undefined, notify: (e) => told.push(e.percent), timers: clock });
+  await m.start();
+  m.setBusy(true);
+  await settle();
+  p.battery_ = onBattery(14);
+  p.powerCb?.(p.battery_);
+  await settle();
+  assert.deepEqual(told, []);
+  p.battery_ = onMains(14);
+  p.powerCb?.(p.battery_);
+  await settle();
+  idle = 900;
+  p.battery_ = onBattery(9);
+  p.powerCb?.(p.battery_);
+  await settle();
+  assert.deepEqual(told, [9]);
+  assert.deepEqual(p.suspended, ['hibernate']);
+});
+
 test('no platform: nothing held, nothing thrown', async () => {
   const m = new EnergyManager({ platform: null, settings: () => ENERGY_DEFAULTS, idleSeconds: () => 0, reason: () => 'r', publish: () => undefined, timers: new Clock() });
   await m.start();

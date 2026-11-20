@@ -602,6 +602,8 @@ const en = {
   'energy.note.noBattery': 'No battery: the battery guard does not apply.',
   'energy.note.radios': 'Wi-Fi stays on (the workers need the network) and Bluetooth is left as it is.',
   'energy.reason': 'AI Box keeps this PC awake while work is under way',
+  'energy.notify.title': 'Battery low ({n} %)',
+  'energy.notify.hibernate': 'AI Box stops keeping the PC awake and puts it into hibernation. The workers pick up again once it is plugged in.',
 };
 
 type Key = keyof typeof en;
@@ -1214,6 +1216,8 @@ const fr: Record<Key, string> = {
   'energy.note.noBattery': 'Pas de batterie : la garde batterie ne s’applique pas.',
   'energy.note.radios': 'Le Wi-Fi reste allumé (les workers ont besoin du réseau) et le Bluetooth n’est pas touché.',
   'energy.reason': 'AI Box garde ce PC éveillé pendant un travail en cours',
+  'energy.notify.title': 'Batterie faible ({n} %)',
+  'energy.notify.hibernate': 'AI Box cesse de garder le PC éveillé et le met en veille prolongée. Les workers reprennent une fois le PC branché.',
 };
 
 let current: Lang = 'en';
