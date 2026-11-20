@@ -743,5 +743,5 @@ Linux :
 - [L14] rfkill — https://docs.kernel.org/driver-api/rfkill.html ; BlueZ Adapter — https://raw.githubusercontent.com/bluez/bluez/master/doc/org.bluez.Adapter.rst
 - [L15] ACPI lid — https://docs.kernel.org/firmware-guide/acpi/acpi-lid.html
 
-Code de référence (lecture seule, rien exécuté) : `C:\Users\braun\ref\vorssaint-utils`, commit `faada18`. Code AI Box :
+Code de référence (lecture seule, rien exécuté) : `<dossier-de-référence>\vorssaint-utils`, commit `faada18`. Code AI Box :
 branche `hub/vorssaint-study`, depuis `8b164a2`.

@@ -6,7 +6,7 @@ import { batteryOf, indexesOf, probeOf, schemeOf, Win32Energy, type HelperProces
 // "measured" come from the development PC (a desktop, French Windows 11); the laptop ones are fixtures written from
 // Microsoft's documentation, not measured on a laptop.
 
-const USER = '9935e61f-1661-40c5-ae2f-8495027d5d5d';
+const USER = '11111111-2222-4333-8444-555555555555';
 const OTHER = 'a1841308-3541-4fab-bc81-f71556f20b4a';
 const BALANCED = '381b4222-f694-41f0-9685-ff5bb260df2e';
 const LIDACTION = '5ca83367-6e45-459f-a27b-476b1d01c936';

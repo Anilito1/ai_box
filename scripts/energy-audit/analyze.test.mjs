@@ -123,11 +123,11 @@ test('the catalog only holds reversible entries with an official source, all doc
 });
 
 test('scrubbing removes account, machine, profile paths, SIDs and per-profile ids', () => {
-  const s = scrub('C:\\Users\\jdoe\\AppData x DESKTOP-ABC12 S-1-5-21-111-222-333-1001 a@b.fr MicrosoftEdgeAutoLaunch_C00559BD99A994F6A8EFEC0D5BECBE5A 9935e61f-1661-40c5-ae2f-8495027d5d5d', {
+  const s = scrub('C:\\Users\\jdoe\\AppData x DESKTOP-ABC12 S-1-5-21-111-222-333-1001 a@b.fr MicrosoftEdgeAutoLaunch_00112233445566778899AABBCCDDEEFF 11111111-2222-4333-8444-555555555555', {
     profile: 'C:\\Users\\jdoe',
     names: ['jdoe', 'DESKTOP-ABC12'],
   });
-  assert.equal(s, '%USERPROFILE%\\AppData x <machine-ou-compte> S-1-5-21-… <e-mail> MicrosoftEdgeAutoLaunch_<id> 9935e61f-1661-40c5-ae2f-8495027d5d5d');
+  assert.equal(s, '%USERPROFILE%\\AppData x <machine-ou-compte> S-1-5-21-… <e-mail> MicrosoftEdgeAutoLaunch_<id> 11111111-2222-4333-8444-555555555555');
   assert.equal(scrub('D:\\Users\\other\\file'), 'D:\\Users\\<compte>\\file');
   assert.equal(scrub('\\Device\\HarddiskVolume3\\Users\\other\\AppData\\x.exe'), '\\Device\\HarddiskVolume3\\Users\\<compte>\\AppData\\x.exe');
 });

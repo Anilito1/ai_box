@@ -1,4 +1,4 @@
-GUID du mode de gestion de l’alimentation : 9935e61f-1661-40c5-ae2f-8495027d5d5d  (AMD Ryzen™ High Performance)
+GUID du mode de gestion de l’alimentation : 11111111-2222-4333-8444-555555555555  (AMD Ryzen™ High Performance)
   GUID du sous-groupe : 238c9fa8-0aad-41ed-83f4-97be242c8f20  (Veille)
     Alias de GUID : SUB_SLEEP
     GUID du paramètre d’alimentation : 29f6c1db-86da-48c5-9fdb-f2b67b1f44da  (Veille après)

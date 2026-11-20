@@ -8,7 +8,7 @@ const fixture = (name) => readFileSync(new URL(`./fixtures/${name}`, import.meta
 
 test('reads a French plan dump (real output, trimmed) by GUID and indentation', () => {
   const q = parsePowerQuery(fixture('powercfg-qh-fr.txt'));
-  assert.equal(q.scheme.guid, '9935e61f-1661-40c5-ae2f-8495027d5d5d');
+  assert.equal(q.scheme.guid, '11111111-2222-4333-8444-555555555555');
   assert.match(q.scheme.name, /High Performance/);
   const lid = q.settings['5ca83367-6e45-459f-a27b-476b1d01c936'];
   assert.deepEqual([lid.alias, lid.subgroupAlias, lid.ac, lid.dc], ['LIDACTION', 'SUB_BUTTONS', 1, 1]);
