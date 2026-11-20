@@ -14,7 +14,6 @@ import {
   Menu,
   nativeTheme,
   powerMonitor,
-  powerSaveBlocker,
   session,
   shell,
   type IpcMainEvent,
@@ -74,6 +73,7 @@ import { CostLog } from './costLog';
 import { errorCode } from './errors';
 import { Forum } from './forum';
 import { RemoteServer, scriptsDir } from './remoteServer';
+import { EnergyManager, energyPlatform } from './energy';
 import { clientIdOf, cloneRepo, DEFAULT_CLIENT_ID, DeviceFlow, ghLogin, ghPath, githubGitEnv, githubLogin, githubRepos, githubSignIn, SLUG } from './github';
 import { setLang, t, tn } from './i18n';
 import { setGitSignIn } from './git';
@@ -113,6 +113,7 @@ app.setPath(
 
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
+let energy: EnergyManager | undefined;
 let updater: Updater | undefined;
 let bridge: Bridge | undefined;
 let mcpHubRef: McpHub | undefined;
@@ -297,6 +298,8 @@ class Hub {
   readonly mgr: SessionManager;
   /** The remote server (experimental): inert while remote workers are off. */
   readonly remote: RemoteServer;
+  /** Keeps the PC awake while workers run, lid closed included (energy/). */
+  readonly energy: EnergyManager;
   readonly caps: CapabilityStore;
   /** The purge of ephemeral files, project by project (docs/purge-ephemeres.md). */
   readonly purge: PurgeService;
@@ -355,6 +358,14 @@ class Hub {
       confirmSwitch: (provider, update) => this.confirmCliSwitch(provider, update),
       send: (run) => send('hub:cli-update', run),
     });
+    this.energy = new EnergyManager({
+      platform: energyPlatform({ dataDir: this.dataDir }),
+      settings: () => this.cfg.energy,
+      idleSeconds: () => powerMonitor.getSystemIdleTime(),
+      reason: () => t('energy.reason'),
+      publish: (view) => send('energy:state', view),
+      log: (message) => console.warn(message),
+    });
     this.remote = new RemoteServer({
       cfg: this.cfg,
       secrets: this.secrets,
@@ -362,10 +373,7 @@ class Hub {
       save: () => this.save(),
       send: (view) => send('vps:state', view),
       openExternal: (url) => void shell.openExternal(url),
-      keepAwake: () => {
-        const id = powerSaveBlocker.start('prevent-app-suspension');
-        return () => powerSaveBlocker.stop(id);
-      },
+      keepAwake: () => this.energy.claim(),
       idleSeconds: () => powerMonitor.getSystemIdleTime(),
       confirmHost: async (host, fingerprint) => {
         const fr = this.cfg.language === 'fr';
@@ -1148,12 +1156,20 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     });
 
     handle('settings:get', () => this.view());
+    handle('energy:get', () => this.energy.refresh());
+    // Minutes kept awake, null until stopped, 0 to stop.
+    handle('energy:keep-awake', (minutes) => {
+      this.energy.keepAwake(minutes === null ? null : Number.isInteger(minutes) && (minutes as number) >= 0 && (minutes as number) <= 1440 ? (minutes as number) : 0);
+      return this.energy.view();
+    });
+    handle('energy:display-off', () => this.energy.displayOff());
     handle('settings:save', (patch) => {
       const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
       const bad = applyPatch(this.cfg, (patch ?? {}) as SettingsPatch);
       if (bad) return { ...this.view(), ok: false, error: bad };
       this.save();
       setLang(this.cfg.language);
+      this.energy.settingsChanged();
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
       if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
@@ -1468,6 +1484,9 @@ async function start(): Promise<void> {
     return;
   }
   const hub = new Hub();
+  energy = hub.energy;
+  // What a crashed run left changed is put back first; then the PC is held while workers work.
+  void hub.energy.start();
   dictation = hub.dictation;
   // Ready before the first session starts: its process goes into its job at once.
   winJobs.warm();
@@ -1477,7 +1496,10 @@ async function start(): Promise<void> {
   manager = mgr;
   bridge = hub.bridge;
   mcpHubRef = hub.mcpHub;
-  mgr.on('changed', () => send('hub:snapshot', mgr.snapshot()));
+  mgr.on('changed', () => {
+    send('hub:snapshot', mgr.snapshot());
+    hub.energy.setBusy(mgr.busySessions() > 0);
+  });
   mgr.on('items', (id: string, items: ChatItem[], reset: boolean) => send('hub:items', id, items, reset));
   mgr.on('pulse', (pulses: [string, SessionPulse][]) => send('hub:pulse', pulses));
   mgr.on('event', (id: string, kind: HubEventKind) => send('hub:event', id, kind));
@@ -1519,7 +1541,10 @@ async function start(): Promise<void> {
   // Remote workers on only: the server's guard, the automatic step-away, the turns left alone there.
   hub.remote.start();
   powerMonitor.on('lock-screen', () => hub.remote.autoAway());
-  powerMonitor.on('resume', () => hub.remote.resumed());
+  powerMonitor.on('resume', () => {
+    hub.remote.resumed();
+    void hub.energy.refresh();
+  });
   updater = hub.updater;
   updater.start();
 }
@@ -1542,9 +1567,19 @@ if (!app.requestSingleInstanceLock()) {
     win?.show();
   });
   app.on('before-quit', (e) => {
-    if (quitting) return;
-    if (!confirmQuit(manager)) return e.preventDefault();
-    quitting = true;
+    if (!quitting) {
+      if (!confirmQuit(manager)) return e.preventDefault();
+      quitting = true;
+    }
+    // The power plan the energy module changed is put back before the hub ends (its helper does it otherwise).
+    if (energy?.holding()) {
+      e.preventDefault();
+      const held = energy;
+      void Promise.race([held.shutdown(), new Promise((r) => setTimeout(r, 5_000))]).finally(() => {
+        energy = undefined;
+        app.quit();
+      });
+    }
   });
   app.on('will-quit', () => {
     if (!relaunching) updater?.atQuit();

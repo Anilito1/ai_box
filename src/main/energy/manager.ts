@@ -174,6 +174,11 @@ export class EnergyManager {
     await this.reconcile();
   }
 
+  /** The screen off now (the user's button); the PC goes on. */
+  async displayOff(): Promise<void> {
+    await this.o.platform?.displayOff();
+  }
+
   /** True while something is to be put back at quit. */
   holding(): boolean {
     return this.hold !== null;

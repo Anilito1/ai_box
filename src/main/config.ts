@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccount, normalizeAccount, ACCOUNTS_MAX } from '../shared/accounts';
 import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage, isSttEngine, isSttModel, isSttPreset, isSttUrl } from '../shared/dictation';
+import { ENERGY_DEFAULTS, isBatteryFloor } from '../shared/energy';
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
@@ -67,6 +68,7 @@ function defaults(lang: Lang): HubConfig {
     background: '',
     dictation: { ...DICTATION_DEFAULTS },
     remoteWorkers: structuredClone(REMOTE_DEFAULTS),
+    energy: { ...ENERGY_DEFAULTS },
   };
 }
 
@@ -127,6 +129,12 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
     take('dictation.preset', d.preset, isSttPreset, (v) => (cfg.dictation.preset = v));
     take('dictation.model', d.model, isSttModel, (v) => (cfg.dictation.model = v));
     take('dictation.baseUrl', d.baseUrl, isSttUrl, (v) => (cfg.dictation.baseUrl = v));
+  }
+  if (raw.energy !== undefined) {
+    const e = obj(raw.energy);
+    take('energy.whileWorking', e.whileWorking, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.energy.whileWorking = v));
+    take('energy.lidClosed', e.lidClosed, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.energy.lidClosed = v));
+    take('energy.batteryFloor', e.batteryFloor, isBatteryFloor, (v) => (cfg.energy.batteryFloor = v));
   }
   if (raw.github !== undefined) {
     const g = obj(raw.github);

@@ -37,9 +37,10 @@ import { mascotMark } from './mascot';
 import { busyNote } from './busyNote';
 import { forumModeration } from './forum';
 import { updateSection } from './update';
+import { EnergySection } from './energy';
 import { RemoteSection } from './remote';
 
-type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about' | 'remote';
+type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'energy' | 'about' | 'remote';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
@@ -48,7 +49,7 @@ type Row = { name: string; path: string; slug: string; detail: string; private: 
 // The first run connects the providers only: the team and the fallback start empty, nothing imposed.
 /** The first run: what a session needs to start, in that order; the rest waits in the settings. */
 const STEPS: Section[] = ['general', 'accounts', 'sessions', 'workspace', 'github', 'repos'];
-const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'about'];
+const SECTIONS: Section[] = ['general', 'accounts', 'github', 'workspace', 'repos', 'sessions', 'team', 'energy', 'about'];
 const HUB_MODES: (Mode | '')[] = ['', 'default', 'acceptEdits', 'auto', 'bypassPermissions'];
 const MODEL_ALIASES = ['opus', 'sonnet', 'haiku'];
 const MAIN_REPOS_MAX = 12;
@@ -101,6 +102,7 @@ export class SetupView {
   private section: Section = 'general';
   /** Settings › Remote server (experimental): built when first opened. */
   private remote: RemoteSection | null = null;
+  private energy: EnergySection | null = null;
   private view: SettingsView | null = null;
   /** The GitHub CLI on this computer; null until checked. */
   private gh: { installed: boolean; login: string } | null = null;
@@ -378,6 +380,10 @@ export class SetupView {
         return this.sessions(el, v.settings);
       case 'team':
         return this.team(el, v);
+      case 'energy':
+        this.head(el, t('energy.title'), t('energy.lead'));
+        this.energy ??= new EnergySection(this.hub);
+        return this.energy.render(el, v.settings.energy, (patch) => void this.save(patch), () => this.section === 'energy' && !this.root.hidden && this.render());
       case 'about':
         return this.about(el, v);
       case 'remote':

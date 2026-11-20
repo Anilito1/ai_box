@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-20
+
+### Ajouté
+
+- Réglages › Énergie : le PC reste éveillé pendant que des workers travaillent, et peut continuer capot fermé ; une garde batterie le met en veille prolongée avant qu'il ne s'éteigne, et vos réglages d'alimentation reviennent à la fin.
+
 ## 2026-11-18
 
 ### Ajouté
