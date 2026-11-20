@@ -16,13 +16,14 @@ function Section([string]$name, [scriptblock]$body) {
   try { $out[$name] = & $body } catch { $out[$name] = @{ error = $_.Exception.Message } }
   $out['_ms'][$name] = $t.ElapsedMilliseconds
 }
-function TryGet([scriptblock]$body) { try { & $body } catch { $null } }
+# On failure TryGet emits nothing at all: a $null would count as one item in @(...) and run pipelines once.
+function TryGet([scriptblock]$body) { try { & $body } catch { } }
+# File name of the program a command line starts; nothing when it cannot be told apart from its arguments.
 function Leaf([string]$path) {
   if (-not $path) { return $null }
-  $p = $path.Trim()
-  if ($p.StartsWith('"')) { $p = $p.Substring(1, [Math]::Max(0, $p.IndexOf('"', 1) - 1)) }
-  else { $m = [regex]::Match($p, '^(.*?\.(exe|lnk|bat|cmd|ps1|vbs|dll|url))', 'IgnoreCase'); if ($m.Success) { $p = $m.Groups[1].Value } }
-  return [IO.Path]::GetFileName($p)
+  $m = [regex]::Match($path.Trim(), '^"?([^"]*?\.(exe|lnk|bat|cmd|ps1|vbs|dll|url|msc|com))(?=["\s]|$)', 'IgnoreCase')
+  if (-not $m.Success) { return $null }
+  return [regex]::Match($m.Groups[1].Value, '[^\\/]*$').Value
 }
 
 Section 'system' {
@@ -119,18 +120,23 @@ Section 'processes' {
     $io = @{}; Get-CimInstance Win32_Process -Property ProcessId, ReadTransferCount, WriteTransferCount, OtherTransferCount | ForEach-Object {
       $io[[int]$_.ProcessId] = [double]$_.ReadTransferCount + [double]$_.WriteTransferCount + [double]$_.OtherTransferCount
     }
-    @{ cpu = $cpu; io = $io; t = [Diagnostics.Stopwatch]::GetTimestamp() }
+    # GPU engines: running time and its clock (raw counters), turned into a load over the same window below.
+    $eng = @{}; TryGet { Get-CimInstance Win32_PerfRawData_GPUPerformanceCounters_GPUEngine } | Where-Object { $_.Name } | ForEach-Object {
+      $eng[$_.Name] = @([double]$_.UtilizationPercentage, [double]$_.Timestamp_Sys100NS)
+    }
+    @{ cpu = $cpu; io = $io; eng = $eng; t = [Diagnostics.Stopwatch]::GetTimestamp() }
   }
   $a = & $snap
   Start-Sleep -Seconds $SampleSeconds
   $b = & $snap
   $secs = ($b.t - $a.t) / [Diagnostics.Stopwatch]::Frequency
   $gpu = @{}
-  TryGet { Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine } | Where-Object { $_.Name } | ForEach-Object {
-    $m = [regex]::Match($_.Name, 'pid_(\d+)_.*engtype_(\w+)')
-    if ($m.Success) {
+  foreach ($name in $b.eng.Keys) {
+    $m = [regex]::Match($name, 'pid_(\d+)_.*engtype_(\w+)')
+    $e0 = $a.eng[$name]; $e1 = $b.eng[$name]
+    if ($m.Success -and $e0 -and $e1 -and $e1[1] -gt $e0[1]) {
       $key = "$($m.Groups[1].Value)|$($m.Groups[2].Value)"
-      $gpu[$key] = [double]$gpu[$key] + [double]$_.UtilizationPercentage
+      $gpu[$key] = [double]$gpu[$key] + 100 * ($e1[0] - $e0[0]) / ($e1[1] - $e0[1])
     }
   }
   $gpuByPid = @{}
@@ -252,8 +258,8 @@ Section 'radios' {
   $null = [Windows.Devices.Radios.Radio, Windows.System.Devices, ContentType = WindowsRuntime]
   $type = [Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]
   $task = $asTask.MakeGenericMethod($type).Invoke($null, @([Windows.Devices.Radios.Radio]::GetRadiosAsync()))
-  $null = $task.Wait(5000)
-  @($task.Result | ForEach-Object { [ordered]@{ kind = "$($_.Kind)"; state = "$($_.State)" } })
+  if (-not $task.Wait(5000)) { throw 'radio list timed out' }
+  @($task.Result | Where-Object { $_ } | ForEach-Object { [ordered]@{ kind = "$($_.Kind)"; state = "$($_.State)" } })
 }
 
 Section 'display' {
@@ -309,7 +315,9 @@ Section 'powercfg' {
     $null = New-Item -ItemType Directory -Path $dir
     $file = Join-Path $dir 'battery.xml'
     $b = Pcfg @('/batteryreport', '/xml', '/output', $file)
-    $r.battery = [ordered]@{ status = $b.status; xml = if (Test-Path $file) { [IO.File]::ReadAllText($file) } else { $null } }
+    # The machine's name and the battery's serial number never leave this script.
+    $xml = if (Test-Path $file) { [IO.File]::ReadAllText($file) -replace '<(SerialNumber|ComputerName)>[^<]*</(SerialNumber|ComputerName)>', '' } else { $null }
+    $r.battery = [ordered]@{ status = $b.status; xml = $xml }
   } finally {
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
   }

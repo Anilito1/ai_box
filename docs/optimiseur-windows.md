@@ -338,8 +338,9 @@ et `usb-selective-suspend` à essayer en surveillant la stabilité.
 - Watts par processus : Windows ne les donne pas ; l’impact affiché est une estimation relative (processeur, GPU,
   entrées/sorties sur l’échantillon). Seules la batterie (débit WMI, historique du rapport batterie) et la carte NVIDIA
   (`nvidia-smi`) donnent des watts mesurés.
-- Le rapport batterie de Windows (`/batteryreport`) a été lu sur ce PC de bureau ; la partie portable (capacités,
-  consommation sur batterie et en veille) est testée sur une fixture synthétique de même structure, pas encore sur un
-  vrai portable.
+- Le rapport batterie de Windows (`/batteryreport`) a été lu sur ce PC de bureau, ce qui confirme les noms des
+  éléments et attributs utilisés (`UsageEntry`, `HistoryEntry`, `ActiveDcEnergy`, `CsDcEnergy`…) ; la partie portable
+  (capacités, consommation sur batterie et en veille, unités en mWh) est testée sur une fixture synthétique de même
+  structure, pas encore sur un vrai portable. Si une valeur manque, la ligne correspondante disparaît du rapport.
 - `powercfg /sleepstudy` (détail de la veille moderne) n’est pas analysé : le rapport HTML est à générer en
   administrateur et à lire soi-même.

@@ -26,7 +26,8 @@ export function renderMarkdown(data, a) {
   if (v.portable) {
     out.push(`- **Capot fermé aujourd’hui** : ${v.lidBlockers.length ? `les workers s’arrêtent — ${v.lidBlockers.join(' ; ')}.` : 'la machine continue de travailler.'}`);
   } else {
-    out.push(`- **Capot fermé** : sans objet (pas de capot). ${v.lidBlockers.length ? `À noter : ${v.lidBlockers.join(' ; ')}.` : 'La veille sur inactivité est désactivée : rien n’arrête les workers, mais rien n’économise non plus quand ils ne tournent pas.'}`);
+    const idle = a.settings.STANDBYIDLE?.ac;
+    out.push(`- **Capot fermé** : sans objet (pas de capot). ${idle === 0 ? 'La veille sur inactivité est désactivée : rien n’arrête les workers, mais rien n’économise non plus quand ils ne tournent pas.' : idle ? `Veille après ${idle / 60} min d’inactivité : les workers ne continuent que si l’app tient une demande d’alimentation.` : ''}`);
   }
   if (b) {
     out.push(`- **Batterie** : ${b.healthPct !== null ? `santé ${b.healthPct} %` : 'santé inconnue'}${b.cycles !== null ? `, ${b.cycles} cycles` : ''}${b.drain?.activeW ? `, ${b.drain.activeW} W en moyenne sur batterie ≈ ${b.runtimeH ?? '?'} h` : ''}${b.drain?.standbyW ? `, ${b.drain.standbyW} W en veille` : ''}.`);

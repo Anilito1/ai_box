@@ -6,7 +6,9 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** The identifying strings of the current session. */
 export function localSecrets(env = process.env) {
-  const names = [env.USERNAME, env.COMPUTERNAME, env.USERDOMAIN, safe(() => hostname()), safe(() => userInfo().username)];
+  // The profile folder can differ from the account name (renamed account, Microsoft account).
+  const folder = env.USERPROFILE?.split(/[\\/]/).pop();
+  const names = [env.USERNAME, folder, env.COMPUTERNAME, env.USERDOMAIN, safe(() => hostname()), safe(() => userInfo().username)];
   return { profile: env.USERPROFILE ?? null, names: [...new Set(names.filter((n) => n && n.length >= 3))] };
 }
 
@@ -22,7 +24,7 @@ function safe(f) {
 export function scrub(text, { profile = null, names = [] } = {}) {
   let out = String(text);
   if (profile) out = out.replace(new RegExp(escape(profile), 'gi'), '%USERPROFILE%');
-  out = out.replace(/([A-Z]:\\Users\\)(?!Public\\|Default\\|%)[^\\"\s]+/gi, '$1<compte>');
+  out = out.replace(/((?:[A-Z]:|\\Device\\HarddiskVolume\d+)\\Users\\)(?!Public\\|Default\\|%)[^\\"\s]+/gi, '$1<compte>');
   out = out.replace(/S-1-5-21(-\d+){3,4}/g, 'S-1-5-21-…');
   out = out.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '<e-mail>');
   out = out.replace(/(?<![0-9a-f-])[0-9a-f]{32,}(?![0-9a-f-])/gi, '<id>'); // per-profile hashes (Edge auto-launch...)

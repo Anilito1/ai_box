@@ -211,15 +211,17 @@ export function analyze(data) {
   if (battery?.drain?.activeW && battery.fullMWh) battery.runtimeH = round(battery.fullMWh / 1000 / battery.drain.activeW);
   const usage = report ? usageSummary(report) : null;
 
+  // What stops the workers once the lid is closed: the lid action, and in Modern Standby the battery idle timeout
+  // (screen off is enough to enter standby there). An app's power request covers the rest.
+  const lidAc = val('LIDACTION', 'ac');
+  const lidDc = val('LIDACTION', 'dc');
   const lidBlockers = [];
   if (caps.lidPresent) {
-    if (val('LIDACTION', 'ac') !== 0) lidBlockers.push(`branché, fermer le capot déclenche « ${LID[val('LIDACTION', 'ac')] ?? '?'} »`);
-    if (val('LIDACTION', 'dc') !== 0) lidBlockers.push(`sur batterie, fermer le capot déclenche « ${LID[val('LIDACTION', 'dc')] ?? '?'} »`);
+    if (lidAc !== null && lidAc !== 0) lidBlockers.push(`branché, fermer le capot déclenche « ${LID[lidAc] ?? lidAc} »`);
+    if (lidDc !== null && lidDc !== 0) lidBlockers.push(`sur batterie, fermer le capot déclenche « ${LID[lidDc] ?? lidDc} »`);
+    if (caps.aoac && val('STANDBYIDLE', 'dc')) lidBlockers.push(`sur batterie, veille moderne ${secs(val('STANDBYIDLE', 'dc'))} après la dernière action`);
   }
-  for (const side of ['ac', 'dc']) {
-    const v = val('STANDBYIDLE', side);
-    if (v) lidBlockers.push(`${side === 'ac' ? 'branché' : 'sur batterie'}, veille après ${secs(v)} sans clavier ni souris (une demande d’alimentation de l’app l’empêche ; sans elle les workers s’arrêtent)`);
-  }
+  if (!Object.keys(settings).length) add('plan', 'à surveiller', 'Le mode de gestion actif n’a pas pu être lu (`powercfg /qh`) : capot, veille et processeur ne sont pas analysés.');
 
   // Battery.
   if (!portable) add('batterie', 'info', 'Machine de bureau : pas de batterie ni de capot. La question « capot fermé » ne se pose pas ici ; l’équivalent est « écran éteint, veille bloquée tant que des workers tournent ».');
@@ -238,8 +240,8 @@ export function analyze(data) {
     : standby === 'S3'
       ? 'Veille classique (S3) : en veille, tout s’arrête (processeur, réseau, workers) jusqu’au réveil.'
       : 'Aucun état de veille disponible.');
-  if (caps.lidPresent && val('LIDACTION', 'ac') !== 0) add('veille', 'bloquant', 'Branché, fermer le capot met la machine en veille : les workers s’arrêtent.', 'lid-nothing-ac');
-  if (caps.lidPresent && val('LIDACTION', 'dc') !== 0) add('veille', 'à surveiller', 'Sur batterie, fermer le capot met la machine en veille. Pour continuer à travailler sur batterie capot fermé, ne changer ce réglage que le temps du travail.', 'lid-nothing-dc', 'critical-hibernate', 'cpu-boost-dc');
+  if (caps.lidPresent && lidAc !== null && lidAc !== 0) add('veille', 'bloquant', 'Branché, fermer le capot met la machine en veille : les workers s’arrêtent.', 'lid-nothing-ac');
+  if (caps.lidPresent && lidDc !== null && lidDc !== 0) add('veille', 'à surveiller', 'Sur batterie, fermer le capot met la machine en veille. Pour continuer à travailler sur batterie capot fermé, ne changer ce réglage que le temps du travail.', 'lid-nothing-dc', 'critical-hibernate', 'cpu-boost-dc');
   if (caps.aoac && caps.lidPresent && val('STANDBYIDLE', 'dc')) add('veille', 'à surveiller', `Veille moderne : sur batterie, la machine entre en veille ${secs(val('STANDBYIDLE', 'dc'))} après la dernière action, écran éteint, et les workers y sont gelés même capot ouvert ou réglé sur « ne rien faire ».`, 'standby-idle-dc-off');
   if (portable && val('BATACTIONCRIT', 'dc') !== null && val('BATACTIONCRIT', 'dc') !== 2) add('veille', 'à surveiller', `Batterie critique : « ${LID[val('BATACTIONCRIT', 'dc')]} ». Avec le capot fermé longtemps, mieux vaut la veille prolongée.`, 'critical-hibernate');
   if (!portable && val('STANDBYIDLE', 'ac') === 0) add('veille', 'à corriger', 'La machine ne se met jamais en veille seule : elle consomme à plein même la nuit sans worker actif. Avec une app qui tient une demande d’alimentation pendant les travaux, une veille après 30 min est sans risque.', 'sleep-idle-ac');
@@ -274,7 +276,7 @@ export function analyze(data) {
   const vAc = val('VIDEOIDLE', 'ac');
   if (vAc === 0 || vAc > 600) add('plan', 'à surveiller', `Écran éteint après ${secs(vAc)} sur secteur.`, 'display-off');
   if (portable && val('ESBATTTHRESHOLD', 'dc') === 0) add('plan', 'à surveiller', 'L’économiseur d’énergie ne s’active jamais seul sur batterie.', 'energy-saver-threshold');
-  if (portable && caps.lidPresent && !ps.powerMode?.overlayDc && /balanced|normale|équilibr/i.test(scheme?.name ?? '')) add('plan', 'info', 'Mode de puissance sur batterie : équilibré.', 'power-mode-efficiency');
+  if (portable && caps.lidPresent && [undefined, null, '', '00000000-0000-0000-0000-000000000000'].includes(ps.powerMode?.overlayDc) && /balanced|normale|équilibr/i.test(scheme?.name ?? '')) add('plan', 'info', 'Mode de puissance sur batterie : équilibré.', 'power-mode-efficiency');
 
   // Processes.
   const processes = analyzeProcesses(ps);

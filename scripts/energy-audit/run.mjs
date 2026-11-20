@@ -34,7 +34,7 @@ function args(argv) {
   return o;
 }
 
-const asArray = (v) => (Array.isArray(v) ? v : v && typeof v === 'object' && !Object.keys(v).length ? [] : v ? [v] : []);
+const asArray = (v) => (Array.isArray(v) ? v : v && typeof v === 'object' && !Object.keys(v).length ? [] : v ? [v] : []).filter((x) => x !== null && x !== undefined);
 
 /** PowerShell turns empty arrays into null or {} and one-item arrays into the item. */
 export function normalize(ps) {
@@ -57,8 +57,8 @@ async function main() {
     console.error('Cet audit lit les réglages de Windows : il ne tourne que sous Windows.');
     process.exit(1);
   }
-  const [ps, nvidia] = await Promise.all([collect(o.sample), nvidiaSmi()]);
-  normalize(ps);
+  const ps = normalize(await collect(o.sample));
+  const nvidia = await nvidiaSmi(ps.system?.gpus);
   const admin = !!ps.system?.isAdmin;
   const pc = ps.powercfg?.error ? {} : (ps.powercfg ?? {});
   const text = (r) => (r && r.status === 0 ? r.text : '');
@@ -84,27 +84,25 @@ async function main() {
   const a = analyze(data);
   const secrets = localSecrets();
   const md = scrub(renderMarkdown(data, a), secrets);
-  const json = scrub(
-    JSON.stringify(
-      {
-        generatedAt: data.generatedAt,
-        verdict: a.verdict,
-        findings: a.findings,
-        recommendations: a.recommendations.map(({ id, title, gain, risk, rights, why, source }) => ({ id, title, gain, risk, rights, why, source })),
-        plan: { scheme: data.plan.scheme, settings: data.plan.settings },
-        processes: a.processes,
-        startup: a.startup,
-        wake: { lastWake: data.lastWake, armed: data.wakeArmed, events: ps.wake, requests: data.requests, wakeTimers: data.wakeTimers },
-        system: ps.system,
-        capabilities: ps.capabilities,
-        misc: { powerMode: ps.powerMode, powerStatus: ps.powerStatus, network: ps.network, radios: ps.radios, display: ps.display, background: ps.background, storage: ps.storage, nvidia },
-        adminOnly: data.adminOnly,
-        timingsMs: ps._ms,
-      },
-      null,
-      2,
-    ),
-    secrets,
+  // Every string is scrubbed before serialization: in JSON text, paths have doubled backslashes.
+  const json = JSON.stringify(
+    {
+      generatedAt: data.generatedAt,
+      verdict: a.verdict,
+      findings: a.findings,
+      recommendations: a.recommendations.map(({ id, title, gain, risk, rights, why, source }) => ({ id, title, gain, risk, rights, why, source })),
+      plan: { scheme: data.plan.scheme, settings: data.plan.settings },
+      processes: a.processes,
+      startup: a.startup,
+      wake: { lastWake: data.lastWake, armed: data.wakeArmed, events: ps.wake, requests: data.requests, wakeTimers: data.wakeTimers },
+      system: ps.system,
+      capabilities: ps.capabilities,
+      misc: { powerMode: ps.powerMode, powerStatus: ps.powerStatus, network: ps.network, radios: ps.radios, display: ps.display, background: ps.background, storage: ps.storage, nvidia },
+      adminOnly: data.adminOnly,
+      timingsMs: ps._ms,
+    },
+    (_, v) => (typeof v === 'string' ? scrub(v, secrets) : v),
+    2,
   );
   if (o.out) {
     const base = o.out.replace(/\.(md|json)$/i, '');

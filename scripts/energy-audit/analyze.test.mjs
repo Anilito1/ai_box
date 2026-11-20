@@ -89,6 +89,25 @@ test('desktop without battery: no lid advice, idle sleep proposed, undo uses the
   assert.match(md, /sans objet \(pas de capot\)/);
 });
 
+test('an unreadable plan gives no false lid verdict; a lid set to "do nothing" with an idle timeout is not a blocker', () => {
+  const d = laptop();
+  d.plan = { scheme: null, settings: {} };
+  const a = analyze(d);
+  assert.deepEqual(a.verdict.lidBlockers, []);
+  assert.ok(!a.findings.some((f) => f.level === 'bloquant'));
+  assert.ok(a.findings.some((f) => f.text.includes('n’a pas pu être lu')));
+
+  const e = laptop();
+  e.ps.capabilities.aoac = false;
+  for (const s of Object.values(e.plan.settings)) if (s.alias === 'LIDACTION') (s.ac = 0), (s.dc = 0);
+  assert.deepEqual(analyze(e).verdict.lidBlockers, []);
+});
+
+test('normalize drops the nulls PowerShell can emit', () => {
+  const ps = normalize({ startup: { commands: null, store: [null], tasks: {}, services: [{ name: 'x' }, null] }, radios: [null], battery: {} });
+  assert.deepEqual([ps.startup.commands, ps.startup.store, ps.startup.tasks, ps.startup.services, ps.radios, ps.battery], [[], [], [], [{ name: 'x' }], [], []]);
+});
+
 test('the catalog only holds reversible entries with an official source, all documented', () => {
   const doc = readFileSync(new URL('../../docs/optimiseur-windows.md', import.meta.url), 'utf8');
   const ids = new Set();
@@ -110,4 +129,5 @@ test('scrubbing removes account, machine, profile paths, SIDs and per-profile id
   });
   assert.equal(s, '%USERPROFILE%\\AppData x <machine-ou-compte> S-1-5-21-… <e-mail> MicrosoftEdgeAutoLaunch_<id> 9935e61f-1661-40c5-ae2f-8495027d5d5d');
   assert.equal(scrub('D:\\Users\\other\\file'), 'D:\\Users\\<compte>\\file');
+  assert.equal(scrub('\\Device\\HarddiskVolume3\\Users\\other\\AppData\\x.exe'), '\\Device\\HarddiskVolume3\\Users\\<compte>\\AppData\\x.exe');
 });
