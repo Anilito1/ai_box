@@ -6686,6 +6686,16 @@ input[type='radio']:focus-visible {
   border-color: var(--accent);
   color: var(--text);
 }
+.acct-chip.static {
+  cursor: default;
+}
+.acct-video[hidden] {
+  display: none;
+}
+.acct-video-count {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
 .acct-ok {
   color: var(--ok);
 }

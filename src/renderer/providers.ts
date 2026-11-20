@@ -2,6 +2,7 @@ import { OWN_ACCOUNT } from '../shared/accounts';
 import { CLI_PACKAGES } from '../shared/news';
 import { isProviderId, PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
 import type { CustomProviderAction, HubApi, ProviderAccountView, ProviderView } from '../shared/types';
+import { videoApiOf } from '../shared/video';
 import { errorNote, h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
 import { mascotMark } from './mascot';
@@ -31,6 +32,10 @@ interface CustomForm {
   models: string;
   /** The server's own list, once asked for: the models to pick from. */
   listed: string[];
+  /** Video models: the ones the service lists (read only), the ones named by hand, and the name being typed. */
+  videoListed: string[];
+  videoModels: string[];
+  videoTyped: string;
   busy: CustomProviderAction | '';
   /** The last error: its code, the field it is about, the server's words. */
   error: string;
@@ -40,12 +45,16 @@ interface CustomForm {
   passed: string;
 }
 
-const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], busy: '', error: '', field: '', detail: '', passed: '' });
+const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], videoListed: [], videoModels: [], videoTyped: '', busy: '', error: '', field: '', detail: '', passed: '' });
 
 /** The models typed in the form: one per line, or separated by commas or spaces. */
 const parseModels = (text: string) => [...new Set(text.split(/[\s,]+/).filter(Boolean))];
 /** More than this many models in a server's list: none is picked for the user, they choose. */
 const PICK_ALL_MAX = 30;
+/** The Video section shows for a service whose video API the hub speaks, or one that already has video models named. */
+const videoShown = (f: CustomForm) => videoApiOf(f.baseUrl.trim()) !== null || f.videoModels.length > 0;
+/** The video models of a form: the ones named by hand, with the name still in the field while the section shows. */
+const videoNamed = (f: CustomForm) => [...new Set([...f.videoModels, ...(videoShown(f) ? parseModels(f.videoTyped) : [])])];
 
 const hostOf = (url: string) => {
   try {
@@ -562,7 +571,11 @@ export class ProvidersPanel {
     text.append(h('span', 'acct-name', v.label));
     if (confirming) text.append(h('span', 'acct-sub', t('provider.custom.removeConfirm', { name: v.label })));
     else if (error) text.append(h('span', 'acct-sub err', error));
-    else text.append(h('span', 'acct-sub', t(c.models.length === 1 ? 'provider.custom.detail1' : 'provider.custom.detail', { host: hostOf(c.baseUrl), count: c.models.length })));
+    else {
+      const video = new Set([...c.video.listed, ...c.video.manual]).size;
+      const detail = t(c.models.length === 1 ? 'provider.custom.detail1' : 'provider.custom.detail', { host: hostOf(c.baseUrl), count: c.models.length });
+      text.append(h('span', 'acct-sub', video > 0 ? `${detail} · ${t(video === 1 ? 'provider.custom.videoCount1' : 'provider.custom.videoCount', { count: video })}` : detail));
+    }
 
     const state = h('span', 'acct-state');
     if (phase) {
@@ -647,7 +660,12 @@ export class ProvidersPanel {
     };
     const name = input(f.name, (v) => (f.name = v));
     name.maxLength = 40;
-    const url = input(f.baseUrl, (v) => (f.baseUrl = v));
+    // The Video section follows the address as it is typed: it shows for a service whose video API the hub speaks.
+    const video = this.videoSection(f);
+    const url = input(f.baseUrl, (v) => {
+      f.baseUrl = v;
+      video.hidden = !videoShown(f);
+    });
     // The stored key never comes back: an empty field keeps it.
     const key = input(f.key, (v) => (f.key = v), 'password');
     if (f.id) key.placeholder = t('provider.custom.keyKept');
@@ -665,6 +683,7 @@ export class ProvidersPanel {
       field('models', t('provider.custom.models'), modelsRow, h('span', 'setup-hint', t('provider.custom.modelsHint'))),
     );
     if (f.listed.length > 0) box.append(this.modelChips(f));
+    box.append(video);
 
     const actions = h('div', 'acct-actions');
     actions.append(
@@ -704,6 +723,59 @@ export class ProvidersPanel {
     return box;
   }
 
+  /**
+   * The provider's video models: the ones its API lists, shown as they are, and the ones named by hand for a model the
+   * list does not have. They make videos (the hub's generate_video); none of them ever runs a session.
+   */
+  private videoSection(f: CustomForm): HTMLElement {
+    const box = h('div', f.error && f.field === 'videoModels' ? 'setup-field acct-field acct-video invalid' : 'setup-field acct-field acct-video');
+    box.hidden = !videoShown(f);
+    box.append(h('span', 'setup-label', t('provider.custom.video')), h('span', 'setup-hint', t('provider.custom.videoHint')));
+    if (f.videoListed.length > 0) {
+      box.append(h('span', 'acct-video-count', t('provider.custom.videoListed', { count: f.videoListed.length })));
+      const chips = h('div', 'acct-chips');
+      for (const m of f.videoListed.slice(0, 300)) chips.append(h('span', 'acct-chip static', m));
+      box.append(chips);
+    } else box.append(h('span', 'setup-hint', t('provider.custom.videoNone')));
+
+    const typed = h('input', 'setup-input');
+    typed.value = f.videoTyped;
+    typed.placeholder = t('provider.custom.videoPlaceholder');
+    typed.spellcheck = false;
+    typed.autocomplete = 'off';
+    typed.setAttribute('aria-label', t('provider.custom.videoAdd'));
+    const add = () => {
+      f.videoModels = videoNamed(f);
+      f.videoTyped = '';
+      this.host.rerender();
+    };
+    typed.addEventListener('input', () => (f.videoTyped = typed.value));
+    typed.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      add();
+    });
+    const row = h('div', 'acct-keyrow');
+    row.append(typed, this.button(t('provider.custom.videoAdd'), 'btn ghost small', add, f.busy !== ''));
+    box.append(row);
+    if (f.videoModels.length > 0) {
+      const mine = h('div', 'acct-chips');
+      for (const m of f.videoModels) {
+        const chip = h('button', 'acct-chip on', `${m} ×`);
+        chip.type = 'button';
+        chip.title = t('provider.custom.videoRemove', { model: m });
+        chip.setAttribute('aria-label', chip.title);
+        chip.addEventListener('click', () => {
+          f.videoModels = f.videoModels.filter((x) => x !== m);
+          this.host.rerender();
+        });
+        mine.append(chip);
+      }
+      box.append(mine);
+    }
+    return box;
+  }
+
   /** A custom provider's error, said for the field it is about. */
   private customError(f: CustomForm): string {
     const byField: Record<string, Key> = {
@@ -717,6 +789,9 @@ export class ProvidersPanel {
       'models:tooMany': 'provider.custom.err.modelsMany',
       'models:no-list': 'provider.custom.err.noList',
       'models:model-refused': 'provider.custom.err.modelRefused',
+      'models:video': 'provider.custom.err.videoModel',
+      'videoModels:format': 'provider.custom.err.modelFormat',
+      'videoModels:tooMany': 'provider.custom.err.videoMany',
       'accounts:tooMany': 'provider.custom.err.tooMany',
     };
     const known = byField[`${f.field}:${f.error}`];
@@ -727,7 +802,7 @@ export class ProvidersPanel {
   }
 
   private editCustom(v: ProviderView, c: NonNullable<ProviderView['custom']>): void {
-    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n') };
+    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n'), videoListed: c.video.listed, videoModels: [...c.video.manual] };
     this.confirming = '';
     delete this.errors[v.id];
     this.host.rerender();
@@ -740,13 +815,14 @@ export class ProvidersPanel {
     Object.assign(f, { busy: action, error: '', field: '', detail: '', passed: '' });
     this.host.rerender();
     const models = parseModels(f.models);
-    const r = await this.hub.customProvider(action, { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models }, f.key.trim() || null);
+    const r = await this.hub.customProvider(action, { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models, videoModels: videoNamed(f) }, f.key.trim() || null);
     f.busy = '';
     if (r.views.length > 0) this.views = r.views;
     if (this.form !== f) return this.host.rerender();
     if (!r.ok) Object.assign(f, { error: r.error || 'unknown', field: r.field, detail: r.detail });
     else if (action === 'models') {
       f.listed = r.models;
+      f.videoListed = r.videoModels;
       // A short list is taken whole when nothing was typed; a long one waits for the user's picks.
       if (models.length === 0 && r.models.length <= PICK_ALL_MAX) f.models = r.models.join('\n');
     } else if (action === 'test') f.passed = t('provider.custom.passed', { model: models[0] ?? '', reply: r.detail || '…' });
@@ -759,7 +835,7 @@ export class ProvidersPanel {
     delete this.errors[id];
     this.phases.set(id, 'disconnect');
     this.host.rerender();
-    const r = await this.hub.customProvider('remove', { id: accountId, name: '', baseUrl: '', models: [] }, null);
+    const r = await this.hub.customProvider('remove', { id: accountId, name: '', baseUrl: '', models: [], videoModels: [] }, null);
     this.phases.delete(id);
     if (r.views.length > 0) this.views = r.views;
     if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.removeCustom(id, accountId));

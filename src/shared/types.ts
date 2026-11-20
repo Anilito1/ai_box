@@ -209,6 +209,8 @@ export interface Account {
   slug: string;
   /** A provider the user added: the models its sessions pick from, the first being the default. */
   models: string[];
+  /** A provider the user added: video models named by hand, beside the ones its API lists. They never run a session. */
+  videoModels?: string[];
   /** codex only: signed in in a Codex folder of the hub's own (true), or the one the user's Codex already uses (false). */
   isolated: boolean;
 }
@@ -657,6 +659,12 @@ export interface ProviderResult {
   views: ProviderView[];
 }
 
+/** A provider's video models in its form: the ones its API lists, and the ones the user named by hand. */
+export interface ProviderVideoView {
+  listed: string[];
+  manual: string[];
+}
+
 /** A provider's block in Settings › Accounts. */
 export interface ProviderView {
   /** A built-in provider, or the slug of one the user added. */
@@ -671,7 +679,7 @@ export interface ProviderView {
   /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
   cli: { found: boolean; version: string; outdated: boolean } | null;
   /** A provider the user added: what its form shows again. Its key never comes back. */
-  custom?: { accountId: string; baseUrl: string; models: string[] };
+  custom?: { accountId: string; baseUrl: string; models: string[]; video: ProviderVideoView };
 }
 
 /** A provider the user adds or changes in Settings › Accounts: any server that speaks OpenAI's Chat Completions. */
@@ -681,11 +689,17 @@ export interface CustomProviderDraft {
   name: string;
   baseUrl: string;
   models: string[];
+  /** Video models named by hand. */
+  videoModels: string[];
 }
 export type CustomProviderAction = 'models' | 'test' | 'save' | 'remove';
-/** What a custom provider's action answers: `models`, the server's list; `detail`, the server's own words behind an error (the key masked). */
+/**
+ * What a custom provider's action answers: `models`, the server's list of text models and `videoModels`, of video
+ * ones; `detail`, the server's own words behind an error (the key masked).
+ */
 export interface CustomProviderResult extends ProviderResult {
   models: string[];
+  videoModels: string[];
   detail: string;
 }
 

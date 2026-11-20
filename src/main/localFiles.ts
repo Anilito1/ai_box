@@ -13,9 +13,12 @@ export interface LocalFileShell {
   openPath(path: string): Promise<string>;
   showItemInFolder(path: string): void;
 }
-/** Receives the workspace from session state, never from the renderer. No raw OS errors cross IPC. */
+/**
+ * Receives the workspace from session state, never from the renderer. No raw OS errors cross IPC. `also`: folders the
+ * hub itself saves files in (the generated videos), opened from any conversation under the same rules.
+ */
 export async function openLocalFile(
-  workspace: string | undefined, input: unknown, action: unknown, shell: LocalFileShell,
+  workspace: string | undefined, input: unknown, action: unknown, shell: LocalFileShell, also: string[] = [],
 ): Promise<LocalFileResult> {
   if (!workspace || typeof input !== 'string' || (action !== 'open' && action !== 'reveal')) return { ok: false, error: 'invalid' };
   const path = localFilePath(input);
@@ -25,9 +28,9 @@ export async function openLocalFile(
     // Alternate data streams, device names and Win32 name trimming must not change the checked target.
     if (/[<>:"|*]/.test(tail) || tail.split(/[\\/]/).some((part) => /[. ]$/.test(part) && part !== '.' && part !== '..' || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) return { ok: false, error: 'invalid' };
   }
-  const lexicalRoot = resolve(workspace);
-  const target = resolve(lexicalRoot, path);
-  if (!inside(lexicalRoot, target)) return { ok: false, error: 'outside' };
+  const target = resolve(resolve(workspace), path);
+  const lexicalRoot = [workspace, ...also].map((root) => resolve(root)).find((root) => inside(root, target));
+  if (!lexicalRoot) return { ok: false, error: 'outside' };
   if (privatePath(relative(lexicalRoot, target))) return { ok: false, error: 'unsupported' };
   try {
     const root = await realpath(lexicalRoot);

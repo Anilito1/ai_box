@@ -130,6 +130,9 @@ import { Inbox, type InboxEntry } from './providers/inbox';
 import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
 import { winJobs } from './winJobs';
 import { explore, type ExploreHost } from './providers/claude/explore';
+import { textModels } from '../shared/video';
+import type { VideoService } from './video/service';
+import { videoTools } from './video/tools';
 import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
 import { readReport, type DiagnosisView } from '../shared/diagnosis';
 import type { McpHub, McpLease } from './mcpHub';
@@ -424,6 +427,8 @@ export interface ManagerOptions {
   costLog: CostLog;
   /** The MCP servers and skills installed, as list_capabilities gives them. */
   capabilities(): Promise<string>;
+  /** The providers' video models and the videos made with them: list_video_models and generate_video. */
+  video?: VideoService;
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
@@ -3873,6 +3878,8 @@ export class SessionManager extends EventEmitter {
     const listWorkers = tool('list_workers', t('tool.listWorkers'), listShape, (a) => run(() => this.listWorkers(undefined, a as ListOptions)));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
+    // Videos are made by the hub with a provider's video model, for any session that asks; such a model runs none.
+    const video = this.opts.video ? videoTools(this.opts.video, () => s.cwd, run) : [];
     const memory = tool('topic_memory', t(role === 'worker' ? 'tool.topicMemory.worker' : 'tool.topicMemory'),
       {
         topic: z.string().optional(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
@@ -3944,7 +3951,7 @@ export class SessionManager extends EventEmitter {
       // A diagnosis worker reads who does what and reports: no message to a worker, no topic memory to write.
       if (s.diagOf) return [listWorkers, toMaster];
       const exploreTool = harness === 'claude' && !remote ? [this.exploreTool(s, run)] : [];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, toMaster, ...toLead, ...exploreTool, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
+      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, ...video, toMaster, ...toLead, ...exploreTool, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -3976,6 +3983,7 @@ export class SessionManager extends EventEmitter {
     };
     return [
         memory,
+        ...video,
         tool(
           'spawn_worker',
           t('tool.spawn'),
@@ -5424,7 +5432,13 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
   private catalogOf(account: string): AgentModel[] {
     const a = this.opts.cfg.accounts.find((x) => x.id === account);
     if (a && providerOfAccount(a) === 'deepseek') return DEEPSEEK_MODELS.map((m) => ({ value: m.value, displayName: m.label, description: m.description, efforts: [] }));
-    return this.ownCatalog(account) ? (this.catalogs.get(account) ?? []) : this.modelInfos;
+    if (!this.ownCatalog(account)) return this.modelInfos;
+    const models = this.catalogs.get(account) ?? [];
+    // A video model makes videos (generate_video): whatever list it got into, it is offered for no session.
+    const video = a ? (this.opts.video?.ids(a) ?? a.videoModels ?? []) : [];
+    if (video.length === 0) return models;
+    const kept = new Set(textModels(models.map((m) => m.value), video));
+    return models.filter((m) => kept.has(m.value));
   }
 
   /** What the program is asked for: OpenAI's models go by the environment, DeepSeek's by the names its endpoint maps. */

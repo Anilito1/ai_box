@@ -15,6 +15,16 @@ test('local-file boundary: five types, source lines, reveal, deleted files and s
       await writeFile(join(root, name), 'synthetic fixture');
       assert.deepEqual(await openLocalFile(root, name, 'open', shell), { ok: true });
     }
+    // A folder the hub saves files in (the generated videos) opens from any conversation, under the same rules.
+    const videos = await mkdtemp(join(tmpdir(), 'local-files-videos-'));
+    await writeFile(join(videos, 'clip.mp4'), 'synthetic fixture');
+    await writeFile(join(videos, 'run.exe'), 'synthetic fixture');
+    assert.deepEqual(await openLocalFile(root, join(videos, 'clip.mp4'), 'open', shell), { ok: false, error: 'outside' });
+    assert.deepEqual(await openLocalFile(root, join(videos, 'clip.mp4'), 'open', shell, [videos]), { ok: true });
+    assert.equal(opened.pop()?.endsWith('clip.mp4'), true);
+    assert.deepEqual(await openLocalFile(root, join(videos, 'run.exe'), 'open', shell, [videos]), { ok: false, error: 'unsupported' });
+    assert.deepEqual(await openLocalFile(root, join(videos, '..', 'elsewhere.mp4'), 'open', shell, [videos]), { ok: false, error: 'outside' });
+    await rm(videos, { recursive: true, force: true });
     await mkdir(join(root, 'samples'));
     assert.deepEqual(await openLocalFile(root, 'samples', 'open', shell), { ok: true });
     assert.equal(opened.length, 5);

@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { ACCOUNT_ID, isLocalUrl } from '../shared/accounts';
 import type { Account, AccountStatus } from '../shared/types';
+import { modelKind } from '../shared/video';
 import { adjustRequest, errorMessage } from './bridgeFormat';
 import { errorCode, httpCode } from './errors';
 
@@ -191,13 +192,15 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return { ...none, error: httpCode(res.status) };
-    let body: { data?: { id?: unknown }[] } = {};
+    let body: { data?: { id?: unknown; type?: unknown }[] } = {};
     try {
       body = (JSON.parse(await readCapped(res, 8 * 1024 * 1024)) as typeof body | null) ?? {};
     } catch {
       // Not a list: no models.
     }
-    const models = (body.data ?? [])
+    const models = (Array.isArray(body.data) ? body.data : [])
+      // A list that says what each model makes (Venice, Together): the ones that make images or videos run no session.
+      .filter((m) => modelKind(m?.type) === 'text')
       .map((m) => m.id)
       .filter((id): id is string => typeof id === 'string')
       .sort()
@@ -209,7 +212,7 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
 }
 
 /** A response's text, at most `max` bytes whatever its Content-Length says: a server cannot flood the main process. */
-async function readCapped(res: Response, max: number): Promise<string> {
+export async function readCapped(res: Response, max: number): Promise<string> {
   const reader = res.body?.getReader();
   if (!reader) return '';
   const chunks: Uint8Array[] = [];

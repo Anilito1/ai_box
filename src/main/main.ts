@@ -1,4 +1,6 @@
 import { openLocalFile } from './localFiles';
+import { VideoService } from './video/service';
+import { textModels, videoAmong } from '../shared/video';
 import './shellPath';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -286,6 +288,14 @@ const hostOf = (url: string) => {
     return url;
   }
 };
+/** Where generated videos go: a folder of the hub's in the user's videos. */
+function videosDir(): string {
+  try {
+    return join(app.getPath('videos'), 'AI-Box');
+  } catch {
+    return join(homedir(), 'Videos', 'AI-Box');
+  }
+}
 const systemLang = (): Lang => ((app.getPreferredSystemLanguages()[0] ?? app.getLocale()).toLowerCase().startsWith('fr') ? 'fr' : 'en');
 
 class Hub {
@@ -293,6 +303,8 @@ class Hub {
   readonly cfg: HubConfig;
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
+  /** The video models of the providers the user added, and the videos made with them. */
+  readonly video = new VideoService({ accounts: () => this.cfg.accounts, key: (id) => this.secrets.get(`account:${id}`), outDir: () => videosDir() });
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
   /** The remote server (experimental): inert while remote workers are off. */
@@ -393,6 +405,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       persist: () => this.save(),
       costLog: this.costLog,
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
+      video: this.video,
       remoteServer: this.remote,
       scratchRoot: join(this.dataDir, 'scratch'),
       wideFolders: () => this.wideFolders(),
@@ -592,7 +605,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
         method: customViews[i].connected ? ('apikey' as const) : ('' as const),
         methods: { apikey: customViews[i] },
         cli: null,
-        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models },
+        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models, video: this.video.view(a) },
       })),
     ];
     const states: Record<string, ProviderState> = {
@@ -695,11 +708,12 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
    */
   async customProvider(action: CustomProviderAction, raw: unknown, key: unknown): Promise<CustomProviderResult> {
     // Listing and testing leave the blocks as they are: only a save or a removal checks them again.
-    const out = async (r: { ok: boolean; error: string; field?: string; models?: string[]; detail?: string }, views = false) => ({
+    const out = async (r: { ok: boolean; error: string; field?: string; models?: string[]; videoModels?: string[]; detail?: string }, views = false) => ({
       ok: r.ok,
       error: r.error,
       field: r.field ?? '',
       models: r.models ?? [],
+      videoModels: r.videoModels ?? [],
       detail: r.detail ?? '',
       views: views ? await this.providerViews() : [],
     });
@@ -711,24 +725,35 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       return out({ ok: r.ok, error: r.error }, true);
     }
     const slug = before?.slug ?? customSlug(isStr(d.name) ? d.name : '', this.cfg.accounts.map((a) => a.slug).filter(Boolean));
-    const draft = normalizeAccount({ id: before?.id ?? '', kind: 'openai', name: d.name, baseUrl: d.baseUrl, models: d.models, slug, isolated: false });
+    const draft = normalizeAccount({ id: before?.id ?? '', kind: 'openai', name: d.name, baseUrl: d.baseUrl, models: d.models, videoModels: d.videoModels, slug, isolated: false });
     const typed = isStr(key) ? key.trim() : '';
+    // The stored key goes to the address it was given for, never to another one typed since.
+    const k = typed || (before && before.baseUrl === draft.baseUrl ? this.secrets.get(`account:${before.id}`) : '');
+    // The video models the address lists, asked once the form is otherwise right (its own errors come first, and
+    // fast): none of them may be among the models its sessions run.
+    const videoListed = async () => (this.video.adapterOf(draft) ? (await this.video.detect(draft.baseUrl, k, AbortSignal.timeout(8_000)).catch(() => [])).map((m) => m.id) : []);
+    const mixed = (listed: string[]) => {
+      const video = videoAmong(draft.models, listed);
+      return video.length > 0 ? out({ ok: false, error: 'video', field: 'models', detail: video.slice(0, 5).join(', ') }) : null;
+    };
     if (action === 'save') {
+      const refused = isServerUrl(draft.baseUrl) && (!typed || isOpenAIKey(typed)) && !checkAccount(draft, this.cfg.accounts) ? mixed(await videoListed()) : null;
+      if (refused) return refused;
       const r = await this.saveAccount(draft, typed || null);
       return out({ ok: r.ok, error: r.error, field: r.field }, r.ok);
     }
     if (!isServerUrl(draft.baseUrl)) return out({ ok: false, error: 'format', field: 'baseUrl' });
     if (typed && !isOpenAIKey(typed)) return out({ ok: false, error: 'format', field: 'key' });
-    // The stored key goes to the address it was given for, never to another one typed since.
-    const k = typed || (before && before.baseUrl === draft.baseUrl ? this.secrets.get(`account:${before.id}`) : '');
     if (!k && !isLocalUrl(draft.baseUrl)) return out({ ok: false, error: 'required', field: 'key' });
     if (action === 'models') {
-      const st = await checkOpenAI(draft.baseUrl, k);
-      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models });
+      const [st, listed] = await Promise.all([checkOpenAI(draft.baseUrl, k), videoListed()]);
+      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models, videoModels: listed });
       if (st.ready || /^http-(404|405|501)$/.test(st.error)) return out({ ok: false, error: 'no-list', field: 'models' });
       return out({ ok: false, error: st.error, field: /^(unauthorized|forbidden)$/.test(st.error) ? 'key' : 'baseUrl' });
     }
     if (!draft.model) return out({ ok: false, error: 'required', field: 'models' });
+    const refused = mixed(await videoListed());
+    if (refused) return refused;
     const r = await testChat(draft.baseUrl, k, draft.model);
     // The address answered but refused the call: most often a model it does not have.
     if (/^http-(400|404|422)$/.test(r.error)) return out({ ok: false, error: 'model-refused', field: 'models', detail: r.detail });
@@ -914,6 +939,8 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     // DeepSeek's Anthropic-style address has no model list: its key is asked against DeepSeek's own.
     const deepseek = providerOfAccount(a) === 'deepseek';
     const custom = isCustomAccount(a);
+    // A provider the user added may have a video API beside its chat one: its video models are read along.
+    const video = custom ? this.video.refresh(a) : null;
     const status = deepseek
       ? await checkOpenAI('https://api.deepseek.com', key)
       : a.kind === 'anthropic-compatible'
@@ -921,10 +948,24 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
         : custom
           ? await checkCustom(a.baseUrl, key)
           : await checkOpenAI(a.baseUrl, key);
+    await video;
+    if (custom) this.dropVideoModels(a);
     // OpenAI's own list: each session picks among its chat models. A provider the user added: among the ones they chose.
     const catalog = custom ? a.models : chatModels(status.models);
     if (a.kind === 'openai' && status.ready) this.mgr.setCatalog(a.id, catalog.map((value) => ({ value, displayName: value, description: '', efforts: [] })));
     return { ...status, detail: [hostOf(a.baseUrl), a.model, status.detail === 'unchecked' ? 'unchecked' : ''].filter(Boolean).join(' · ') };
+  }
+
+  /**
+   * A video model runs no session. One that got among a provider's session models (saved while the provider's list
+   * could not be read) is taken out of them once the list says so, as long as a text model is left.
+   */
+  private dropVideoModels(a: Account): void {
+    const models = textModels(a.models, this.video.ids(a));
+    if (models.length === a.models.length || models.length === 0) return;
+    Object.assign(a, { models, model: models[0] });
+    this.save();
+    this.mgr.accountsChanged();
   }
 
   /**
@@ -978,6 +1019,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     if (this.mgr.workingOn(a.id)) return { ...this.view(), ok: false, error: 'working' };
     const env = this.mgr.environment(a.id);
     this.cfg.accounts = this.cfg.accounts.filter((x) => x.id !== a.id);
+    this.video.forget(a.id);
     knownAccounts(this.cfg);
     this.save();
     // Its sessions move to their usual account first: none runs on it when it goes.
@@ -1141,7 +1183,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       return c.repo.act(c.path, parsed);
     });
     handle('session:open-file', (id, path, action) =>
-      openLocalFile(isStr(id) ? mgr.snapshot().sessions.find((s) => s.id === id)?.cwd : undefined, path, action, shell),
+      openLocalFile(isStr(id) ? mgr.snapshot().sessions.find((s) => s.id === id)?.cwd : undefined, path, action, shell, [videosDir()]),
     );
     on('open-external', (url) => {
       if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
@@ -1297,7 +1339,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('providers:custom', (action, draft, key) =>
       action === 'models' || action === 'test' || action === 'save' || action === 'remove'
         ? this.customProvider(action, draft, key)
-        : { ok: false, error: 'unsupported', field: '', models: [], detail: '', views: [] },
+        : { ok: false, error: 'unsupported', field: '', models: [], videoModels: [], detail: '', views: [] },
     );
     // A built-in provider or the id of one the user added: the session manager resolves it, or says it is unknown.
     const isProviderRef = (v: unknown): v is string => isProviderId(v) || (isStr(v) && CUSTOM_SLUG.test(v));

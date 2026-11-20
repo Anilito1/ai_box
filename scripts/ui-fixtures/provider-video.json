@@ -1,0 +1,35 @@
+[
+  {
+    "id": "venice",
+    "label": "Venice",
+    "connected": true,
+    "method": "apikey",
+    "methods": { "apikey": { "connected": true, "detail": "", "error": "" } },
+    "cli": null,
+    "custom": {
+      "accountId": "a-ven00001",
+      "baseUrl": "https://api.venice.ai/api/v1",
+      "models": ["venice-uncensored", "llama-3.3-70b"],
+      "video": {
+        "listed": [
+          "kling-2.6-pro-image-to-video",
+          "kling-2.6-pro-text-to-video",
+          "seedance-2-0-text-to-video-basic",
+          "veo-3.1-fast-text-to-video",
+          "wan-2.5-preview-image-to-video",
+          "wan-2.5-preview-text-to-video"
+        ],
+        "manual": ["my-own-video-model"]
+      }
+    }
+  },
+  {
+    "id": "local-llama",
+    "label": "Local Llama",
+    "connected": true,
+    "method": "apikey",
+    "methods": { "apikey": { "connected": true, "detail": "", "error": "" } },
+    "cli": null,
+    "custom": { "accountId": "a-llm00001", "baseUrl": "http://localhost:11434/v1", "models": ["llama-4"], "video": { "listed": [], "manual": [] } }
+  }
+]

@@ -1,4 +1,5 @@
 import { ACCOUNT_KINDS, type Account, type AccountKind, type HarnessId } from './types';
+import { VIDEO_MODELS_MAX, videoAmong } from './video';
 
 // Accounts sessions can run on: checks shared by the settings screen and the main process. No Node and no DOM.
 
@@ -83,6 +84,7 @@ export function normalizeAccount(raw: unknown): Account {
   const server = hasServer(kind);
   const slug = kind === 'openai' ? str(o.slug).trim().toLowerCase() : '';
   const models = slug && Array.isArray(o.models) ? [...new Set(o.models.map((m) => str(m).trim()).filter(Boolean))] : [];
+  const videoModels = slug && Array.isArray(o.videoModels) ? [...new Set(o.videoModels.map((m) => str(m).trim()).filter(Boolean))] : [];
   return {
     id: str(o.id),
     kind,
@@ -93,13 +95,14 @@ export function normalizeAccount(raw: unknown): Account {
     smallModel: server && !slug ? str(o.smallModel).trim() : '',
     slug,
     models,
+    ...(videoModels.length > 0 ? { videoModels } : {}),
     // A Gemini account always has a folder of its own: its sign-in and its conversations live there.
     isolated: kind === 'gemini' || kind === 'gemini-key' || (kind === 'codex' && o.isolated === true),
   };
 }
 
-export type AccountField = 'name' | 'baseUrl' | 'model' | 'smallModel' | 'models' | 'key' | 'accounts';
-export type AccountProblem = 'required' | 'tooLong' | 'format' | 'taken' | 'tooMany' | 'reserved';
+export type AccountField = 'name' | 'baseUrl' | 'model' | 'smallModel' | 'models' | 'videoModels' | 'key' | 'accounts';
+export type AccountProblem = 'required' | 'tooLong' | 'format' | 'taken' | 'tooMany' | 'reserved' | 'video';
 export interface AccountError {
   field: AccountField;
   problem: AccountProblem;
@@ -125,6 +128,11 @@ export function checkAccount(a: Account, others: Account[]): AccountError | null
     if (a.models.length === 0) return fail('models', 'required');
     if (a.models.length > CUSTOM_MODELS_MAX) return fail('models', 'tooMany');
     if (a.models.some((m) => !MODEL.test(m))) return fail('models', 'format');
+    const video = a.videoModels ?? [];
+    if (video.length > VIDEO_MODELS_MAX) return fail('videoModels', 'tooMany');
+    if (video.some((m) => !MODEL.test(m))) return fail('videoModels', 'format');
+    // A video model makes videos: it never runs a session.
+    if (videoAmong(a.models, video).length > 0) return fail('models', 'video');
   }
   // An Anthropic-compatible server maps Claude's names itself: a model is optional there.
   if (!a.model && a.kind === 'openai') return fail('model', 'required');

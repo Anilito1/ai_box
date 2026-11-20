@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-21
+
+### Ajouté
+
+- Génération de vidéos avec un fournisseur ajouté (Venice) : ses modèles vidéo sont trouvés tout seuls et listés dans Réglages › Comptes, sous « Vidéo », où vous pouvez aussi en ajouter un à la main. Demandez une vidéo au maître ou à un worker : il annonce le prix, la génère et vous donne un lien pour l'ouvrir ; elle est enregistrée dans votre dossier Vidéos › AI-Box. Ces modèles ne sont jamais proposés pour faire tourner une session.
+
 ## 2026-11-20
 
 ### Ajouté

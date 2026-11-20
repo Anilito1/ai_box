@@ -152,6 +152,10 @@ test('a provider the user added: checked with its list, tested with a short chat
   try {
     assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: '', error: '', models: ['venice-uncensored'] });
     assert.deepEqual(asked[0], { path: '/api/v1/models', auth: `Bearer ${KEY}`, body: {} });
+    // A list that says what each model makes: the ones that make videos or images are no models for a session.
+    answer = () => ({ status: 200, body: { data: [{ id: 'wan-video', type: 'video' }, { id: 'venice-uncensored', type: 'text' }, { id: 'flux-image', type: 'image' }, { id: 'qwen-chat', type: 'chat' }, { id: 'plain' }] } });
+    assert.deepEqual((await checkCustom(url, KEY)).models, ['plain', 'qwen-chat', 'venice-uncensored']);
+    answer = () => ({ status: 200, body: { data: [{ id: 'venice-uncensored' }] } });
     answer = () => ({ status: 404, body: {} });
     assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: 'unchecked', error: '', models: [] }, 'no list: accepted, unchecked');
     answer = () => ({ status: 401, body: { error: { message: 'bad key' } } });
