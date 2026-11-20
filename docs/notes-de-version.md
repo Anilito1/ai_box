@@ -16,6 +16,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Réglages › Énergie : le PC reste éveillé pendant que des workers travaillent, et peut continuer capot fermé ; une garde batterie le met en veille prolongée avant qu'il ne s'éteigne (avec une notification), et vos réglages d'alimentation reviennent à la fin. La barre d'état indique quand le PC est tenu éveillé.
 
+### Supprimé
+
+- Réglages › Énergie et son indicateur dans la barre d'état : le PC reste de nouveau simplement éveillé pendant que des workers travaillent, comme avant.
+
 ## 2026-11-18
 
 ### Ajouté

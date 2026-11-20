@@ -1,11 +1,9 @@
-import type { EnergyView } from '../shared/energy';
 import type { ChatItem, HubApi, HubSnapshot, SessionView, UsageState } from '../shared/types';
 import './background';
 import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { ForumView } from './forum';
-import { energyBadge } from './energy';
 import { AwayButton } from './remote';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
@@ -370,8 +368,6 @@ function usageItem(usage: UsageState, gauge: UsageGauge): HTMLDivElement {
 const usageClock = () => Math.floor(Date.now() / 30_000);
 
 let statusKey = '';
-/** What keeps the PC awake (Settings › Energy), told in the status bar. */
-let energy: EnergyView | null = null;
 
 function renderStatusbar(usage: UsageState | null): void {
   const workers = snapshot.sessions.filter((s) => s.role === 'worker' && !isClosed(s));
@@ -380,8 +376,7 @@ function renderStatusbar(usage: UsageState | null): void {
   const master = snapshot.sessions.find((s) => s.role === 'master');
   // From midnight on, today's figure is 0 until a turn brings a new snapshot.
   const today = snapshot.costToday.day === dayOf(Date.now()) ? snapshot.costToday.cost : 0;
-  const badge = energyBadge(energy);
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), usage, usageClock(), badge]);
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -394,14 +389,6 @@ function renderStatusbar(usage: UsageState | null): void {
   left.push(h('span', 'sb-sep'), sbItem(t('sb.active'), String(workers.length)));
   if (running) left.push(sbItem(t('sb.running'), String(running)));
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
-  // Kept awake (lid closed or not), or let go by the battery guard: a click opens Settings › Energy.
-  if (badge) {
-    const item = h('button', `sb-item sb-energy ${badge.tone}`);
-    item.title = badge.title;
-    item.append(icon(badge.tone === 'warn' ? ICONS.info : ICONS.awake), h('span', '', badge.text));
-    item.addEventListener('click', () => void setup.open('settings', 'energy'));
-    left.push(h('span', 'sb-sep'), item);
-  }
   $('sb-left').replaceChildren(...left);
 
   // Today's cost; a click opens the cost by repo.
@@ -419,15 +406,6 @@ function renderStatusbar(usage: UsageState | null): void {
 }
 
 window.setInterval(() => renderStatusbar(snapshot.usage), 30_000);
-
-hub.onEnergy((v) => {
-  energy = v;
-  renderStatusbar(snapshot.usage);
-});
-void hub.energyState().then((v) => {
-  energy ??= v;
-  renderStatusbar(snapshot.usage);
-});
 
 // ---------- render ----------
 

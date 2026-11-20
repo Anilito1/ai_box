@@ -4061,63 +4061,6 @@ kbd,
 .sb-failed {
   color: var(--danger-text);
 }
-.sb-energy {
-  height: 20px;
-  margin: 0 -6px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: var(--r-xs);
-  background: transparent;
-  color: var(--ok);
-  font: inherit;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color var(--dur-2);
-}
-.sb-energy.warn {
-  color: var(--warn);
-}
-.sb-energy:hover {
-  background: var(--hover-strong);
-}
-
-/* Settings › Energy: a switch this PC cannot have reads as such, its reason beside it. */
-.energy-toggle {
-  align-self: stretch;
-}
-.energy-toggle .setup-choice-hint {
-  margin-top: 2px;
-}
-.setup-toggle.energy-off {
-  border-style: dashed;
-  background: transparent;
-  cursor: not-allowed;
-}
-.setup-toggle.energy-off:hover {
-  border-color: var(--line);
-}
-.energy-off .setup-choice-title,
-.energy-off .setup-label {
-  color: var(--text-3);
-}
-.energy-off .setup-select {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.energy-why {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 6px;
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-}
-.energy-why .ico {
-  flex: none;
-  margin-top: 2px;
-  color: var(--warn);
-}
 
 /* ---------- copy actions: a small floating toolbar over the message, on hover ---------- */
 .msg-actions {
