@@ -53,7 +53,7 @@ test('laptop in Modern Standby with lid = sleep: workers stop when the lid close
   assert.equal(a.verdict.battery.runtimeH, 3.5);
   assert.equal(a.verdict.battery.dischargeW, 9);
   const ids = a.recommendations.map((r) => r.id);
-  for (const id of ['lid-nothing-ac', 'lid-nothing-dc', 'critical-hibernate', 'cpu-boost-dc', 'browser-background', 'hibernate-idle-dc']) assert.ok(ids.includes(id), id);
+  for (const id of ['lid-nothing-ac', 'lid-nothing-dc', 'standby-idle-dc-off', 'critical-hibernate', 'cpu-boost-dc', 'browser-background', 'hibernate-idle-dc']) assert.ok(ids.includes(id), id);
   assert.ok(!ids.includes('sleep-idle-ac'), 'desktop-only entry is not proposed on a laptop');
   assert.ok(!ids.includes('cpu-epp'), 'EPP 33/50 is already in place');
   assert.ok(a.findings.some((f) => f.level === 'bloquant'));

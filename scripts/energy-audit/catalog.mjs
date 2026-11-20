@@ -28,6 +28,14 @@ export const CATALOG = [
     source: `${LEARN}power-button-and-lid-settings-lid-switch-close-action`,
   },
   {
+    id: 'standby-idle-dc-off',
+    title: 'Veille moderne (S0), sur batterie : pas de veille sur inactivité (le temps des travaux en cours)',
+    gain: 'élevé', risk: 'moyen', rights: 'utilisateur', scope: 'portable',
+    ...plan('SUB_SLEEP', 'STANDBYIDLE', { dc: 0 }),
+    breaks: "En veille moderne, l’écran éteint suffit à faire entrer la machine en veille, où les applications de bureau (les workers) sont gelées ; à 0, elle reste éveillée sur batterie et se vide. À remettre à la fin du travail.",
+    source: `${LEARN}sleep-settings-sleep-idle-timeout`,
+  },
+  {
     id: 'critical-hibernate',
     title: 'Batterie critique : veille prolongée (rien n’est perdu si la batterie se vide capot fermé)',
     gain: 'faible', risk: 'faible', rights: 'utilisateur', scope: 'portable',

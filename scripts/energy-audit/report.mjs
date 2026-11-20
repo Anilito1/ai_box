@@ -80,7 +80,7 @@ export function renderMarkdown(data, a) {
   out.push(`Démarrage rapide : ${ps.powerMode?.hiberbootEnabled === 1 ? 'activé' : 'désactivé'}. Veille prolongée : ${ps.capabilities?.s4 ? 'disponible' : 'indisponible'}.`, '');
   out.push(findingsOf(a, 'plan'), '');
   if (v.portable) {
-    out.push('**Pour continuer à travailler capot fermé** (à ne pas appliquer sans décision) : `lid-nothing-ac` ; sur batterie, `lid-nothing-dc` seulement le temps du travail, avec `critical-hibernate` et `cpu-boost-dc`. L’app AI Box doit en plus tenir une demande d’alimentation tant qu’un worker tourne (elle empêche la veille sur inactivité, pas l’action du capot).', '');
+    out.push('**Pour continuer à travailler capot fermé** (à ne pas appliquer sans décision) : `lid-nothing-ac` ; sur batterie, `lid-nothing-dc` seulement le temps du travail (plus `standby-idle-dc-off` en veille moderne S0), avec `critical-hibernate` et `cpu-boost-dc`. L’app AI Box doit en plus tenir une demande d’alimentation tant qu’un worker tourne (elle empêche la veille sur inactivité, pas l’action du capot).', '');
   }
 
   const p = a.processes;

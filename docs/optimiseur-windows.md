@@ -65,7 +65,7 @@ Les processus AI Box (`claude.exe`, l’app elle-même, et tout ce qu’ils ont 
   ES_CONTINUOUS)` ou `PowerSetRequest`) empêche la veille sur inactivité, **pas** l’action du capot : seul le réglage
   `LIDACTION` = 0 (« Ne rien faire ») garde la machine éveillée capot fermé.
 - Recette sans risque pour un portable branché : `lid-nothing-ac`. Sur batterie : `lid-nothing-dc` seulement le temps
-  du travail, avec `critical-hibernate` (veille prolongée à batterie critique) et `cpu-boost-dc` (turbo coupé) ; l’app
+  du travail (en veille moderne S0, aussi `standby-idle-dc-off`, sinon l’écran éteint suffit à geler les workers), avec `critical-hibernate` (veille prolongée à batterie critique) et `cpu-boost-dc` (turbo coupé) ; l’app
   doit tenir une demande d’alimentation tant qu’un worker tourne, et la relâcher ensuite pour que la veille reprenne.
 - Capot fermé, l’écran interne s’éteint de lui-même : pas besoin de régler l’écran pour ça.
 - Chaleur : une machine allumée capot fermé dans une housse chauffe ; le refroidissement passe par le clavier sur
@@ -92,6 +92,7 @@ personnel. Changer de mode (`plan-balanced`) change aussi toutes les autres vale
 |---|---|---|---|---|---|
 | `lid-nothing-ac` | Capot fermé, branché : ne rien faire | élevé | faible | utilisateur | portable |
 | `lid-nothing-dc` | Capot fermé, sur batterie : ne rien faire (le temps d’un travail) | élevé | moyen | utilisateur | portable |
+| `standby-idle-dc-off` | Veille moderne, sur batterie : pas de veille sur inactivité (le temps d’un travail) | élevé | moyen | utilisateur | portable S0 |
 | `plan-balanced` | Mode « Utilisation normale » au lieu de « Haute performance » | élevé | faible | utilisateur | tous |
 | `cpu-min-state-ac` | État minimal du processeur sur secteur : 5 % | élevé | faible | utilisateur | tous |
 | `cpu-boost-dc` | Sur batterie : turbo du processeur coupé | élevé | faible | utilisateur | portable |
@@ -129,6 +130,13 @@ Annuler : même commande avec la valeur d’avant (1 = veille).
 Casse : la machine reste allumée et se vide capot fermé, chauffe dans un sac. Le temps d’un travail seulement, avec
 `critical-hibernate`.
 Source : [Lid switch close action](https://learn.microsoft.com/windows-hardware/customize/power-settings/power-button-and-lid-settings-lid-switch-close-action).
+
+**`standby-idle-dc-off`** — Veille moderne (S0), sur batterie : pas de veille sur inactivité.
+Appliquer : `powercfg /setdcvalueindex SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0` puis `/setactive SCHEME_CURRENT`.
+Annuler : valeur d’avant (en secondes ; le rapport l’écrit).
+Casse : en veille moderne, écran éteint, la machine entre en veille et gèle les applications de bureau ; à 0 elle
+reste éveillée sur batterie et se vide. Le temps d’un travail seulement, avec `critical-hibernate`.
+Source : [Sleep idle timeout](https://learn.microsoft.com/windows-hardware/customize/power-settings/sleep-settings-sleep-idle-timeout).
 
 **`critical-hibernate`** — Batterie critique : veille prolongée.
 Appliquer : `powercfg /setdcvalueindex SCHEME_CURRENT SUB_BATTERY BATACTIONCRIT 2` puis `/setactive SCHEME_CURRENT`.
