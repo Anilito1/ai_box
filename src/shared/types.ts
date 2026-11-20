@@ -4,6 +4,7 @@ import type { Capabilities, CapResult, ConnectResult, McpDraft, McpSource } from
 import type { PurgeLogEntry, PurgeProject, PurgeReport, PurgeRestoreResult, PurgeSettingsView, PurgeTrashResult } from './purge';
 import type { DayCost, MissionEvent, TurnRecord } from './costs';
 import type { DiagnosisView } from './diagnosis';
+import type { EnergySettings, EnergyView } from './energy';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
@@ -799,6 +800,8 @@ export interface HubSettings {
   background: string;
   dictation: DictationSettings;
   remoteWorkers: RemoteWorkers;
+  /** Keeping the PC awake while workers run, lid closed included. */
+  energy: EnergySettings;
 }
 
 /** Settings as the renderer sees them: secrets only as "set or not". */
@@ -821,8 +824,9 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation' | 'energy'>> & {
   dictation?: Partial<DictationSettings>;
+  energy?: Partial<EnergySettings>;
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
 
@@ -1007,6 +1011,11 @@ export interface HubApi {
   /** The server's own key that may only shelve it (never kept here), or { off: true } to take it back. */
   remoteServerPower(o: { appKey: string; appSecret: string; consumerKey: string } | { off: true }): Promise<RemoteView>;
   onRemote(cb: (view: RemoteView) => void): void;
+  energyState(): Promise<EnergyView>;
+  /** Minutes kept awake, null until stopped, 0 to stop. */
+  energyKeepAwake(minutes: number | null): Promise<EnergyView>;
+  energyDisplayOff(): Promise<void>;
+  onEnergy(cb: (view: EnergyView) => void): void;
   awayLeave(): void;
   /** `leave`: the workers on the server finish there; `bring` (default): they come back to this PC. */
   awayBack(mode?: 'bring' | 'leave'): void;

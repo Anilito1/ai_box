@@ -105,6 +105,12 @@ const api: HubApi = {
   onRemote: (cb) => {
     ipcRenderer.on('vps:state', (_e, view) => cb(view));
   },
+  energyState: () => ipcRenderer.invoke('energy:get'),
+  energyKeepAwake: (minutes) => ipcRenderer.invoke('energy:keep-awake', minutes),
+  energyDisplayOff: () => ipcRenderer.invoke('energy:display-off'),
+  onEnergy: (cb) => {
+    ipcRenderer.on('energy:state', (_e, view) => cb(view));
+  },
   awayLeave: () => ipcRenderer.send('away:leave'),
   awayBack: (mode) => ipcRenderer.send('away:back', mode),
   purgeProjects: () => ipcRenderer.invoke('purge:projects'),

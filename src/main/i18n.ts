@@ -596,6 +596,14 @@ const en = {
   'tool.group.newName': 'New name',
   'tool.group.lead': 'The lead: a post name, or an ad-hoc worker name ("hub-…")',
   'tool.group.members': 'The members: post names, or ad-hoc worker names. A worker is a member of one group only.',
+  'energy.note.noHelper': 'Windows did not start the power helper (PowerShell): AI Box cannot keep this PC awake.',
+  'energy.note.noLid': 'This PC has no lid: there is nothing to keep awake when it closes.',
+  'energy.note.noPowercfg': 'The power plans cannot be changed on this PC (powercfg): closing the lid will still put it to sleep.',
+  'energy.note.noBattery': 'No battery: the battery guard does not apply.',
+  'energy.note.radios': 'Wi-Fi stays on (the workers need the network) and Bluetooth is left as it is.',
+  'energy.reason': 'AI Box keeps this PC awake while work is under way',
+  'energy.notify.title': 'Battery low ({n} %)',
+  'energy.notify.hibernate': 'AI Box stops keeping the PC awake and puts it into hibernation. The workers pick up again once it is plugged in.',
 };
 
 type Key = keyof typeof en;
@@ -1202,6 +1210,14 @@ const fr: Record<Key, string> = {
   'tool.group.newName': 'Nouveau nom',
   'tool.group.lead': 'Le chef : un nom de poste, ou un nom de worker ponctuel ("hub-…")',
   'tool.group.members': 'Les membres : noms de postes, ou de workers ponctuels. Un worker est membre d’un seul groupe.',
+  'energy.note.noHelper': 'Windows n’a pas lancé l’assistant d’alimentation (PowerShell) : AI Box ne peut pas garder ce PC éveillé.',
+  'energy.note.noLid': 'Ce PC n’a pas de capot : rien à maintenir à sa fermeture.',
+  'energy.note.noPowercfg': 'Les modes d’alimentation ne peuvent pas être modifiés sur ce PC (powercfg) : fermer le capot le mettra quand même en veille.',
+  'energy.note.noBattery': 'Pas de batterie : la garde batterie ne s’applique pas.',
+  'energy.note.radios': 'Le Wi-Fi reste allumé (les workers ont besoin du réseau) et le Bluetooth n’est pas touché.',
+  'energy.reason': 'AI Box garde ce PC éveillé pendant un travail en cours',
+  'energy.notify.title': 'Batterie faible ({n} %)',
+  'energy.notify.hibernate': 'AI Box cesse de garder le PC éveillé et le met en veille prolongée. Les workers reprennent une fois le PC branché.',
 };
 
 let current: Lang = 'en';
