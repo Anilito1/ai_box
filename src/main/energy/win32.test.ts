@@ -351,6 +351,38 @@ test('what cannot be put back stays in the snapshot for the next start', async (
   assert.equal(await next.restoreLeftovers(), 0);
 });
 
+test('a copy left by a failed release is undone before the next one, never taken for the user plan', async () => {
+  const { w, e } = adapter();
+  const h = await e.hold({ reason: 'workers', lidClosed: true, allowDisplaySleep: true });
+  const copy = w.active;
+  // Neither the user's plan nor Balanced can be made active again.
+  w.failing.set('/setactive', 2);
+  await h.release();
+  assert.equal(w.active, copy);
+  assert.equal(w.files.has(SNAPSHOT), true);
+  const h2 = await e.hold({ reason: 'workers', lidClosed: true, allowDisplaySleep: true });
+  assert.equal(w.plans.has(copy), false);
+  assert.equal(JSON.parse(w.files.get(SNAPSHOT) ?? '{}').original, USER);
+  await h2.release();
+  assert.equal(w.active, USER);
+  assert.equal(w.plans.size, 3);
+  assert.equal(w.files.has(SNAPSHOT), false);
+});
+
+test('the lid state is not kept once nobody listens: the next subscriber hears the system', async () => {
+  const { w, e } = adapter();
+  const first: boolean[] = [];
+  const off = e.onLidChange((closed) => first.push(closed));
+  await settle();
+  w.helpers[0].emit('event lid 0');
+  off();
+  const next: boolean[] = [];
+  e.onLidChange((closed) => next.push(closed));
+  await settle();
+  assert.deepEqual(first, [true]);
+  assert.deepEqual(next, []);
+});
+
 test('after a crash: the user plan back and the copy gone, a plan the user picked meanwhile kept', async () => {
   const { w, e } = adapter();
   await e.hold({ reason: 'workers', lidClosed: true, allowDisplaySleep: true });

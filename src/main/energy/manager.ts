@@ -44,6 +44,10 @@ const GUARD_MARGIN = 5;
 const AWAY_S = 300;
 /** A hold that ends with the lid closed and someone typing (an external keyboard) does not put the PC to sleep. */
 const LID_IDLE_S = 60;
+/** A hold wanted and not there (refused, or the system not answering) is asked again this much later, not in a loop. */
+const RETRY_MS = 60_000;
+/** The system asked again for its capabilities this many times at most, then only when the settings open. */
+const CAPS_TRIES = 5;
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -66,6 +70,8 @@ export class EnergyManager {
   private chain: Promise<void> = Promise.resolve();
   private unwatch: (() => void)[] = [];
   private cancelCheck: (() => void) | null = null;
+  private cancelRetry: (() => void) | null = null;
+  private capsTries = 0;
   private stopped = false;
 
   constructor(private readonly o: EnergyManagerOptions) {
@@ -82,14 +88,21 @@ export class EnergyManager {
       } catch (err) {
         this.o.log?.(`energy: leftovers not undone: ${message(err)}`);
       }
-      try {
-        this.caps = await p.caps();
-      } catch (err) {
-        this.error = message(err);
-      }
+      await this.readCaps();
       await this.readBattery();
     }
     await this.reconcile();
+  }
+
+  private async readCaps(): Promise<void> {
+    const p = this.o.platform;
+    if (!p) return;
+    this.capsTries++;
+    try {
+      this.caps = await p.caps();
+    } catch (err) {
+      this.error = message(err);
+    }
   }
 
   view(): EnergyView {
@@ -107,6 +120,7 @@ export class EnergyManager {
 
   /** Reads the battery again (the settings opened, the PC woke up). */
   async refresh(): Promise<EnergyView> {
+    if (!this.caps?.holdAwake) await this.readCaps();
     await this.readBattery();
     this.publish();
     return this.view();
@@ -169,8 +183,8 @@ export class EnergyManager {
   /** The hub quits: everything put back, the PC left as it was. */
   async shutdown(): Promise<void> {
     this.stopped = true;
-    for (const cancel of [this.cancelLinger, this.cancelManual, this.cancelCheck]) cancel?.();
-    this.cancelLinger = this.cancelManual = this.cancelCheck = null;
+    for (const cancel of [this.cancelLinger, this.cancelManual, this.cancelCheck, this.cancelRetry]) cancel?.();
+    this.cancelLinger = this.cancelManual = this.cancelCheck = this.cancelRetry = null;
     await this.reconcile();
   }
 
@@ -205,17 +219,30 @@ export class EnergyManager {
   }
 
   private async apply(): Promise<void> {
-    const want = this.wanted();
+    const wanting = !this.stopped && this.o.platform !== null && this.reasons().length > 0;
+    // The system did not answer at start (a slow login, a refused helper): asked again while a hold is wanted.
+    if (wanting && !this.caps?.holdAwake && this.capsTries < CAPS_TRIES) await this.readCaps();
+    let want = this.wanted();
     if (this.hold && (!want || want.lidClosed !== this.holdLid)) await this.drop(!want);
+    if (want && !this.hold && this.caps?.battery) {
+      // No hold taken at or under the floor: the battery is read first.
+      await this.readBattery();
+      want = this.wanted();
+    }
     if (want && !this.hold && this.o.platform) {
       try {
         this.hold = await this.o.platform.hold({ reason: this.o.reason(), lidClosed: want.lidClosed, allowDisplaySleep: true });
         this.holdLid = want.lidClosed;
         this.error = null;
       } catch (err) {
-        // Tried again at the next change (a worker starting, a setting), not in a loop.
         this.error = message(err);
       }
+    }
+    if (wanting && !this.hold && !this.guard && (this.caps?.holdAwake || this.capsTries < CAPS_TRIES)) {
+      this.cancelRetry ??= this.timers.set(() => {
+        this.cancelRetry = null;
+        void this.reconcile();
+      }, RETRY_MS);
     }
     this.watch(this.hold !== null || (this.guard && !this.stopped));
     this.publish();
@@ -293,12 +320,20 @@ export class EnergyManager {
       } else this.publish();
       return;
     }
-    if (!low || !this.hold) return this.publish();
+    if (!low) return this.publish();
+    if (!this.hold) {
+      // A hold about to be taken is not: nobody was kept awake, so nothing hibernates.
+      if (this.reasons().length === 0) return this.publish();
+      this.guard = true;
+      void this.reconcile();
+      return;
+    }
     this.guard = true;
     const closed = this.lid === true;
     this.o.log?.(`energy: battery at ${b.percent}% (floor ${floor}%): hold ended`);
     void this.reconcile().then(async () => {
-      if (this.stopped || !(closed || this.o.idleSeconds() >= AWAY_S)) return;
+      // Plugged in meanwhile: the guard is off again, the PC stays as it is.
+      if (this.stopped || !this.guard || !(closed || this.o.idleSeconds() >= AWAY_S)) return;
       this.o.log?.('energy: battery low, nobody at the PC: hibernating');
       await this.o.platform?.suspend('hibernate').catch((err: unknown) => this.o.log?.(`energy: hibernation refused: ${message(err)}`));
     });

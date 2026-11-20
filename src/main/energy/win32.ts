@@ -357,13 +357,12 @@ class Helper {
   }
 
   private up(): Promise<boolean> {
-    if (this.ready) return this.ready;
+    if (this.ready && this.proc) return this.ready;
     this.ready = new Promise<boolean>((resolve) => {
       let proc: HelperProcess;
       try {
         proc = this.sys.spawn(POWERSHELL, HELPER_ARGS);
       } catch {
-        this.ready = null;
         return resolve(false);
       }
       this.proc = proc;
@@ -385,6 +384,7 @@ class Helper {
         }
       });
       proc.onLine((line) => {
+        if (this.proc !== proc) return;
         if (line === 'ready') {
           late();
           return resolve(true);
@@ -539,8 +539,8 @@ export class Win32Energy implements EnergyPlatform {
       await this.require();
       if (state.plan) await this.serial(() => this.takePlan(o.reason, lidClosed, probe));
     } catch (err) {
+      // takePlan undid its own changes: only the request is left to put back.
       this.holds.delete(state);
-      if (state.plan) await this.serial(() => this.dropPlan()).catch(() => undefined);
       await this.require().catch(() => undefined);
       this.helper.unuse();
       throw err;
@@ -598,6 +598,9 @@ export class Win32Energy implements EnergyPlatform {
       this.plan.users++;
       return;
     }
+    // A copy an earlier release could not put back is undone first (or nothing is changed): the snapshot never
+    // forgets it, and the user's plan is not mistaken for that copy.
+    if (this.sys.read(this.file) !== null) await this.restoreLeftovers();
     const original = schemeOf(await this.powercfg(['/getactivescheme']));
     if (!original) throw new Error('powercfg: no active plan');
     const lid = probe.lid ? indexesOf(await this.powercfg(['/qh', original, SUB_BUTTONS, LIDACTION]).catch(() => '')) : null;
@@ -717,6 +720,7 @@ export class Win32Energy implements EnergyPlatform {
       done = true;
       set.delete(cb);
       this.helper.unuse();
+      if (this.lidCbs.size === 0) this.lid = null;
       if (this.lidCbs.size + this.powerCbs.size === 0) this.watching = false;
     };
   }

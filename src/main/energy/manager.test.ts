@@ -204,7 +204,8 @@ test('battery guard: under the floor, lid closed, the hold ends and the PC hiber
   await settle();
   assert.equal(p.live().length, 0);
   // Plugged in: holds come back.
-  p.powerCb?.(onMains(16));
+  p.battery_ = onMains(16);
+  p.powerCb?.(p.battery_);
   await settle();
   assert.equal(m.view().guard, false);
   assert.equal(p.live().length, 1);
@@ -315,6 +316,54 @@ test('a refused hold is shown and tried again at the next change, leftovers undo
   m.keepAwake(null);
   await settle();
   assert.equal(m.view().error, null);
+  assert.equal(p.live().length, 1);
+});
+
+test('a hold refused while workers keep working is asked again a minute later', async () => {
+  const { m, p, clock } = await setup();
+  p.failHold = true;
+  m.setBusy(true);
+  await settle();
+  assert.equal(m.view().error, 'refused');
+  p.failHold = false;
+  clock.advance(60_000);
+  await settle();
+  assert.equal(p.live().length, 1);
+  assert.equal(m.view().error, null);
+});
+
+test('capabilities unreadable at start are asked again while a hold is wanted', async () => {
+  const p = new FakePlatform();
+  const real = p.caps.bind(p);
+  let fail = true;
+  p.caps = async () => {
+    if (fail) throw new Error('helper slow');
+    return real();
+  };
+  const { m, clock } = await setup({}, p);
+  assert.equal(m.view().caps, null);
+  fail = false;
+  m.setBusy(true);
+  await settle();
+  assert.equal(p.live().length, 1);
+  clock.advance(60_000);
+  await settle();
+  assert.equal(p.holds.length, 1);
+});
+
+test('workers starting at or under the floor on battery: no hold, no hibernation', async () => {
+  const p = new FakePlatform();
+  p.battery_ = onBattery(12);
+  const { m } = await setup({ batteryFloor: 15 }, p);
+  assert.equal(m.view().guard, false);
+  m.setBusy(true);
+  await settle();
+  assert.equal(p.holds.length, 0);
+  assert.equal(m.view().guard, true);
+  assert.deepEqual(p.suspended, []);
+  p.battery_ = onMains(12);
+  p.powerCb?.(p.battery_);
+  await settle();
   assert.equal(p.live().length, 1);
 });
 
