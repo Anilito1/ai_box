@@ -450,6 +450,8 @@ interface Plan extends Snapshot {
   users: number;
   /** LIDACTION of the user's plan, on mains and on battery. */
   lid: [number, number] | null;
+  /** The copy does nothing when the lid closes. */
+  lidOff: boolean;
 }
 
 interface HoldState {
@@ -587,26 +589,26 @@ export class Win32Energy implements EnergyPlatform {
   /** Our copy of the user's plan, active: made at the first hold that needs it, shared by the next ones. */
   private async takePlan(reason: string, lidClosed: boolean, probe: Probe): Promise<void> {
     if (this.plan) {
+      // Shared with a hold that did not need the lid (Modern Standby): the lid is set now, then taken by Windows.
+      if (lidClosed && !this.plan.lidOff) {
+        await this.lidOff(this.plan.scheme, probe);
+        await this.powercfg(['/setactive', this.plan.scheme]);
+        this.plan.lidOff = true;
+      }
       this.plan.users++;
       return;
     }
     const original = schemeOf(await this.powercfg(['/getactivescheme']));
     if (!original) throw new Error('powercfg: no active plan');
     const lid = probe.lid ? indexesOf(await this.powercfg(['/qh', original, SUB_BUTTONS, LIDACTION]).catch(() => '')) : null;
-    const plan: Plan = { original, scheme: this.sys.guid().toLowerCase(), at: Date.now(), users: 1, lid };
+    const plan: Plan = { original, scheme: this.sys.guid().toLowerCase(), at: Date.now(), users: 1, lid, lidOff: lidClosed };
     // Written before anything changes: a crash from here on is undone at the next start.
     this.sys.write(this.file, JSON.stringify({ original: plan.original, scheme: plan.scheme, at: plan.at } satisfies Snapshot));
     try {
       await this.powercfg(['/duplicatescheme', original, plan.scheme]);
       await this.powercfg(['/changename', plan.scheme, 'AI Box', reason.replace(/[\r\n"]+/g, ' ').slice(0, 200)]);
-      const set = async (sub: string, setting: string, ac: number | null, dc: number) => {
-        if (ac !== null) await this.powercfg(['/setacvalueindex', plan.scheme, sub, setting, String(ac)]);
-        await this.powercfg(['/setdcvalueindex', plan.scheme, sub, setting, String(dc)]);
-      };
-      if (lidClosed) await set(SUB_BUTTONS, LIDACTION, 0, 0);
-      if (probe.modernStandby) await set(SUB_SLEEP, STANDBYIDLE, 0, 0);
-      // The lid closed, nobody sees the battery run down: at its critical level the PC hibernates (or sleeps).
-      if (lidClosed && probe.battery) await set(SUB_BATTERY, BATACTIONCRIT, null, probe.hibernate ? 2 : 1);
+      if (lidClosed) await this.lidOff(plan.scheme, probe);
+      if (probe.modernStandby) await this.set(plan.scheme, SUB_SLEEP, STANDBYIDLE, 0, 0);
       await this.powercfg(['/setactive', plan.scheme]);
       // A policy can keep a plan from becoming active without an error.
       if (schemeOf(await this.powercfg(['/getactivescheme'])) !== plan.scheme) throw new Error('powercfg: the plan did not become active');
@@ -617,6 +619,17 @@ export class Win32Energy implements EnergyPlatform {
       await this.putBack(plan);
       throw err;
     }
+  }
+
+  private async set(scheme: string, sub: string, setting: string, ac: number | null, dc: number): Promise<void> {
+    if (ac !== null) await this.powercfg(['/setacvalueindex', scheme, sub, setting, String(ac)]);
+    await this.powercfg(['/setdcvalueindex', scheme, sub, setting, String(dc)]);
+  }
+
+  private async lidOff(scheme: string, probe: Probe): Promise<void> {
+    await this.set(scheme, SUB_BUTTONS, LIDACTION, 0, 0);
+    // The lid closed, nobody sees the battery run down: at its critical level the PC hibernates (or sleeps).
+    if (probe.battery) await this.set(scheme, SUB_BATTERY, BATACTIONCRIT, null, probe.hibernate ? 2 : 1);
   }
 
   private async dropPlan(): Promise<void> {

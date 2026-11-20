@@ -292,6 +292,22 @@ test('Modern Standby: the copy never sleeps on idle, even without the lid', asyn
   assert.equal(w.plans.size, 3);
 });
 
+test('Modern Standby: a lid hold sharing the copy of an earlier hold sets the lid on it', async () => {
+  const { w, e } = adapter();
+  w.caps = LAPTOP_S0;
+  const first = await e.hold({ reason: 'move', lidClosed: false, allowDisplaySleep: true });
+  const copy = w.active;
+  assert.deepEqual(w.plan(copy)?.get(LIDACTION), [1, 2]);
+  const second = await e.hold({ reason: 'workers', lidClosed: true, allowDisplaySleep: true });
+  assert.equal(w.active, copy);
+  assert.deepEqual(w.plan(copy)?.get(LIDACTION), [0, 0]);
+  await first.release();
+  assert.equal(w.active, copy);
+  await second.release();
+  assert.equal(w.active, USER);
+  assert.equal(w.plans.has(copy), false);
+});
+
 test('a command failing half-way undoes what was done, then rejects', async () => {
   const { w, e } = adapter();
   w.failing.set('/setactive', 1);
