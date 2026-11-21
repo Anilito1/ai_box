@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { alive } from './updateExec';
 import { winJobs } from './winJobs';
 
@@ -15,8 +17,13 @@ export interface CliProc {
   startedAt: number;
   /** When it was closed, or last known to run (an earlier run of the hub): its children are those born before. */
   endedAt?: number;
-  /** The Windows job that holds it and everything started under it, once it was put there (winJobs.ts). */
+  /**
+   * The Windows job that holds it and everything started under it, once it was put there (winJobs.ts). On Linux, the
+   * mark in its environment, which everything started under it inherits (JOB_ENV).
+   */
   job?: string;
+  /** Linux: the control group it was started in (the hub's), which its processes keep (JOB_ENV). */
+  cgroup?: string;
 }
 
 /** The hub stamps a program when spawn() returns, a moment after Windows created it. */
@@ -94,6 +101,106 @@ function kill(procs: Proc[]): void {
   }
 }
 
+/**
+ * Linux has no jobs, and hands a process whose parent ended to another one: a session's program gets a mark in its
+ * environment instead, `AIBOX_JOB=<job>`, which whatever it starts inherits (shells, dev servers, MCP servers), even
+ * one that left its process group or its parent. A process counts only in the control group the program started in,
+ * which it keeps all the same: an environment exported to the desktop's services (`dbus-update-activation-environment
+ * --all` run in a session's shell) never brings an app started by them into a job.
+ */
+export const JOB_ENV = 'AIBOX_JOB';
+const MARK = Buffer.from(`${JOB_ENV}=`);
+
+/** The job mark in an environment (/proc/<pid>/environ), '' when there is none. */
+export function jobOf(environ: Buffer): string {
+  if (!environ.includes(MARK)) return '';
+  const entry = environ.toString('latin1').split('\0').find((e) => e.startsWith(`${JOB_ENV}=`));
+  return entry ? entry.slice(MARK.length) : '';
+}
+
+/** The control group of a process ('self': the hub's), '' when it cannot be read. */
+export function cgroupOf(pid: number | 'self', procDir = '/proc'): string {
+  try {
+    return readFileSync(join(procDir, String(pid), 'cgroup'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+interface Marked {
+  pid: number;
+  cgroup: string;
+}
+
+/** Every process that carries a job's mark, by job, in one pass over /proc; never the hub itself. Synchronous: it also runs while the hub quits. */
+export function markedProcs(procDir = '/proc'): Map<string, Marked[]> {
+  const jobs = new Map<string, Marked[]>();
+  let names: string[];
+  try {
+    names = readdirSync(procDir);
+  } catch {
+    return jobs;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+    try {
+      const job = jobOf(readFileSync(join(procDir, name, 'environ')));
+      if (job) jobs.set(job, [...(jobs.get(job) ?? []), { pid: Number(name), cgroup: cgroupOf(Number(name), procDir) }]);
+    } catch {
+      // Ended meanwhile, or another account's.
+    }
+  }
+  return jobs;
+}
+
+/** The processes of a program's job: its mark, in its control group when it was known. */
+export const jobPids = (marked: Map<string, Marked[]>, root: CliProc) =>
+  root.job ? (marked.get(root.job) ?? []).filter((m) => !root.cgroup || m.cgroup === root.cgroup).map((m) => m.pid) : [];
+
+const signal = (pids: number[], sig: NodeJS.Signals) => {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, sig);
+    } catch {
+      // Ended meanwhile.
+    }
+  }
+};
+
+/**
+ * Asks every process of these programs' jobs to end, the programs included, at once (Linux): when the hub quits, so
+ * that no session's program goes on alone, its turn unseen. What outlives it is ended at the next start.
+ */
+export function endJobs(roots: CliProc[]): void {
+  if (process.platform !== 'linux') return;
+  const marked = markedProcs();
+  signal([...new Set(roots.flatMap((r) => jobPids(marked, r)))], 'SIGTERM');
+}
+
+/**
+ * reapTrees on Linux, by the jobs' marks. A job is kept while one of its programs runs (a program started again shares
+ * its launch's job), unless `orphans`: the hub's last run is over, a program of it still running is one nobody reads
+ * any more, which would work beside its resumed session.
+ */
+async function reapJobs(roots: CliProc[], waitMs: number, orphans: boolean): Promise<Reaped> {
+  for (const end = Date.now() + waitMs; roots.some((r) => alive(r.pid)) && Date.now() < end; ) await new Promise((r) => setTimeout(r, 250));
+  let marked = markedProcs();
+  const running = new Set(orphans ? [] : roots.filter((r) => jobPids(marked, r).includes(r.pid)).map((r) => r.job));
+  const kept = roots.filter((r) => r.job && running.has(r.job));
+  const doomed = () => [...new Set(roots.filter((r) => !kept.includes(r)).flatMap((r) => jobPids(marked, r)))];
+  let pids = doomed();
+  let ended = 0;
+  for (let attempt = 0; pids.length > 0 && attempt < 3; attempt++) {
+    signal(pids, attempt < 2 ? 'SIGTERM' : 'SIGKILL');
+    await new Promise((r) => setTimeout(r, KILL_SETTLE_MS));
+    marked = markedProcs();
+    const still = doomed();
+    ended += pids.filter((pid) => !still.includes(pid)).length;
+    pids = still;
+  }
+  return { ended, left: pids.length, kept };
+}
+
 /** The program itself still runs under its PID (not another process that got the PID since). */
 const running = (procs: Proc[], root: CliProc) => procs.some((p) => p.pid === root.pid && Math.abs(p.created - root.startedAt) <= STAMP_SLACK_MS);
 
@@ -110,10 +217,12 @@ export interface Reaped {
  * servers, MCP servers, test browsers. A program still running is neither killed nor cleared: it is kept. First what
  * its job holds, which includes a process whose parent has ended; then the descendants found through their parent,
  * for what started before the program was in its job. Each try lists the processes again and takes the descendants
- * anew, so one started meanwhile is not missed. Windows only.
+ * anew, so one started meanwhile is not missed. Windows, and Linux by the jobs' marks (`orphans`: see reapJobs).
  */
-export async function reapTrees(roots: CliProc[], waitMs = EXIT_WAIT_MS): Promise<Reaped> {
-  if (process.platform !== 'win32' || roots.length === 0) return { ended: 0, left: 0, kept: [] };
+export async function reapTrees(roots: CliProc[], waitMs = EXIT_WAIT_MS, orphans = false): Promise<Reaped> {
+  if (roots.length === 0) return { ended: 0, left: 0, kept: [] };
+  if (process.platform === 'linux') return reapJobs(roots, waitMs, orphans);
+  if (process.platform !== 'win32') return { ended: 0, left: 0, kept: [] };
   for (const end = Date.now() + waitMs; roots.some((r) => alive(r.pid)) && Date.now() < end; ) await new Promise((r) => setTimeout(r, 250));
   const now = Date.now();
   const limit = (r: CliProc) => (r.endedAt ?? now) + EXIT_WAIT_MS;

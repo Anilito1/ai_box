@@ -134,7 +134,7 @@ import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
 import { Inbox, type InboxEntry } from './providers/inbox';
 import { builtinRate, priceTurn, type Rate } from './providers/pricing';
-import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
+import { cgroupOf, endJobs, EXIT_WAIT_MS, JOB_ENV, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
 import { winJobs } from './winJobs';
 import { explore, type ExploreHost } from './providers/claude/explore';
 import { textModels } from '../shared/video';
@@ -714,6 +714,8 @@ export class SessionManager extends EventEmitter {
   private reapTimer: NodeJS.Timeout | null = null;
   /** One clearing at a time. */
   private reapRun: Promise<void> = Promise.resolve();
+  /** Programs being cleared now: out of their sessions, still to end if the hub quits meanwhile (Linux). */
+  private readonly reaping = new Set<CliProc>();
   /** Topics of the master's conversation; items a later call settles are filed again with theirs. */
   private readonly topics = new TopicTracker((ids, topic, also) => this.refile(ids, topic, also));
   /** Watches the network while a session works or waits on it; none in tests unless given. */
@@ -983,6 +985,8 @@ export class SessionManager extends EventEmitter {
       s.query?.close();
       s.installing?.kill();
     }
+    // Linux: no job ends them with the hub.
+    endJobs([...[...this.sessions.values()].flatMap((s) => s.procs), ...[...this.toReap.values()].flat(), ...this.reaping]);
   }
 
   /** The session is closed: what its programs left running (background shells, dev servers, MCP servers...) ends. */
@@ -998,9 +1002,11 @@ export class SessionManager extends EventEmitter {
   }
 
   /** A program still running, or that could not be looked at, goes back to its session: the next close or start retries. */
-  private clearProcs(batch: Map<string, CliProc[]>, waitMs: number): void {
+  private clearProcs(batch: Map<string, CliProc[]>, waitMs: number, orphans = false): void {
+    const procs = [...batch.values()].flat();
+    for (const p of procs) this.reaping.add(p);
     this.reapRun = this.reapRun.then(async () => {
-      const { ended, left, kept } = await reapTrees([...batch.values()].flat(), waitMs);
+      const { ended, left, kept } = await reapTrees(procs, waitMs, orphans).finally(() => procs.forEach((p) => this.reaping.delete(p)));
       if (ended + left > 0) console.warn(`sessions: ${ended} leftover processes ended${left > 0 ? `, ${left} could not be` : ''}`);
       for (const [id, procs] of batch) {
         const s = this.sessions.get(id);
@@ -1997,6 +2003,8 @@ export class SessionManager extends EventEmitter {
     s.mcpLease = harness === 'claude' ? null : this.opts.mcpHub.register(tools);
 
     // Shown (and queued) before the program starts: a start that fails still leaves the message visible.
+    // Its job: a Windows job it is put in once started, or on Linux a mark in its environment (procTree.ts).
+    const job = `AIBox-${randomUUID()}`;
     const spec: LaunchSpec = {
       role: s.role,
       name: s.name,
@@ -2017,7 +2025,11 @@ export class SessionManager extends EventEmitter {
       tools,
       mcp: s.mcpLease ? { url: s.mcpLease.url, token: s.mcpLease.token } : null,
       executable,
-      env: { ...this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined), ...(s.scratch ? { [SCRATCH_ENV]: s.scratch } : {}) },
+      env: {
+        ...this.environment(account, this.kindOf(account) === 'openai' ? picked : undefined),
+        ...(s.scratch ? { [SCRATCH_ENV]: s.scratch } : {}),
+        ...(process.platform === 'linux' ? { [JOB_ENV]: job } : {}),
+      },
       ...(remote ? { remote } : {}),
       ...(harness === 'gemini' && resume && s.geminiUsage ? { initialUsage: s.geminiUsage } : {}),
       conversation: { id: s.sessionId, resume },
@@ -2027,13 +2039,13 @@ export class SessionManager extends EventEmitter {
         if (s.inbox === inbox) this.signal(s);
       },
       onSpawn: (pid) => {
-        const proc: CliProc = { pid, startedAt: Date.now() };
+        // In a job of its own: what it starts is ended with it, even a process whose parent is gone, and is found
+        // again by the job's name after a restart of the hub. Linux's mark is there from the start.
+        const proc: CliProc = { pid, startedAt: Date.now(), ...(process.platform === 'linux' ? { job, cgroup: cgroupOf('self') } : {}) };
         if (s.inbox !== inbox) return this.reap(s, [{ ...proc, endedAt: proc.startedAt }]); // Replaced while it started: closed already.
         s.procs.push(proc);
         this.changed();
-        // In a job of its own (Windows): what it starts is ended with it, even a process whose parent is gone, and
-        // is found again by the job's name after a restart of the hub.
-        const job = `AIBox-${randomUUID()}`;
+        if (process.platform === 'linux') return;
         void winJobs.assign(job, pid).then((held) => {
           if (!held) return;
           proc.job = job;
@@ -5972,8 +5984,9 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       }
       const away = saved.away;
       if (away && typeof away.since === 'number') this.awayMode = { since: away.since, auto: away.auto === true, phase: 'away', safe: away.safe === true };
-      // Nothing talks to them any more: what they left running ends now, with no wait for them.
-      if (previous.size > 0) this.clearProcs(previous, 0);
+      // Nothing talks to them any more: what they left running ends now, with no wait for them. On Linux a program of
+      // that run still running ends too: nobody reads it, and it would work beside its resumed session.
+      if (previous.size > 0) this.clearProcs(previous, 0, true);
       // The topics of the master's conversation, if they are this conversation's.
       this.topics.restore(saved.topics, this.sessions.get(MASTER_ID)?.sessionId ?? '');
       if (typeof saved.memoryTopic === 'string') this.memoryTopic = saved.memoryTopic;
