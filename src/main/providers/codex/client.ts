@@ -30,6 +30,8 @@ export interface ClientOptions {
 }
 
 const STDERR_KEEP = 4000;
+/** How long a broken pipe waits for the process's exit, which says why. */
+const PIPE_GRACE_MS = 500;
 const REQUEST_TIMEOUT_MS = 60_000;
 
 export interface RequestOptions {
@@ -80,11 +82,7 @@ export class CodexClient {
         resolve();
       });
       // A process that dies under a write (after a sleep, signed out) breaks the pipe: without a listener it is an uncaught exception.
-      child.stdin?.on('error', (err) => {
-        this.stderr += String(err.message);
-        this.finish(null);
-        resolve();
-      });
+      child.stdin?.on('error', (err) => this.pipeBroke(err, resolve));
     });
     if (child.stdout) createInterface({ input: child.stdout }).on('line', (line) => this.receive(line));
     // A process that never started (no such file) fails the handshake with its own message.
@@ -95,6 +93,18 @@ export class CodexClient {
       }),
     ]);
     this.send({ method: 'initialized' });
+  }
+
+  /**
+   * The pipe broke: the process is ending, and its exit, with what it wrote on stderr ("not signed in"), says why; on
+   * Linux the broken pipe comes first. One still running a moment later has closed its input: it ends here.
+   */
+  private pipeBroke(err: Error, then?: () => void): void {
+    setTimeout(() => {
+      if (!this.finished) this.stderr += err.message;
+      this.finish(null);
+      then?.();
+    }, PIPE_GRACE_MS);
   }
 
   private finish(code: number | null): void {
@@ -115,9 +125,7 @@ export class CodexClient {
     }
     // A false return is backpressure, not failure: Node has accepted and buffered the message.
     stdin.write(`${JSON.stringify(message)}\n`, (err) => {
-      if (!err) return;
-      this.stderr += err.message;
-      this.finish(null);
+      if (err) this.pipeBroke(err);
     });
   }
 
