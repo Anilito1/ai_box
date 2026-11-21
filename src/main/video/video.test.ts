@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import type { Account } from '../../shared/types';
 import { manualVideoModel, type VideoModel } from '../../shared/video';
@@ -72,7 +72,7 @@ test('Venice’s list: only its video models that are on, with what each takes',
   const s = server({ '/models?type=video': () => json(LISTED) });
   const models = await venice.models(ctx(s.fetch));
   assert.deepEqual(models.map((m) => m.id), ['wan-2.5-preview-image-to-video', 'wan-2.5-preview-text-to-video']);
-  assert.deepEqual(T2V, { id: 'wan-2.5-preview-text-to-video', name: 'Wan 2.5', input: 'text', durations: ['5s', '10s'], aspectRatios: ['16:9', '9:16'], resolutions: ['480p', '720p'], audioOption: true, manual: false });
+  assert.deepEqual(T2V, { id: 'wan-2.5-preview-text-to-video', name: 'Wan 2.5', input: 'text', durations: ['5s', '10s'], aspectRatios: ['16:9', '9:16'], resolutions: ['480p', '720p'], audioOption: true, privacy: '', uncensored: false, manual: false });
   assert.equal(I2V.input, 'image');
   assert.deepEqual(s.calls[0], { method: 'GET', path: '/models?type=video', auth: `Bearer ${KEY}`, body: {} });
   const refused = server({ '/models?type=video': () => json({ error: 'nope' }, 500) });
@@ -82,7 +82,10 @@ test('Venice’s list: only its video models that are on, with what each takes',
 test('a request is checked against the model before anything is sent', async () => {
   const dir = folder();
   const ask = (more: object, model = T2V) => videoRequest(model, { prompt: ' a fox ', ...more }, dir);
-  assert.deepEqual(await ask({}), { model: T2V.id, prompt: 'a fox', duration: '5s' }, 'nothing said: the model’s first duration, the provider’s defaults');
+  assert.deepEqual(await ask({}), { model: T2V.id, prompt: 'a fox', duration: '5s', aspectRatio: '16:9' }, 'nothing said: the model’s first duration and aspect ratio, the provider’s defaults');
+  // The aspect ratio that follows the images when the model has one; none for a model that lists none.
+  assert.equal((await ask({}, { ...T2V, aspectRatios: ['16:9', 'Adaptive'] })).aspectRatio, 'Adaptive');
+  assert.equal('aspectRatio' in (await ask({ image: 'https://example.com/a.png' }, I2V)), false);
   assert.deepEqual(await ask({ duration: '10', aspectRatio: '9:16', resolution: '720P', audio: false, negativePrompt: ' blur ' }), {
     model: T2V.id, prompt: 'a fox', negativePrompt: 'blur', duration: '10s', aspectRatio: '9:16', resolution: '720p', audio: false,
   });
@@ -91,7 +94,7 @@ test('a request is checked against the model before anything is sent', async () 
   await assert.rejects(videoRequest(T2V, { prompt: '  ' }, dir), /Give a prompt/);
   await assert.rejects(ask({ image: 'https://example.com/a.png' }), /starts from the prompt alone/);
   await assert.rejects(ask({}, I2V), /starts from an image/);
-  await assert.rejects(ask({}, { ...T2V, input: 'video' }), /reworks a video it is given/);
+  await assert.rejects(ask({}, { ...T2V, input: 'video' }), /reworks a video: give video/);
   // A model that does not let sound be chosen is not told about it.
   assert.equal('audio' in (await ask({ image: 'https://example.com/a.png', audio: true }, I2V)), false);
 
@@ -103,6 +106,108 @@ test('a request is checked against the model before anything is sent', async () 
   await assert.rejects(ask({ image: 'missing.png' }, I2V), /Image not found/);
   await assert.rejects(ask({ image: 'notes.txt' }, I2V), /Not an image/);
   assert.deepEqual(await videoRequest(manualVideoModel('my-video'), { prompt: 'x', duration: '7s', resolution: 'odd' }, dir), { model: 'my-video', prompt: 'x', duration: '7s', resolution: 'odd' });
+});
+
+// Venice's own entries: its type says image-to-video for a model that follows reference images too, only the id tells.
+const R2V_ENTRY = {
+  id: 'minimax-h3-max-reference-to-video',
+  type: 'video',
+  model_spec: { name: 'MiniMax H3 Max R2V', privacy: 'private', uncensored: true, constraints: { model_type: 'image-to-video', durations: ['5s', '10s'], aspect_ratios: ['adaptive', '16:9', '9:16'], resolutions: ['480P', '1080P'], audio_configurable: true } },
+};
+const V2V_ENTRY = { id: 'wan-2-7-video-to-video', type: 'video', model_spec: { name: 'Wan 2.7 Edit', privacy: 'anonymized', constraints: { model_type: 'video', durations: ['Auto'], aspect_ratios: [], resolutions: ['720p', '1080p'] } } };
+const R2V = veniceModel(R2V_ENTRY) as VideoModel;
+const V2V = veniceModel(V2V_ENTRY) as VideoModel;
+const b64 = (text: string | Buffer) => Buffer.from(text).toString('base64');
+
+test('Venice’s list: a model that follows reference images is told from one that starts from a first frame, with what Venice says of it', () => {
+  assert.deepEqual([R2V.input, R2V.privacy, R2V.uncensored], ['reference', 'private', true]);
+  assert.deepEqual([V2V.input, V2V.privacy, V2V.uncensored], ['video', 'anonymized', false]);
+  assert.deepEqual([I2V.input, I2V.privacy, I2V.uncensored], ['image', '', false]);
+  for (const id of ['grok-imagine-reference-to-video-private', 'seedance-2-0-reference-to-video-basic', 'kling-o3-pro-reference-to-video']) assert.equal(veniceModel({ ...R2V_ENTRY, id })?.input, 'reference', id);
+  assert.equal(veniceModel({ ...R2V_ENTRY, id: 'minimax-h3-max-image-to-video' })?.input, 'image');
+  assert.equal(veniceModel({ ...R2V_ENTRY, model_spec: { ...R2V_ENTRY.model_spec, privacy: 'shared', uncensored: 'yes' } })?.privacy, '');
+  assert.equal(veniceModel({ ...R2V_ENTRY, model_spec: { ...R2V_ENTRY.model_spec, uncensored: 'yes' } })?.uncensored, false);
+});
+
+test('reference images: each one in its order, refused where the model has no use for them', async () => {
+  const dir = folder();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'first.png'), 'first png');
+  writeFileSync(join(dir, 'second.jpg'), 'second jpg');
+  const data = 'data:image/webp;base64,UklGRg==';
+  const ask = (more: object, model = R2V) => videoRequest(model, { prompt: '@Image1 walks toward @Image2', ...more }, dir);
+
+  // Files become data: URLs, addresses and data: URLs go as they are, and none changes place.
+  assert.deepEqual(await ask({ images: ['second.jpg', join(dir, 'first.png'), 'https://example.com/third.png', data], duration: '10', resolution: '1080p' }), {
+    model: R2V.id,
+    prompt: '@Image1 walks toward @Image2',
+    duration: '10s',
+    aspectRatio: 'adaptive',
+    resolution: '1080P',
+    referenceImageUrls: [`data:image/jpeg;base64,${b64('second jpg')}`, `data:image/png;base64,${b64('first png')}`, 'https://example.com/third.png', data],
+  });
+  // Durations and resolutions are still the model's own.
+  await assert.rejects(ask({ images: ['first.png'], duration: '7s' }), /duration "7s" is not taken by minimax-h3-max-reference-to-video\. It takes: 5s, 10s/);
+  await assert.rejects(ask({ images: ['first.png', 'second.jpg'], resolution: '720p' }), /It takes: 480P, 1080P/);
+  // None, or a first frame instead (what was sent in image_url and refused by Venice): refused before anything is sent.
+  await assert.rejects(ask({}), /follows reference images: give them in images/);
+  await assert.rejects(ask({ images: ['  '] }), /follows reference images: give them in images/);
+  await assert.rejects(ask({ image: 'first.png' }), /not a first frame: give every image in images/);
+  await assert.rejects(ask({ image: 'first.png', images: ['second.jpg', 'first.png'] }), /not a first frame/);
+  // A citation without its image, an image that is not there, too many of them.
+  await assert.rejects(ask({ images: ['first.png'] }), /cites @Image2, but images holds only 1/);
+  await assert.rejects(ask({ images: ['first.png', 'missing.png'] }), /Image not found: .*missing\.png/);
+  await assert.rejects(ask({ images: Array<string>(31).fill('first.png') }), /Too many reference images: 30 at most/);
+  writeFileSync(join(dir, 'big.png'), Buffer.alloc(14 * 1024 * 1024));
+  await assert.rejects(ask({ images: ['big.png', 'big.png', 'big.png'] }), /The images weigh more than one request carries \(40 MB in all\)/);
+  // A text→video model takes none, an image→video model one first frame only.
+  await assert.rejects(ask({ images: ['first.png'] }, T2V), /starts from the prompt alone: leave image and images out/);
+  await assert.rejects(ask({ images: ['first.png'] }, I2V), /starts from one image, its first frame: give it in image/);
+  // A model named by hand gets them as asked.
+  assert.deepEqual((await ask({ prompt: '@Image1', images: ['first.png'] }, manualVideoModel('my-r2v'))).referenceImageUrls, [`data:image/png;base64,${b64('first png')}`]);
+});
+
+test('a video to rework: a video→video model needs one, the others take none', async () => {
+  const dir = folder();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'clip.mp4'), MP4);
+  writeFileSync(join(dir, 'person.png'), 'person png');
+  const ask = (more: object, model = V2V) => videoRequest(model, { prompt: 'make it snow', ...more }, dir);
+  assert.deepEqual(await ask({ video: 'clip.mp4', images: ['person.png'] }), {
+    model: V2V.id,
+    prompt: 'make it snow',
+    duration: 'Auto',
+    referenceImageUrls: [`data:image/png;base64,${b64('person png')}`],
+    videoUrl: `data:video/mp4;base64,${b64(MP4)}`,
+  });
+  assert.equal((await ask({ video: 'https://example.com/clip.mp4' })).videoUrl, 'https://example.com/clip.mp4');
+  await assert.rejects(ask({}), /reworks a video: give video/);
+  await assert.rejects(ask({ video: 'clip.avi' }), /Not a video the provider takes \(mp4, mov, webm\)/);
+  await assert.rejects(ask({ video: 'gone.mp4' }), /Video not found/);
+  await assert.rejects(ask({ video: 'clip.mp4' }, T2V), /does not rework a video: leave video out/);
+  await assert.rejects(ask({ video: 'clip.mp4', prompt: '@Image1', images: ['person.png'] }, R2V), /does not rework a video/);
+});
+
+test('at Venice: a first frame goes in image_url, reference images in reference_image_urls in their order, a video in video_url', async () => {
+  const s = server({ '/video/quote': () => json({ quote: 0.3 }), '/video/queue': (c) => json({ model: c.body.model, queue_id: `q-${String(c.body.model)}` }) });
+  const c = ctx(s.fetch);
+  const refs = ['data:image/png;base64,AAAA', 'https://example.com/b.png', 'data:image/jpeg;base64,BBBB'];
+  const r2v = { model: R2V.id, prompt: '@Image1 hands a cup to @Image2', duration: '5s', resolution: '480P', referenceImageUrls: refs };
+  const v2v = { model: V2V.id, prompt: 'snow', duration: 'Auto', videoUrl: 'https://example.com/clip.mp4' };
+  assert.equal(await venice.quote(c, r2v), 0.3);
+  await venice.submit(c, r2v);
+  await venice.submit(c, { model: I2V.id, prompt: 'it moves', duration: '5s', imageUrl: 'data:image/png;base64,CCCC' });
+  await venice.quote(c, v2v);
+  await venice.submit(c, v2v);
+  assert.ok(s.calls.every((x) => x.method === 'POST' && x.auth === `Bearer ${KEY}`));
+  assert.deepEqual(s.paths(), ['/video/quote', '/video/queue', '/video/queue', '/video/quote', '/video/queue']);
+  // The price is asked without the prompt and the images, as before.
+  assert.deepEqual(s.calls[0].body, { model: R2V.id, duration: '5s', resolution: '480P' });
+  assert.deepEqual(s.calls[1].body, { model: R2V.id, duration: '5s', resolution: '480P', prompt: '@Image1 hands a cup to @Image2', reference_image_urls: refs });
+  assert.deepEqual(s.calls[2].body, { model: I2V.id, duration: '5s', prompt: 'it moves', image_url: 'data:image/png;base64,CCCC' });
+  // A reworked video's length sets its price: the quote reads it too.
+  assert.deepEqual(s.calls[3].body, { model: V2V.id, duration: 'Auto', video_url: 'https://example.com/clip.mp4' });
+  assert.deepEqual(s.calls[4].body, { model: V2V.id, duration: 'Auto', video_url: 'https://example.com/clip.mp4', prompt: 'snow' });
 });
 
 test('one video: priced, queued, asked for until it is there, saved, then released at the provider', async () => {
@@ -293,7 +398,7 @@ test('the hub’s video service: the models of each provider, a video made by it
   await assert.rejects(video.generate({ prompt: 'a fox' }, { cwd, signal }), /Name a model: there are 3 video models/);
   await assert.rejects(video.generate({ prompt: 'a fox', model: 'wan-2.5' }, { cwd, signal }), /Unknown video model "wan-2\.5".*Close ones: wan-2\.5-preview-image-to-video, wan-2\.5-preview-text-to-video/);
   await assert.rejects(video.generate({ prompt: 'a fox', model: T2V.id, output_dir: '../elsewhere' }, { cwd, signal }), /output_dir must be inside your folder/);
-  assert.equal(await video.generate({ prompt: 'a fox', model: T2V.id.toUpperCase(), duration: '10s', quote_only: true }, { cwd, signal }), 'venice · wan-2.5-preview-text-to-video · 10s. Price quoted by the provider: $0.085 (US dollars). Nothing was queued.');
+  assert.equal(await video.generate({ prompt: 'a fox', model: T2V.id.toUpperCase(), duration: '10s', quote_only: true }, { cwd, signal }), 'venice · wan-2.5-preview-text-to-video · 10s · 16:9. Price quoted by the provider: $0.085 (US dollars). Nothing was queued.');
 
   // The wait ends first: the job is listed, and its id alone resumes it.
   await assert.rejects(video.generate({ prompt: 'a fox', model: T2V.id, wait_minutes: 1 }, { cwd, signal }), /job_id "q-9"/);
@@ -357,4 +462,46 @@ test('a video queued is a spending of its provider, at the price it quoted; a qu
   // Outside a session's call (no one to charge): made all the same, nothing logged.
   await video.generate({ prompt: 'a fox', model: T2V.id }, ctx);
   assert.equal(spent.length, 2);
+});
+
+test('the images a user attached, by their paths in the order of the message, reach a reference model as @Image1, @Image2', async () => {
+  const s = server({
+    '/models?type=video': () => json({ data: [R2V_ENTRY, V2V_ENTRY, LISTED.data[1]] }),
+    '/video/quote': () => json({ quote: 0.3 }),
+    '/video/queue': () => json({ model: R2V.id, queue_id: 'q-r2v' }),
+    '/video/retrieve': () => mp4(),
+    '/video/complete': () => json({ success: true }),
+  });
+  const outDir = folder();
+  const cwd = folder();
+  // Where the hub saves the images of a message (sessions.ts): a folder each, the file named capture.<ext>.
+  const attached = [join(root, 'attachments', 'a1', 'capture.png'), join(root, 'attachments', 'b2', 'capture.jpg')];
+  attached.forEach((path, i) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `image ${i + 1}`);
+  });
+  const video = new VideoService({ accounts: () => [account()], key: () => KEY, outDir: () => outDir, fetch: s.fetch, ...clock() });
+  const signal = new AbortController().signal;
+
+  const lines = (await video.list({}, signal)).split('\n');
+  assert.ok(lines.includes('minimax-h3-max-reference-to-video · MiniMax H3 Max R2V · references→video · 5s 10s · adaptive 16:9 9:16 · 480P 1080P · private uncensored'), lines.join('\n'));
+  assert.ok(lines.includes('wan-2-7-video-to-video · Wan 2.7 Edit · video→video · Auto · 720p 1080p · anonymized'), lines.join('\n'));
+  assert.ok(lines.includes('wan-2.5-preview-image-to-video · Wan 2.5 · image→video · 5s · 720p'), lines.join('\n'));
+
+  const ask = { prompt: '@Image1 hands a cup to @Image2', model: R2V.id, images: attached, resolution: '480p' };
+  assert.equal(await video.generate({ ...ask, quote_only: true }, { cwd, signal }), 'venice · minimax-h3-max-reference-to-video · 5s · adaptive · 480P. Price quoted by the provider: $0.3 (US dollars). Nothing was queued.');
+  const text = await video.generate(ask, { cwd, signal });
+  const queued = s.calls.find((c) => c.path === '/video/queue')?.body ?? {};
+  assert.deepEqual(queued.reference_image_urls, [`data:image/png;base64,${b64('image 1')}`, `data:image/jpeg;base64,${b64('image 2')}`]);
+  assert.equal('image_url' in queued, false);
+  // Venice prices it without an aspect ratio but refuses to queue it without one: the model's own is sent.
+  assert.equal(queued.aspect_ratio, 'adaptive');
+  // The answer is unchanged: the file, then the link the conversation opens.
+  assert.match(text, /^Video saved: /);
+  assert.match(text, /\nShow it to the user with this link, which opens the file from the conversation: \[[^\]]+\.mp4\]\(<[^>]+\.mp4>\)$/);
+
+  // What failed for real: the one image given as image to this model. Refused here, before any call that costs.
+  s.calls.length = 0;
+  await assert.rejects(video.generate({ prompt: '@Image1 waves', model: R2V.id, image: attached[0] }, { cwd, signal }), /not a first frame: give every image in images/);
+  assert.deepEqual(s.paths().filter((p) => p.startsWith('/video/')), []);
 });

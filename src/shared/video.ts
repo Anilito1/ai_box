@@ -36,23 +36,46 @@ export interface VideoModel {
   id: string;
   /** Its name at the provider, empty when unknown. */
   name: string;
-  /** What it starts from: a prompt alone, an image, a video; empty when unknown. */
-  input: 'text' | 'image' | 'video' | '';
+  /**
+   * What it starts from: a prompt alone, the image of its first frame, reference images the prompt cites in order
+   * (@Image1, @Image2…), a video it reworks; empty when unknown.
+   */
+  input: VideoInput;
   /** The values it takes ("5s", "16:9", "720p"); empty when unknown: anything is sent as asked. */
   durations: string[];
   aspectRatios: string[];
   resolutions: string[];
   /** Its sound can be switched on or off. */
   audioOption: boolean;
+  /** What the provider says it keeps of a request: nothing ('private'), or what it keeps anonymized; empty when unknown. */
+  privacy: 'private' | 'anonymized' | '';
+  /** The provider says it does not filter what the model makes. */
+  uncensored: boolean;
   /** Named by hand in the settings, not listed by the provider. */
   manual: boolean;
 }
+
+export type VideoInput = 'text' | 'image' | 'reference' | 'video' | '';
+
+/** Reference images one request carries at most (Venice's limit). */
+export const VIDEO_REFERENCES_MAX = 30;
 
 /** Video models a user may name by hand for one provider. */
 export const VIDEO_MODELS_MAX = 50;
 
 /** A video model the user named, with nothing known about it. */
-export const manualVideoModel = (id: string): VideoModel => ({ id, name: '', input: '', durations: [], aspectRatios: [], resolutions: [], audioOption: true, manual: true });
+export const manualVideoModel = (id: string): VideoModel => ({
+  id,
+  name: '',
+  input: '',
+  durations: [],
+  aspectRatios: [],
+  resolutions: [],
+  audioOption: true,
+  privacy: '',
+  uncensored: false,
+  manual: true,
+});
 
 /** The provider's video models, then the ones named by hand that it does not list. */
 export function mergeVideoModels(listed: VideoModel[], manual: string[]): VideoModel[] {

@@ -14,6 +14,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Ajouté
 
+- Vidéos à partir de vos images : joignez-en une ou plusieurs à votre message avec votre demande, le modèle vidéo s'en sert dans l'ordre où vous les avez jointes (citez-les « @Image1 », « @Image2 »… dans votre demande). Une vidéo que vous donnez peut aussi être retravaillée.
 - Les images et les vidéos dont parlent les messages s'affichent dans la conversation : la vidéo se lit sur place (pause, avance, plein écran, son), « Télécharger » en enregistre une copie où vous voulez et « Ouvrir le dossier » montre le fichier. Une image ou une vidéo d'un site web ne se charge que si vous cliquez sur « Afficher ici ».
 - Coût API, en bas à droite : choisissez en haut « Total » ou un fournisseur (Anthropic, Venice, OpenAI…) pour voir ce que vous avez dépensé chez chacun, calculé à ses propres prix. Les vidéos générées y sont comptées, et un modèle dont le prix n'est pas connu montre ses tokens avec « prix inconnu » au lieu de 0 $.
 - « Nouvelle conversation », sous la carte du maître (Ctrl+N) : parlez vous-même à un de vos modèles, dans le dossier de votre choix, sans passer par le maître. Elle s'endort quand elle ne sert plus et reprend avec toute sa conversation à votre message suivant.

@@ -63,6 +63,8 @@ export interface GenerateArgs {
   aspect_ratio?: string | null;
   resolution?: string | null;
   image?: string | null;
+  images?: string[] | null;
+  video?: string | null;
   negative_prompt?: string | null;
   audio?: boolean | null;
   max_usd?: number | null;
@@ -83,10 +85,13 @@ const inside = (root: string, path: string) => {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`));
 };
 
-/** One line of list_video_models: the id first, what generate_video is given. */
+/** What a model starts from, as list_video_models says it and generate_video's description names it. */
+const INPUT_LABELS: Record<VideoModel['input'], string> = { text: 'text→video', image: 'image→video', reference: 'references→video', video: 'video→video', '': '' };
+
+/** One line of list_video_models: the id first, what generate_video is given, then what the provider says of it. */
 function modelLine(m: VideoModel): string {
-  const kind = m.input === 'text' ? 'text→video' : m.input === 'image' ? 'image→video' : m.input === 'video' ? 'video→video' : '';
-  return [m.id, m.name, kind, m.durations.join(' '), m.aspectRatios.join(' '), m.resolutions.join(' '), m.manual ? t('video.list.manual') : ''].filter(Boolean).join(' · ');
+  const said = [m.privacy, m.uncensored ? 'uncensored' : ''].filter(Boolean).join(' ');
+  return [m.id, m.name, INPUT_LABELS[m.input], m.durations.join(' '), m.aspectRatios.join(' '), m.resolutions.join(' '), said, m.manual ? t('video.list.manual') : ''].filter(Boolean).join(' · ');
 }
 
 export class VideoService {
@@ -244,7 +249,7 @@ export class VideoService {
       outDir = resolve(ctx.cwd, args.output_dir.trim());
       if (!ctx.cwd || !inside(resolve(ctx.cwd), outDir)) throw new Error(t('video.outside', { cwd: ctx.cwd }));
     }
-    const request = resume || !model ? undefined : await videoRequest(model, { prompt: args.prompt ?? '', negativePrompt: args.negative_prompt, duration: args.duration, aspectRatio: args.aspect_ratio, resolution: args.resolution, audio: args.audio, image: args.image }, ctx.cwd);
+    const request = resume || !model ? undefined : await videoRequest(model, { prompt: args.prompt ?? '', negativePrompt: args.negative_prompt, duration: args.duration, aspectRatio: args.aspect_ratio, resolution: args.resolution, audio: args.audio, image: args.image, images: args.images, video: args.video }, ctx.cwd);
     const wait = Math.min(WAIT_MAX, Math.max(1, args.wait_minutes ?? WAIT_DEFAULT));
     let queued = resume;
     // The price the provider quoted for this video, for the cost log once it is queued (paid then, waited for or not).

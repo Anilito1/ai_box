@@ -612,17 +612,24 @@ const en = {
   'tool.group.lead': 'The lead: a post name, or an ad-hoc worker name ("hub-…")',
   'tool.group.members': 'The members: post names, or ad-hoc worker names. A worker is a member of one group only.',
   'tool.listVideoModels':
-    'Read only. The video models of the providers the user connected (Venice…), one line each: id, name, what it starts from (text→video, image→video), then the durations, aspect ratios and resolutions it takes. Also lists the videos still being made. Call it before generate_video to pick a model and values it takes; search narrows a long list.',
+    'Read only. The video models of the providers the user connected (Venice…), one line each: id, name, what it starts from (text→video; image→video: a first frame; references→video: images the prompt cites as @Image1, @Image2…; video→video), then the durations, aspect ratios and resolutions it takes, and private / uncensored when the provider says so. Also lists the videos still being made. Call it before generate_video to pick a model and values it takes; search narrows a long list.',
   'tool.listVideoModels.search': 'Words every line must hold (e.g. "wan image", "text→video 1080p")',
   'tool.video.provider': 'The provider, by its id (e.g. "venice"). Left out: every provider that has video models',
   'tool.generateVideo':
-    'Makes one video with a provider’s video model, waits for it and saves the file: answers with its path, the price quoted and a link to show the user. It costs the user money at each call: ask the price first (quote_only) when they did not say how much they accept, and never queue the same video twice. A video usually takes one to several minutes; when the wait ends first, the answer gives a job_id to call again with. Video models never run a worker: they only serve here.',
-  'tool.generateVideo.prompt': 'What the video shows: subject, action, setting, camera, style. With an image, describe the motion rather than the image. Not needed with job_id.',
+    'Makes one video with a provider’s video model, waits for it and saves the file: answers with its path, the price quoted and a link to show the user. It costs the user money at each call: ask the price first (quote_only) when they did not say how much they accept, and never queue the same video twice. A video usually takes one to several minutes; when the wait ends first, the answer gives a job_id to call again with. Video models never run a worker: they only serve here. Images the user attached come in their message as [Attached image: <path>] lines, in the order they attached them: pass those paths in that order in images for a references→video model (the first is @Image1), or the single one in image for an image→video model.',
+  'tool.generateVideo.prompt':
+    'What the video shows: subject, action, setting, camera, style. With an image, describe the motion rather than the image; with reference images, cite each as @Image1, @Image2… (its place in images). Not needed with job_id.',
   'tool.generateVideo.model': 'A video model id from list_video_models. Left out only when there is a single one.',
   'tool.generateVideo.duration': 'Length, among the ones the model takes ("5s"). Left out: the model’s first one',
-  'tool.generateVideo.aspectRatio': 'Aspect ratio, among the ones the model takes ("16:9", "9:16"). Left out: the provider’s default',
+  'tool.generateVideo.aspectRatio':
+    'Aspect ratio, among the ones the model takes ("16:9", "9:16"). Left out: the model’s own ("auto" or "adaptive", which follow the images, when it has one; else the first it takes)',
   'tool.generateVideo.resolution': 'Resolution, among the ones the model takes ("720p"). Left out: the provider’s default',
-  'tool.generateVideo.image': 'The image the video starts from, for an image→video model: a file path (absolute, or in your folder; png, jpg, webp) or an https address',
+  'tool.generateVideo.image':
+    'The first frame, for an image→video model: a file path (absolute, or in your folder; png, jpg, webp), an https address or a data: URL. A references→video model takes images instead',
+  'tool.generateVideo.images':
+    'The reference images, for a references→video model: file paths, https addresses or data: URLs, in the order the prompt cites them (the first is @Image1, the second @Image2…). For images the user attached: their paths, in the order of the [Attached image: …] lines. 30 at most',
+  'tool.generateVideo.video':
+    'The video to rework, for a video→video model: a file path (mp4, mov, webm; 50 MB at most), an https address or a data: URL. Some also take image (a character to animate) or images (people or things to put in); the provider says when one is missing',
   'tool.generateVideo.negativePrompt': 'What the video must not show',
   'tool.generateVideo.audio': 'With sound or not, for a model that lets it be chosen',
   'tool.generateVideo.maxUsd': 'Ceiling in US dollars: above this price, or without a price, nothing is queued',
@@ -640,12 +647,27 @@ const en = {
   'video.noPrompt': 'Give a prompt: what the video shows.',
   'video.noKey': 'No key is stored for {provider}: the user enters it in Settings › Accounts.',
   'video.badValue': '{what} "{value}" is not taken by {model}. It takes: {allowed}.',
-  'video.needsVideo': '{model} reworks a video it is given, which generate_video cannot send yet: pick a text→video or an image→video model.',
+  'video.needsVideo':
+    '{model} reworks a video: give video (a file path or an https address), or pick a text→video, image→video or references→video model.',
   'video.needsImage': '{model} starts from an image: give image (a file path or an https address), or pick a text→video model.',
-  'video.noImage': '{model} starts from the prompt alone: leave image out, or pick an image→video model.',
+  'video.noImage':
+    '{model} starts from the prompt alone: leave image and images out, or pick an image→video or references→video model.',
+  'video.noVideo': '{model} does not rework a video: leave video out, or pick a video→video model.',
+  'video.startNotReferences':
+    '{model} starts from one image, its first frame: give it in image. For several images the prompt cites (@Image1, @Image2…), pick a references→video model.',
+  'video.referencesNotStart':
+    '{model} follows reference images, not a first frame: give every image in images (the first is @Image1) and leave image out.',
+  'video.needsReferences':
+    '{model} follows reference images: give them in images, in the order the prompt cites them (the first is @Image1).',
+  'video.missingReference': 'The prompt cites @Image{n}, but images holds only {count}: one image per citation, in order.',
+  'video.tooManyImages': 'Too many reference images: {max} at most.',
+  'video.imagesBig': 'The images weigh more than one request carries ({max} MB in all): give fewer or lighter ones.',
   'video.imageType': 'Not an image the provider takes (png, jpg, webp, gif): {path}',
   'video.imageMissing': 'Image not found: {path}',
   'video.imageBig': 'Image too large ({max} MB at most): {path}',
+  'video.videoType': 'Not a video the provider takes (mp4, mov, webm): {path}',
+  'video.videoMissing': 'Video not found: {path}',
+  'video.videoBig': 'Video too large ({max} MB at most): {path}',
   'video.outside': 'output_dir must be inside your folder ({cwd}). Leave it out for the user’s videos folder.',
   'video.noQuote': 'The provider gave no price: nothing was queued, since a ceiling of ${max} was asked for. Call again without max_usd to go ahead.',
   'video.tooDear': 'Price quoted: ${usd}, above the ceiling of ${max}: nothing was queued.',
@@ -1295,17 +1317,24 @@ const fr: Record<Key, string> = {
   'tool.group.lead': 'Le chef : un nom de poste, ou un nom de worker ponctuel ("hub-…")',
   'tool.group.members': 'Les membres : noms de postes, ou de workers ponctuels. Un worker est membre d’un seul groupe.',
   'tool.listVideoModels':
-    'Lecture seule. Les modèles vidéo des fournisseurs que l’utilisateur a connectés (Venice…), une ligne chacun : id, nom, ce dont il part (text→video, image→video), puis les durées, formats et résolutions qu’il accepte. Liste aussi les vidéos encore en cours. À appeler avant generate_video pour choisir un modèle et des valeurs qu’il accepte ; search réduit une longue liste.',
+    'Lecture seule. Les modèles vidéo des fournisseurs que l’utilisateur a connectés (Venice…), une ligne chacun : id, nom, ce dont il part (text→video ; image→video : une image de départ ; references→video : des images que le prompt cite en @Image1, @Image2… ; video→video), puis les durées, formats et résolutions qu’il accepte, et private / uncensored quand le fournisseur le dit. Liste aussi les vidéos encore en cours. À appeler avant generate_video pour choisir un modèle et des valeurs qu’il accepte ; search réduit une longue liste.',
   'tool.listVideoModels.search': 'Mots que chaque ligne doit contenir (ex. "wan image", "text→video 1080p")',
   'tool.video.provider': 'Le fournisseur, par son id (ex. "venice"). Omis : tous ceux qui ont des modèles vidéo',
   'tool.generateVideo':
-    'Génère une vidéo avec un modèle vidéo d’un fournisseur, l’attend et enregistre le fichier : répond avec son chemin, le prix annoncé et un lien à montrer à l’utilisateur. Chaque appel coûte de l’argent à l’utilisateur : demande d’abord le prix (quote_only) s’il n’a pas dit combien il accepte, et ne lance jamais deux fois la même vidéo. Une vidéo prend en général une à plusieurs minutes ; si l’attente se termine avant, la réponse donne un job_id avec lequel rappeler. Les modèles vidéo ne font jamais tourner un worker : ils ne servent qu’ici.',
-  'tool.generateVideo.prompt': 'Ce que montre la vidéo : sujet, action, décor, caméra, style. Avec une image, décris le mouvement plutôt que l’image. Inutile avec job_id.',
+    'Génère une vidéo avec un modèle vidéo d’un fournisseur, l’attend et enregistre le fichier : répond avec son chemin, le prix annoncé et un lien à montrer à l’utilisateur. Chaque appel coûte de l’argent à l’utilisateur : demande d’abord le prix (quote_only) s’il n’a pas dit combien il accepte, et ne lance jamais deux fois la même vidéo. Une vidéo prend en général une à plusieurs minutes ; si l’attente se termine avant, la réponse donne un job_id avec lequel rappeler. Les modèles vidéo ne font jamais tourner un worker : ils ne servent qu’ici. Les images jointes par l’utilisateur arrivent dans son message en lignes [Capture jointe : <chemin>], dans l’ordre où il les a jointes : passe ces chemins dans cet ordre dans images pour un modèle references→video (la première est @Image1), ou l’unique dans image pour un modèle image→video.',
+  'tool.generateVideo.prompt':
+    'Ce que montre la vidéo : sujet, action, décor, caméra, style. Avec une image, décris le mouvement plutôt que l’image ; avec des images de référence, cite chacune en @Image1, @Image2… (sa place dans images). Inutile avec job_id.',
   'tool.generateVideo.model': 'Un id de modèle vidéo de list_video_models. Omis seulement s’il n’y en a qu’un.',
   'tool.generateVideo.duration': 'Durée, parmi celles que le modèle accepte ("5s"). Omise : la première du modèle',
-  'tool.generateVideo.aspectRatio': 'Format, parmi ceux que le modèle accepte ("16:9", "9:16"). Omis : celui par défaut du fournisseur',
+  'tool.generateVideo.aspectRatio':
+    'Format, parmi ceux que le modèle accepte ("16:9", "9:16"). Omis : celui du modèle ("auto" ou "adaptive", qui suivent les images, s’il en a un ; sinon le premier qu’il accepte)',
   'tool.generateVideo.resolution': 'Résolution, parmi celles que le modèle accepte ("720p"). Omise : celle par défaut du fournisseur',
-  'tool.generateVideo.image': 'L’image de départ, pour un modèle image→video : un chemin de fichier (absolu, ou dans ton dossier ; png, jpg, webp) ou une adresse https',
+  'tool.generateVideo.image':
+    'L’image de départ, pour un modèle image→video : un chemin de fichier (absolu, ou dans ton dossier ; png, jpg, webp), une adresse https ou une data: URL. Un modèle references→video prend images à la place',
+  'tool.generateVideo.images':
+    'Les images de référence, pour un modèle references→video : chemins de fichiers, adresses https ou data: URL, dans l’ordre où le prompt les cite (la première est @Image1, la deuxième @Image2…). Pour les images jointes par l’utilisateur : leurs chemins, dans l’ordre des lignes [Capture jointe : …]. 30 au plus',
+  'tool.generateVideo.video':
+    'La vidéo à retravailler, pour un modèle video→video : un chemin de fichier (mp4, mov, webm ; 50 Mo au plus), une adresse https ou une data: URL. Certains prennent aussi image (un personnage à animer) ou images (des personnes ou objets à intégrer) ; le fournisseur dit s’il en manque',
   'tool.generateVideo.negativePrompt': 'Ce que la vidéo ne doit pas montrer',
   'tool.generateVideo.audio': 'Avec ou sans son, pour un modèle qui laisse le choix',
   'tool.generateVideo.maxUsd': 'Plafond en dollars US : au-dessus de ce prix, ou sans prix, rien n’est lancé',
@@ -1323,12 +1352,29 @@ const fr: Record<Key, string> = {
   'video.noPrompt': 'Donne un prompt : ce que montre la vidéo.',
   'video.noKey': 'Aucune clé n’est enregistrée pour {provider} : l’utilisateur la saisit dans Réglages › Comptes.',
   'video.badValue': '{what} « {value} » n’est pas accepté par {model}. Il accepte : {allowed}.',
-  'video.needsVideo': '{model} retravaille une vidéo qu’on lui donne, ce que generate_video ne sait pas encore envoyer : choisis un modèle text→video ou image→video.',
+  'video.needsVideo':
+    '{model} retravaille une vidéo : donne video (un chemin de fichier ou une adresse https), ou choisis un modèle text→video, image→video ou references→video.',
   'video.needsImage': '{model} part d’une image : donne image (un chemin de fichier ou une adresse https), ou choisis un modèle text→video.',
-  'video.noImage': '{model} part du prompt seul : n’envoie pas image, ou choisis un modèle image→video.',
+  'video.noImage':
+    '{model} part du prompt seul : n’envoie ni image ni images, ou choisis un modèle image→video ou references→video.',
+  'video.noVideo': '{model} ne retravaille pas de vidéo : n’envoie pas video, ou choisis un modèle video→video.',
+  'video.startNotReferences':
+    '{model} part d’une seule image de départ : donne-la dans image. Pour plusieurs images que le prompt cite (@Image1, @Image2…), choisis un modèle references→video.',
+  'video.referencesNotStart':
+    '{model} suit des images de référence, pas une image de départ : donne toutes les images dans images (la première est @Image1) et n’envoie pas image.',
+  'video.needsReferences':
+    '{model} suit des images de référence : donne-les dans images, dans l’ordre où le prompt les cite (la première est @Image1).',
+  'video.missingReference':
+    'Le prompt cite @Image{n}, mais images n’en contient que {count} : une image par citation, dans l’ordre.',
+  'video.tooManyImages': 'Trop d’images de référence : {max} au plus.',
+  'video.imagesBig':
+    'Les images pèsent plus qu’une requête n’en porte ({max} Mo en tout) : donnes-en moins, ou de plus légères.',
   'video.imageType': 'Pas une image que le fournisseur accepte (png, jpg, webp, gif) : {path}',
   'video.imageMissing': 'Image introuvable : {path}',
   'video.imageBig': 'Image trop lourde ({max} Mo au plus) : {path}',
+  'video.videoType': 'Pas une vidéo que le fournisseur accepte (mp4, mov, webm) : {path}',
+  'video.videoMissing': 'Vidéo introuvable : {path}',
+  'video.videoBig': 'Vidéo trop lourde ({max} Mo au plus) : {path}',
   'video.outside': 'output_dir doit être dans ton dossier ({cwd}). Omets-le pour le dossier Vidéos de l’utilisateur.',
   'video.noQuote': 'Le fournisseur n’a donné aucun prix : rien n’a été lancé, puisqu’un plafond de {max} $ était demandé. Rappelle sans max_usd pour continuer.',
   'video.tooDear': 'Prix annoncé : {usd} $, au-dessus du plafond de {max} $ : rien n’a été lancé.',

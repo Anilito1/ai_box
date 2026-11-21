@@ -1,10 +1,11 @@
-import type { VideoModel } from '../../shared/video';
+import type { VideoInput, VideoModel } from '../../shared/video';
 import { readCapped } from '../accounts';
 import { VideoApiError, type VideoAdapter, type VideoContext, type VideoJob, type VideoRequest } from './types';
 
-// Venice's video API (docs.venice.ai): GET /models?type=video lists the models with what each takes, POST
-// /video/quote prices a request, /video/queue takes it, /video/retrieve answers "PROCESSING" then the video itself
-// (or "COMPLETED" when /video/queue gave an address to download it from), /video/complete deletes Venice's copy.
+// Venice's video API (docs.venice.ai, api.venice.ai/openapi.json): GET /models?type=video lists the models with what
+// each takes; the rest is POST: /video/quote prices a request, /video/queue takes it, /video/retrieve answers
+// "PROCESSING" then the video itself (or "COMPLETED" when /video/queue gave an address to download it from),
+// /video/complete deletes Venice's copy.
 
 /** How long an answer's headers may take; a video's body then streams for as long as it needs. */
 const ANSWER_TIMEOUT = 60_000;
@@ -63,36 +64,66 @@ async function json<T>(res: Response): Promise<T | null> {
   }
 }
 
-/** A request as /video/queue and /video/quote take it: only what was asked, Venice refuses a field it does not know. */
+/**
+ * A request as /video/queue and /video/quote take it: only what was asked, Venice refuses a field it does not know.
+ * A start image goes in image_url, reference images in reference_image_urls (the order the prompt's @Image1, @Image2…
+ * cite), a video to rework in video_url.
+ */
 const body = (req: VideoRequest, priced: boolean): Record<string, unknown> => ({
   model: req.model,
   duration: req.duration,
   ...(req.aspectRatio ? { aspect_ratio: req.aspectRatio } : {}),
   ...(req.resolution ? { resolution: req.resolution } : {}),
   ...(req.audio !== undefined ? { audio: req.audio } : {}),
-  // The price depends on neither the prompt nor the image.
-  ...(priced ? {} : { prompt: req.prompt, ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}), ...(req.imageUrl ? { image_url: req.imageUrl } : {}) }),
+  // The price depends on neither the prompt nor the images; a reworked video's length sets it, read from the video.
+  ...(req.videoUrl ? { video_url: req.videoUrl } : {}),
+  ...(priced
+    ? {}
+    : {
+        prompt: req.prompt,
+        ...(req.negativePrompt ? { negative_prompt: req.negativePrompt } : {}),
+        ...(req.imageUrl ? { image_url: req.imageUrl } : {}),
+        ...(req.referenceImageUrls?.length ? { reference_image_urls: req.referenceImageUrls } : {}),
+      }),
 });
 
 interface VeniceModel {
   id?: unknown;
   type?: unknown;
-  model_spec?: { name?: unknown; offline?: unknown; constraints?: { model_type?: unknown; durations?: unknown; aspect_ratios?: unknown; resolutions?: unknown; audio_configurable?: unknown } };
+  model_spec?: {
+    name?: unknown;
+    offline?: unknown;
+    privacy?: unknown;
+    uncensored?: unknown;
+    constraints?: { model_type?: unknown; durations?: unknown; aspect_ratios?: unknown; resolutions?: unknown; audio_configurable?: unknown };
+  };
+}
+
+/**
+ * What a model of Venice's list starts from. Its type says "image-to-video" both for a model that starts from a first
+ * frame and for one that follows reference images: only the id of the latter tells it ("…-reference-to-video").
+ */
+function veniceInput(id: string, type: string): VideoInput {
+  if (type === 'text-to-video') return 'text';
+  if (type === 'image-to-video') return /-reference-to-video(?:-|$)/i.test(id) ? 'reference' : 'image';
+  return type === 'video' ? 'video' : '';
 }
 
 /** An entry of Venice's list as the hub keeps it; null for anything but a video model that is on. */
 export function veniceModel(m: VeniceModel | null): VideoModel | null {
   if (!m || typeof m.id !== 'string' || !m.id || m.type !== 'video' || m.model_spec?.offline === true) return null;
   const c = m.model_spec?.constraints ?? {};
-  const type = typeof c.model_type === 'string' ? c.model_type : '';
+  const privacy = m.model_spec?.privacy;
   return {
     id: m.id,
     name: typeof m.model_spec?.name === 'string' ? m.model_spec.name : '',
-    input: type === 'text-to-video' ? 'text' : type === 'image-to-video' ? 'image' : type === 'video' ? 'video' : '',
+    input: veniceInput(m.id, typeof c.model_type === 'string' ? c.model_type : ''),
     durations: strings(c.durations),
     aspectRatios: strings(c.aspect_ratios),
     resolutions: strings(c.resolutions),
     audioOption: c.audio_configurable === true,
+    privacy: privacy === 'private' || privacy === 'anonymized' ? privacy : '',
+    uncensored: m.model_spec?.uncensored === true,
     manual: false,
   };
 }

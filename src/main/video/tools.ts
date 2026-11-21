@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { VIDEO_REFERENCES_MAX } from '../../shared/video';
 import { t } from '../i18n';
 import type { HubTool, HubToolResult } from '../providers/types';
 import type { GenerateArgs, VideoService } from './service';
@@ -31,6 +32,8 @@ export function videoTools(video: VideoService, cwd: () => string, run: (fn: () 
         aspect_ratio: z.string().max(20).nullish().describe(t('tool.generateVideo.aspectRatio')),
         resolution: z.string().max(20).nullish().describe(t('tool.generateVideo.resolution')),
         image: z.string().nullish().describe(t('tool.generateVideo.image')),
+        images: z.array(z.string()).max(VIDEO_REFERENCES_MAX).nullish().describe(t('tool.generateVideo.images')),
+        video: z.string().nullish().describe(t('tool.generateVideo.video')),
         negative_prompt: z.string().max(32_000).nullish().describe(t('tool.generateVideo.negativePrompt')),
         audio: z.boolean().nullish().describe(t('tool.generateVideo.audio')),
         max_usd: z.number().positive().nullish().describe(t('tool.generateVideo.maxUsd')),

@@ -20,8 +20,12 @@ export interface VideoRequest {
   aspectRatio?: string;
   resolution?: string;
   audio?: boolean;
-  /** The image the video starts from: an http(s) address or a data: URL. */
+  /** The image of the first frame: an http(s) address or a data: URL. */
   imageUrl?: string;
+  /** The images a reference model follows, in the order the prompt cites them (@Image1 first); addresses or data: URLs. */
+  referenceImageUrls?: string[];
+  /** The video a video→video model reworks: an http(s) address or a data: URL. */
+  videoUrl?: string;
 }
 
 /** A job the provider took. */

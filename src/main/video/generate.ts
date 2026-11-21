@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, open, readFile, rename, rm, stat, type FileHandle } from 'node:fs/promises';
 import { extname, isAbsolute, join, resolve } from 'node:path';
-import type { VideoModel } from '../../shared/video';
+import { VIDEO_REFERENCES_MAX, type VideoModel } from '../../shared/video';
 import { t } from '../i18n';
 import { VideoApiError, type VideoAdapter, type VideoContext, type VideoJob, type VideoRequest } from './types';
 
@@ -16,13 +16,22 @@ export interface VideoAsk {
   aspectRatio?: string | null;
   resolution?: string | null;
   audio?: boolean | null;
-  /** The image the video starts from: a file (absolute, or in `cwd`), an http(s) address or a data: URL. */
+  /** The image of the first frame: a file (absolute, or in `cwd`), an http(s) address or a data: URL. */
   image?: string | null;
+  /** The reference images, in the order the prompt cites them (@Image1 first): files, addresses or data: URLs. */
+  images?: readonly string[] | null;
+  /** The video a video→video model reworks: a file, an http(s) address or a data: URL. */
+  video?: string | null;
 }
 
 const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
-/** A start image read from disk goes inside the request, a third larger once encoded. */
+const VIDEO_TYPES: Record<string, string> = { '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm' };
+/** An image read from disk goes inside the request, a third larger once encoded. */
 const IMAGE_MAX = 15 * 1024 * 1024;
+/** What the images read from disk for one request weigh at most, together. */
+const IMAGES_MAX = 40 * 1024 * 1024;
+/** A video to rework read from disk goes inside the request as well. */
+const SOURCE_VIDEO_MAX = 50 * 1024 * 1024;
 const VIDEO_MAX = 4 * 1024 * 1024 * 1024;
 /** A download that stays this long without a byte is given up. */
 const STALL = 120_000;
@@ -38,20 +47,63 @@ function among(what: string, value: string, allowed: string[], model: string): s
   return hit;
 }
 
+/**
+ * The aspect ratio a model gets when none is asked: the one that follows its images ("auto", "adaptive") when it has
+ * one, else the first it lists (Venice refuses a job without one on some models, though it prices it); none when it
+ * lists none.
+ */
+const defaultAspect = (allowed: string[]) => allowed.find((a) => /^(auto|adaptive)$/i.test(a)) ?? allowed[0] ?? '';
+
 /** "5", "5 s" and "5s" are the same duration. */
 const durationOf = (text: string) => (/^\d+(\.\d+)?\s*s?$/i.test(text.trim()) ? `${parseFloat(text)}s` : text.trim());
 
-/** The image a video starts from, as the request carries it: an address as it is, a file as a data: URL. */
-export async function startImage(image: string, cwd: string): Promise<string> {
-  const value = image.trim();
-  if (/^https?:\/\//i.test(value) || /^data:image\/[\w.+-]+;base64,/i.test(value)) return value;
-  const path = isAbsolute(value) ? value : resolve(cwd, value);
-  const type = IMAGE_TYPES[extname(path).toLowerCase()];
-  if (!type) throw new Error(t('video.imageType', { path }));
+/** What a request carries inline, by kind: the files it reads by extension, their weight, the data: URLs it takes as they are. */
+const INLINE = {
+  image: { types: IMAGE_TYPES, max: IMAGE_MAX, dataUrl: /^data:image\/[\w.+-]+;base64,/i, said: { type: 'video.imageType', missing: 'video.imageMissing', big: 'video.imageBig' } },
+  video: { types: VIDEO_TYPES, max: SOURCE_VIDEO_MAX, dataUrl: /^data:video\/[\w.+-]+;base64,/i, said: { type: 'video.videoType', missing: 'video.videoMissing', big: 'video.videoBig' } },
+} as const;
+
+/** An image or a video as the request carries it: an address as it is, a file (absolute, or in `cwd`) as a data: URL. */
+async function inline(value: string, cwd: string, kind: keyof typeof INLINE): Promise<string> {
+  const { types, max, dataUrl, said } = INLINE[kind];
+  const v = value.trim();
+  if (/^https?:\/\//i.test(v) || dataUrl.test(v)) return v;
+  const path = isAbsolute(v) ? v : resolve(cwd, v);
+  const type = types[extname(path).toLowerCase()];
+  if (!type) throw new Error(t(said.type, { path }));
   const info = await stat(path).catch(() => null);
-  if (!info?.isFile()) throw new Error(t('video.imageMissing', { path }));
-  if (info.size > IMAGE_MAX) throw new Error(t('video.imageBig', { path, max: Math.round(IMAGE_MAX / 1024 / 1024) }));
+  if (!info?.isFile()) throw new Error(t(said.missing, { path }));
+  if (info.size > max) throw new Error(t(said.big, { path, max: Math.round(max / 1024 / 1024) }));
   return `data:${type};base64,${(await readFile(path)).toString('base64')}`;
+}
+
+/** The image a video starts from, as the request carries it: an address as it is, a file as a data: URL. */
+export const startImage = (image: string, cwd: string): Promise<string> => inline(image, cwd, 'image');
+
+/** The bytes a data: URL holds; nothing for an address, which the provider fetches itself. */
+const inlineBytes = (url: string) => (url.startsWith('data:') ? Math.floor(((url.length - url.indexOf(',') - 1) * 3) / 4) : 0);
+
+/**
+ * The images a model is given, checked against what it starts from: one first frame (image) for an image→video model,
+ * reference images (images, in the order the prompt cites them) for a reference model, a video for a video→video
+ * model, which may take images beside it. A model named by hand gets what was asked.
+ */
+function checkInputs(model: VideoModel, prompt: string, image: string, images: string[], video: string): void {
+  if (images.length > VIDEO_REFERENCES_MAX) throw new Error(t('video.tooManyImages', { max: VIDEO_REFERENCES_MAX }));
+  if (video && model.input !== 'video' && model.input !== '') throw new Error(t('video.noVideo', { model: model.id }));
+  if (model.input === 'text' && (image || images.length > 0)) throw new Error(t('video.noImage', { model: model.id }));
+  if (model.input === 'video' && !video) throw new Error(t('video.needsVideo', { model: model.id }));
+  if (model.input === 'image') {
+    if (images.length > 0) throw new Error(t('video.startNotReferences', { model: model.id }));
+    if (!image) throw new Error(t('video.needsImage', { model: model.id }));
+  }
+  if (model.input === 'reference') {
+    if (image) throw new Error(t('video.referencesNotStart', { model: model.id }));
+    if (images.length === 0) throw new Error(t('video.needsReferences', { model: model.id }));
+    // A citation without its image is refused here rather than paid for.
+    const cited = Math.max(0, ...[...prompt.matchAll(/@image(\d+)\b/gi)].map((m) => Number(m[1])));
+    if (cited > images.length) throw new Error(t('video.missingReference', { n: cited, count: images.length }));
+  }
 }
 
 /** The request a model gets for what was asked: values it does not take are refused here, with the ones it takes. */
@@ -61,20 +113,33 @@ export async function videoRequest(model: VideoModel, ask: VideoAsk, cwd: string
   const asked = ask.duration ? durationOf(ask.duration) : '';
   const duration = asked ? among('duration', asked, model.durations, model.id) : (model.durations[0] ?? '5s');
   const image = ask.image?.trim() ?? '';
-  // A model that reworks a video needs one to start from: the tool sends none yet.
-  if (model.input === 'video') throw new Error(t('video.needsVideo', { model: model.id }));
-  if (model.input === 'image' && !image) throw new Error(t('video.needsImage', { model: model.id }));
-  if (model.input === 'text' && image) throw new Error(t('video.noImage', { model: model.id }));
+  const images = (ask.images ?? []).map((i) => i.trim()).filter(Boolean);
+  const video = ask.video?.trim() ?? '';
+  checkInputs(model, prompt, image, images, video);
+  const aspectRatio = ask.aspectRatio?.trim() ? among('aspect_ratio', ask.aspectRatio.trim(), model.aspectRatios, model.id) : defaultAspect(model.aspectRatios);
+  const resolution = ask.resolution?.trim() ? among('resolution', ask.resolution.trim(), model.resolutions, model.id) : '';
+  // Read one after the other, in their order: a request too heavy stops at the image that tips it over.
+  const urls: string[] = [];
+  let weight = 0;
+  for (const one of image ? [image, ...images] : images) {
+    const url = await startImage(one, cwd);
+    weight += inlineBytes(url);
+    if (weight > IMAGES_MAX) throw new Error(t('video.imagesBig', { max: Math.round(IMAGES_MAX / 1024 / 1024) }));
+    urls.push(url);
+  }
+  const imageUrl = image ? urls.shift() : undefined;
   return {
     model: model.id,
     prompt,
     ...(ask.negativePrompt?.trim() ? { negativePrompt: ask.negativePrompt.trim() } : {}),
     duration,
-    ...(ask.aspectRatio?.trim() ? { aspectRatio: among('aspect_ratio', ask.aspectRatio.trim(), model.aspectRatios, model.id) } : {}),
-    ...(ask.resolution?.trim() ? { resolution: among('resolution', ask.resolution.trim(), model.resolutions, model.id) } : {}),
+    ...(aspectRatio ? { aspectRatio } : {}),
+    ...(resolution ? { resolution } : {}),
     // Sound is only said to a model that lets it be chosen.
     ...(typeof ask.audio === 'boolean' && model.audioOption ? { audio: ask.audio } : {}),
-    ...(image ? { imageUrl: await startImage(image, cwd) } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
+    ...(urls.length > 0 ? { referenceImageUrls: urls } : {}),
+    ...(video ? { videoUrl: await inline(video, cwd, 'video') } : {}),
   };
 }
 
