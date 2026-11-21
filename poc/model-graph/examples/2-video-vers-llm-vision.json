@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "name": "Avec conversion : vidéo → images → LLM vision",
+  "nodes": [
+    {
+      "id": "in",
+      "kind": "chat-input",
+      "x": 36,
+      "y": 70
+    },
+    {
+      "id": "video",
+      "kind": "model",
+      "model": "sim/text-to-video",
+      "title": "Crée la vidéo",
+      "options": {
+        "duration": "3s"
+      },
+      "x": 270,
+      "y": 70
+    },
+    {
+      "id": "frames",
+      "kind": "convert",
+      "convert": "frames",
+      "options": {
+        "count": "4"
+      },
+      "x": 504,
+      "y": 70
+    },
+    {
+      "id": "critic",
+      "kind": "model",
+      "model": "sim/llm-vision",
+      "title": "Décrit les images",
+      "instruction": "Décris ce que montrent ces images extraites d’une vidéo.",
+      "x": 738,
+      "y": 70
+    },
+    {
+      "id": "out",
+      "kind": "chat-output",
+      "x": 972,
+      "y": 70
+    }
+  ],
+  "edges": [
+    {
+      "from": "in.text",
+      "to": "video.prompt"
+    },
+    {
+      "from": "video.video",
+      "to": "frames.video"
+    },
+    {
+      "from": "frames.images",
+      "to": "critic.images"
+    },
+    {
+      "from": "critic.text",
+      "to": "out.text"
+    },
+    {
+      "from": "video.video",
+      "to": "out.video"
+    }
+  ]
+}
