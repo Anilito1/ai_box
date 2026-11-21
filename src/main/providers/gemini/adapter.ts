@@ -141,18 +141,18 @@ export class GeminiProcess implements AgentProcess {
       // A Google sign-in that is not there would open a browser from a session nobody is watching: refused here.
       if (method === 'oauth-personal' && !googleSignIn(spec.env.GEMINI_CLI_HOME ?? '').signedIn) {
         this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: 'gemini:not-signed-in' } });
-        throw new Error('Gemini is not signed in: connect it in Settings › Accounts.');
+        throw new Error('Gemini is not signed in: connect it in Settings › Providers.');
       }
       await client.request('authenticate', { methodId: method }).catch((err: unknown) => {
         const refusal = method === 'oauth-personal' && err instanceof Error ? googleRefusal(err.message) : null;
         if (!refusal) throw err;
-        // Google refuses the account: Settings › Accounts says so from now on, and the session stops with why.
+        // Google refuses the account: Settings › Providers says so from now on, and the session stops with why.
         noteGoogleRefusal(spec.env.GEMINI_CLI_HOME ?? '', refusal);
         this.queue.push({ type: 'limit', signal: { kind: 'auth', resetsAt: null, source: `gemini:${refusal}` } });
         throw new Error(
           refusal === 'google-refused'
-            ? 'Google refuses this account for Gemini: use a Gemini API key in Settings › Accounts.'
-            : 'The Google sign-in of Gemini expired: sign in again in Settings › Accounts.',
+            ? 'Google refuses this account for Gemini: use a Gemini API key in Settings › Providers.'
+            : 'The Google sign-in of Gemini expired: sign in again in Settings › Providers.',
         );
       });
       let session: Json | null = null;

@@ -192,7 +192,7 @@ test("a provider that is not connected is refused", async () => {
         },
         signal,
       ),
-      /Settings › Accounts/,
+      /Settings › Providers/,
     );
   } finally {
     done();

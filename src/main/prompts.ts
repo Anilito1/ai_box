@@ -115,8 +115,8 @@ function providersText(l: Lang): string {
     .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${p.models.join(', ') || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
     .join(' ; ');
   return l === 'fr'
-    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (${ids}) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Comptes.`
-    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (${ids}) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Accounts.`;
+    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (${ids}) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Fournisseurs.`
+    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (${ids}) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Providers.`;
 }
 
 /** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
