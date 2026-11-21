@@ -17,6 +17,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 - Sous Linux, vos clés et jetons s'enregistrent dans le trousseau du système sur tous les bureaux (Hyprland, Sway…) ; sans trousseau, l'app le dit et n'enregistre rien.
 - Sous Linux, « Se connecter » ouvre votre terminal habituel (kitty, foot, alacritty…).
 - Sous Linux, fermer une session ou quitter l'app arrête aussi ce qu'elle avait lancé (serveurs, commandes en arrière-plan), comme sous Windows.
+- Sous Linux, la fenêtre garde les boutons de votre bureau (réduire, agrandir, fermer) : plus de bouton fermer en double.
 
 ## 2026-11-21
 

@@ -156,13 +156,15 @@ const chrome = () => {
   }
   return nativeTheme.shouldUseDarkColors ? { color: '#0d0e11', symbolColor: '#8c919b', height: 40 } : { color: '#ebebef', symbolColor: '#5f5f67', height: 40 };
 };
+/** Linux: the compositor or window manager draws the window's buttons (Hyprland's hyprbars, GNOME...), so none of ours. */
+const ownControls = process.platform !== 'linux';
 /** The window controls sit over a pane's header: they take its colour (--chat). */
 const controls = () => ({ ...chrome(), color: background ? backgroundTokens(background).vars['--chat'] : nativeTheme.shouldUseDarkColors ? '#0f1013' : '#ffffff' });
 
 function paintWindow(): void {
   if (!win || win.isDestroyed()) return;
   win.setBackgroundColor(chrome().color);
-  if (process.platform !== 'darwin') win.setTitleBarOverlay(controls());
+  if (process.platform === 'win32') win.setTitleBarOverlay(controls());
 }
 
 function createWindow(mgr: SessionManager, lang: Lang): void {
@@ -175,7 +177,7 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     icon: join(here, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : process.platform === 'darwin' ? 'icon-macos.png' : 'icon.png'),
     backgroundColor: chrome().color,
     titleBarStyle: 'hidden',
-    titleBarOverlay: controls(),
+    ...(ownControls ? { titleBarOverlay: controls() } : {}),
     // macOS: its window buttons, centred in the 40 px row of the panes' headers.
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 14, y: 13 } } : {}),
     webPreferences: {
