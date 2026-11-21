@@ -24,8 +24,6 @@
     "notices": "node scripts/notices.mjs",
     "ui": "node scripts/ui.mjs",
     "notes": "node scripts/notesDraft.mjs",
-    "poc:graph": "node poc/model-graph/run.mjs",
-    "poc:graph:test": "node scripts/test.mjs poc",
     "eval": "node scripts/eval/run.mjs",
     "vps:connect": "esbuild scripts/vps/connect.ts --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.vps-connect.mjs --log-level=warning && node node_modules/.vps-connect.mjs"
   },
