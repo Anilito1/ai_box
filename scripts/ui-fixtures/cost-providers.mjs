@@ -4,6 +4,7 @@
 //
 //   node scripts/ui-fixtures/cost-providers.mjs            → a new hub-ui-… folder in the temporary folder, printed
 //   node scripts/ui-fixtures/cost-providers.mjs <folder>   → that folder (made if needed; its usage log is replaced)
+//   … --many                                               → plus a dozen repos, missions and models (long lists)
 //
 // Today: Anthropic ≈ $100 (one turn logged before the provider was kept), OpenAI ≈ $14, Venice ≈ $2 with a model and a
 // video without a known price, DeepSeek ≈ $1.4; a few earlier days for the other periods.
@@ -11,7 +12,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-const dir = process.argv[2] ? resolve(process.argv[2]) : mkdtempSync(join(tmpdir(), 'hub-ui-'));
+const args = process.argv.slice(2);
+const many = args.includes('--many');
+const folder = args.find((a) => !a.startsWith('--'));
+const dir = folder ? resolve(folder) : mkdtempSync(join(tmpdir(), 'hub-ui-'));
 const usage = join(dir, 'usage');
 rmSync(usage, { recursive: true, force: true });
 mkdirSync(usage, { recursive: true });
@@ -62,6 +66,13 @@ const lines = [
   turn(3 * DAY + 10 * MIN, 'w-tests', 'hub-tests', 'worker', { 'deepseek-flash': [0.32, 1_100_000, 90_000, 600_000, 0] }, { w: api, p: 'deepseek' }),
   turn(12 * DAY, 'w-front', 'hub-front', 'worker', { 'claude-sonnet-5-5': [27.5, 400_000, 120_000, 20_000_000, 1_000_000] }, { w: shop, p: 'anthropic' }),
 ];
+if (many) {
+  for (let i = 1; i <= 12; i++) {
+    const id = `w-extra${i}`;
+    lines.push(turn((30 + i) * MIN, id, `hub-extra-${i}`, 'worker', { [i % 2 ? 'claude-sonnet-5-5' : 'claude-haiku-4-5']: [1.5 + i * 0.4, 90_000, 20_000, 1_000_000, 0] }, { w: `A:\\DEV\\demo-${i}`, p: 'anthropic', mi: `m-extra${i}`, e: 'medium', d: (5 + i) * MIN, k: 4 + i }));
+    lines.push(turn((29 + i) * MIN, 'w-trad', 'hub-traduction', 'worker', { [`venice-model-${i}`]: [0.05 * i, 200_000, 30_000, 0, 0] }, { w: shop, p: 'venice' }));
+  }
+}
 const missions = [
   { t: now - 95 * MIN, mi: 'm-front', id: 'w-front', n: 'hub-front', k: 'start', m: 'sonnet', e: 'high', by: 'master' },
   { t: now - 85 * MIN, mi: 'm-api', id: 'w-api', n: 'hub-api', k: 'start', m: 'gpt-6.1-sol', e: 'high', by: 'master' },
@@ -80,6 +91,7 @@ const write = (kind, rows) => {
   for (const [name, text] of files) writeFileSync(join(usage, name), text);
 };
 write('turns', lines);
+if (many) for (let i = 1; i <= 12; i++) missions.push({ t: now - (31 + i) * MIN, mi: `m-extra${i}`, id: `w-extra${i}`, n: `hub-extra-${i}`, k: 'start', m: 'sonnet', e: 'medium', by: 'master' });
 write('missions', missions);
 // The prices Venice's list gave (USD per million tokens): what its next turns would be priced with.
 writeFileSync(join(usage, 'prices.json'), JSON.stringify({ venice: { 'venice-uncensored': [0.5, 2] } }));

@@ -3951,9 +3951,9 @@ kbd,
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: var(--sp-2);
   width: min(320px, calc(100vw - 24px));
-  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
   overflow-y: auto;
   border: 1px solid var(--hairline);
   border-radius: 14px;
@@ -3982,37 +3982,70 @@ kbd,
   transform: scale(0.98);
   pointer-events: none;
 }
+/* One header: the provider (a menu) and the period. */
 .cost-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1);
 }
-.cost-title {
-  margin: 0;
-  color: var(--text-2);
-  font-size: var(--fs-md);
-  font-weight: 600;
+.cost-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: var(--ctl-sm);
+  padding: 0 4px 0 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  font: 600 var(--fs-md) / 1 var(--font-ui);
+  cursor: pointer;
+}
+.cost-provider:hover,
+.cost-provider:focus-visible {
+  background: var(--hover-strong);
+  outline: none;
+}
+.cost-provider-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cost-provider .ico {
+  flex: none;
+  color: var(--text-3);
 }
 .cost-info {
   display: inline-flex;
   color: var(--text-3);
   cursor: help;
 }
-.cost-panel .segmented {
-  margin: 0;
+.cost-panel .segmented.cost-periods {
+  flex: none;
+  margin: 0 0 0 auto;
 }
 .cost-periods .seg {
+  flex: none;
+  height: 22px;
+  padding: 0 7px;
   white-space: nowrap;
 }
-/* Total, then each provider: they wrap onto a second line rather than squeeze their names. */
-.cost-providers {
-  flex-wrap: wrap;
+.cost-provider-menu {
+  min-width: 200px;
 }
-.cost-providers .seg {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 0 8px;
-  white-space: nowrap;
+.cost-provider-menu .menu-row {
+  align-items: center;
+}
+.cost-provider-menu .menu-title {
+  flex: 1;
+}
+.cost-provider-menu .menu-hint {
+  font-variant-numeric: tabular-nums;
+}
+.cost-provider-menu .menu-row:hover .cost-unpriced,
+.cost-provider-menu .menu-row:focus-visible .cost-unpriced {
+  color: inherit;
 }
 .cost-body {
   display: flex;
@@ -4029,68 +4062,38 @@ kbd,
   gap: var(--sp-2);
 }
 .cost-total-value {
-  font: 600 28px / 1.1 var(--font-display);
+  font: 600 24px / 1.1 var(--font-display);
   letter-spacing: -0.01em;
+}
+.cost-total .cost-unpriced {
+  margin-left: -4px;
+  font-size: var(--fs-sm);
 }
 .cost-sub,
 .cost-since {
   color: var(--text-3);
   font-size: var(--fs-sm);
 }
-.cost-missions {
-  margin-top: 12px;
-}
-.cost-missions-title,
 .cost-section-title {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin: 0 0 4px;
-}
-.cost-mission-facts,
-.cost-facts {
-  grid-column: 1 / -1;
-  font-size: 11px;
-}
-/* Tokens or videos without a known price: said, never shown as $0.00. */
-.cost-unpriced {
-  margin-top: calc(-1 * var(--sp-2));
-  color: var(--warn);
-  font-size: var(--fs-sm);
-}
-.cost-row-unpriced {
-  color: var(--warn);
-}
-.cost-amount-unknown {
+  margin: 0 0 2px;
   color: var(--text-3);
-  font-style: italic;
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
-/* A provider of the Total view opens its own. */
-.cost-pick {
-  margin: 0 calc(-1 * var(--sp-2));
-  padding: 2px var(--sp-2);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-.cost-pick:hover,
-.cost-pick:focus-visible {
-  background: var(--hover);
-  outline: none;
-}
-
 .cost-list {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
+/* One line: the name, its share of the period as a thin bar, the amount. */
 .cost-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: var(--sp-3);
-  row-gap: 3px;
-  align-items: baseline;
+  grid-template-columns: minmax(0, 1fr) 56px 64px;
+  column-gap: var(--sp-2);
+  align-items: center;
+  min-height: 22px;
 }
 .cost-name {
   overflow: hidden;
@@ -4100,10 +4103,26 @@ kbd,
 .cost-amount {
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
-/* Its share of the period: a thin bar under the line. */
+.cost-amount-unknown {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-style: italic;
+}
+.cost-amount-wide {
+  grid-column: 2 / -1;
+}
+/* A part without a known price: a short mark, the detail on hover. */
+.cost-unpriced {
+  margin-left: 2px;
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: help;
+}
 .cost-share {
-  grid-column: 1 / -1;
   height: 3px;
   border-radius: var(--r-full);
   background: var(--hover-strong);
@@ -4118,21 +4137,43 @@ kbd,
   border-radius: inherit;
   background: var(--bar);
 }
-.cost-more {
+/* A provider opens its own view, a mission its facts. */
+.cost-pick {
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.cost-pick:hover,
+.cost-pick:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.cost-facts {
+  grid-column: 1 / -1;
+  padding-bottom: 3px;
   color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.cost-show-more {
+  align-self: flex-start;
+  margin: 2px 0 0 -6px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--accent);
   font-size: var(--fs-sm);
+  cursor: pointer;
 }
-.cost-more .cost-amount {
-  color: inherit;
+.cost-show-more:hover,
+.cost-show-more:focus-visible {
+  background: var(--hover);
+  outline: none;
 }
-/* The total of the rows, under them. */
-.cost-sum {
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--line);
-  font-weight: 600;
-}
-.cost-sum .cost-amount {
-  color: var(--text);
+.cost-section {
+  display: flex;
+  flex-direction: column;
 }
 .cost-empty {
   color: var(--text-3);

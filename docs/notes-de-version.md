@@ -20,6 +20,7 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ### Modifié
 
+- Le panneau « Coût API » est plus compact : fournisseur et période dans un seul en-tête, une ligne par élément, et les longues listes repliées derrière « de plus ».
 - Un changement de réseau (Wi-Fi qui tombe, passage au partage de connexion du téléphone, sortie de veille) ne laisse plus une session en panne : le tour coupé est repris tout seul en quelques secondes, dès que le réseau revient.
 
 ## 2026-11-20
