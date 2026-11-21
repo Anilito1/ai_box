@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { FAULT_WAITS_MS, faultWait, passingFault } from './providerFault';
+import { FAULT_WAITS_MS, faultKind, faultWait, NETWORK_WAITS_MS, passingFault } from './providerFault';
 
 test('an overload or a server error passes on its own; a limit, a sign-in or a refused request does not', () => {
   assert.equal(passingFault('overloaded', ''), true);
@@ -26,4 +26,28 @@ test('the waits grow, stay within a quarter of their base, and end', () => {
     assert.ok((faultWait(i + 1, 0.999) as number) < base * 1.25);
   }
   assert.equal(faultWait(FAULT_WAITS_MS.length + 1), null);
+});
+
+test("a connection cut reads as one, in Claude Code's, Codex's or Node's wording; a server error or a limit does not", () => {
+  for (const text of [
+    'API Error: Connection lost mid-response. The response above may be incomplete.',
+    'API Error: Connection lost before a response was produced. Try again.',
+    'API Error: Connection to the API was lost (ECONNRESET). This is usually temporary — try again.',
+    'API Error: Your computer went to sleep mid-response. The response above may be incomplete.',
+    'API Error: The response stopped arriving. The response above may be incomplete.',
+    'responseStreamDisconnected: stream disconnected before completion',
+    'TypeError: terminated',
+  ])
+    assert.equal(faultKind('server_error', text), 'network', text);
+  assert.equal(faultKind('unknown', 'API Error: Connection error.'), 'network');
+  assert.equal(faultKind('server_error', 'API Error: Server error mid-response. The response above may be incomplete.'), 'provider');
+  assert.equal(faultKind('overloaded', 'API Error: 529 Overloaded'), 'provider');
+  assert.equal(faultKind('rate_limit', 'API Error: Connection lost mid-response.'), null);
+  assert.equal(faultKind('unknown', 'API Error: 400 prompt is too long'), null);
+});
+
+test('a connection cut is tried again within seconds, then further apart, and ends', () => {
+  assert.ok(NETWORK_WAITS_MS[0] < 10_000);
+  assert.equal(faultWait(1, 0.5, NETWORK_WAITS_MS), NETWORK_WAITS_MS[0]);
+  assert.equal(faultWait(NETWORK_WAITS_MS.length + 1, 0.5, NETWORK_WAITS_MS), null);
 });

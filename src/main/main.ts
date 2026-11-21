@@ -4,7 +4,7 @@ import { textModels, videoAmong } from '../shared/video';
 import './shellPath';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, networkInterfaces, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -15,6 +15,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  net,
   powerMonitor,
   powerSaveBlocker,
   session,
@@ -85,6 +86,7 @@ import { parseAction, readBranches, readDetails, readGraph } from './scm';
 import { Secrets } from './secrets';
 import { SessionManager } from './sessions';
 import { PurgeService } from './purge';
+import { powerBoxSwitch } from './networkWatch';
 import { TranscriptIndex, transcriptRoots } from './purgeIndex';
 import { git } from './git';
 import { baseConfigDir } from './accounts';
@@ -410,6 +412,12 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       scratchRoot: join(this.dataDir, 'scratch'),
       wideFolders: () => this.wideFolders(),
       onActivity: (record) => this.purge.recordActivity(record),
+      network: {
+        interfaces: networkInterfaces,
+        online: () => net.isOnline(),
+        // Power Box, a separate utility, notes each network switch there when it runs.
+        ...(process.env.LOCALAPPDATA ? { switchedAt: powerBoxSwitch(join(process.env.LOCALAPPDATA, 'Power Box', 'network-state.json')) } : {}),
+      },
     });
     this.remote.mgr = this.mgr;
     const transcripts = new TranscriptIndex(
@@ -1561,7 +1569,11 @@ async function start(): Promise<void> {
   // Remote workers on only: the server's guard, the automatic step-away, the turns left alone there.
   hub.remote.start();
   powerMonitor.on('lock-screen', () => hub.remote.autoAway());
-  powerMonitor.on('resume', () => hub.remote.resumed());
+  powerMonitor.on('resume', () => {
+    hub.remote.resumed();
+    // Back from sleep: the connections of the turns under way are gone.
+    hub.mgr.networkChanged();
+  });
   updater = hub.updater;
   updater.start();
 }
