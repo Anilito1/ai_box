@@ -94,25 +94,29 @@ export class NetworkWatch {
   }
 }
 
-/** Keys Power Box may give its last switch under; the file's own time otherwise. */
-const SWITCH_KEYS = ['lastSwitchAt', 'lastSwitch', 'switchedAt', 'lastChangeAt', 'lastChange', 'changedAt', 'timestamp', 'at'];
-
 const timeOf = (v: unknown): number => {
-  if (typeof v === 'number' && Number.isFinite(v)) return v < 1e12 ? v * 1000 : v;
-  if (typeof v === 'string') {
-    const n = Date.parse(v);
-    return Number.isNaN(n) ? 0 : n;
-  }
-  return 0;
+  const n = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isNaN(n) ? 0 : n;
 };
 
+/** Power Box's network-state.json, version 1: only what tells a switch. No network names are in it. */
+interface PowerBoxState {
+  updatedAt?: string;
+  /** null while it watches nothing. */
+  online?: boolean | null;
+  lastSwitch?: { at?: string } | null;
+}
+
 /**
- * Power Box (a separate utility) writes the time of the last network switch to a file. Read only when it changed;
- * missing, unreadable or of another shape: 0 or the file's time, never an error.
+ * Power Box (a separate utility) writes `%LOCALAPPDATA%\Power Box\network-state.json` whenever the connection changes:
+ * a switch (`lastSwitch.at`), or the internet back (`online` true after false). Read only when the file changed. Its
+ * `online` never holds a try back: the file is not rewritten when Power Box stops, so a false there may be stale.
+ * Missing: 0. Unreadable or of another shape: the file's time. Never an error.
  */
 export function powerBoxSwitch(file: string): () => number {
   let mtime = -1;
   let at = 0;
+  let wasOnline: boolean | null = null;
   return () => {
     let m: number;
     try {
@@ -123,9 +127,13 @@ export function powerBoxSwitch(file: string): () => number {
     if (m === mtime) return at;
     mtime = m;
     try {
-      const data = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-      const key = SWITCH_KEYS.find((k) => timeOf(data?.[k]) > 0);
-      at = key ? timeOf(data[key]) : m;
+      const data = JSON.parse(readFileSync(file, 'utf8')) as PowerBoxState;
+      const online = typeof data?.online === 'boolean' ? data.online : null;
+      if (!data || typeof data !== 'object' || (online === null && !('lastSwitch' in data))) throw new Error('another shape');
+      // Back online after an outage it saw: when it wrote so.
+      const back = wasOnline === false && online === true ? timeOf(data.updatedAt) || m : 0;
+      if (online !== null) wasOnline = online;
+      at = Math.max(at, timeOf(data.lastSwitch?.at), back);
     } catch {
       at = m;
     }

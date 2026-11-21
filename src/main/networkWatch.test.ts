@@ -41,17 +41,51 @@ test('a switch of network is seen while work is under way, and nothing runs once
   t.mock.timers.reset();
 });
 
-test("Power Box's note of a switch counts as a change; its file is optional and of any shape", (t) => {
+/** Power Box's network-state.json, version 1, as it writes it. */
+const state = (online: boolean | null, at: string | null, updatedAt: string) =>
+  JSON.stringify({
+    version: 1,
+    updatedAt,
+    monitoring: online !== null,
+    online,
+    active: { kind: 'hotspot', label: 'hotspot #1', metered: true },
+    lastSwitch: at ? { at, from: 'wifi', to: 'hotspot', reason: 'wifi-lost', outageMs: 4200 } : null,
+    switches24h: at ? 1 : 0,
+  });
+
+/** Writes the file with a new time of its own, as a rewrite would. */
+const write = (file: string, text: string, time: number) => {
+  writeFileSync(file, text);
+  utimesSync(file, new Date(time), new Date(time));
+};
+
+test("Power Box's file: its last switch, and the internet back after an outage, count as changes", (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'power-box-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = join(dir, 'network-state.json');
   const read = powerBoxSwitch(file);
   assert.equal(read(), 0, 'no file: nothing');
-  writeFileSync(file, JSON.stringify({ lastSwitchAt: '2026-11-21T10:00:00Z', interface: 'X' }));
-  assert.equal(read(), Date.parse('2026-11-21T10:00:00Z'));
-  writeFileSync(file, 'not json');
-  utimesSync(file, new Date(5_000_000), new Date(5_000_000));
-  assert.equal(read(), 5_000_000, 'unreadable: its time');
+  write(file, state(true, null, '2026-11-21T09:00:00.000Z'), 1_000_000);
+  assert.equal(read(), 0, 'no switch yet');
+  write(file, state(true, '2026-11-21T09:14:01.002Z', '2026-11-21T09:14:03.120Z'), 2_000_000);
+  assert.equal(read(), Date.parse('2026-11-21T09:14:01.002Z'), 'lastSwitch.at, not the time of the file');
+  write(file, state(false, '2026-11-21T09:14:01.002Z', '2026-11-21T09:20:00.000Z'), 3_000_000);
+  assert.equal(read(), Date.parse('2026-11-21T09:14:01.002Z'), 'going offline is no change to act on');
+  write(file, state(true, '2026-11-21T09:14:01.002Z', '2026-11-21T09:21:00.000Z'), 4_000_000);
+  assert.equal(read(), Date.parse('2026-11-21T09:21:00.000Z'), 'online again after false: when it wrote so');
+  write(file, state(null, '2026-11-21T09:14:01.002Z', '2026-11-21T09:22:00.000Z'), 5_000_000);
+  assert.equal(read(), Date.parse('2026-11-21T09:21:00.000Z'), 'watching nothing: no change');
+});
+
+test("Power Box's file is optional and may be of another shape: the file's time stands in", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'power-box-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = join(dir, 'network-state.json');
+  const read = powerBoxSwitch(file);
+  write(file, JSON.stringify({ somethingElse: true }), 5_000_000);
+  assert.equal(read(), 5_000_000, 'another shape: its time');
+  write(file, 'not json', 6_000_000);
+  assert.equal(read(), 6_000_000, 'unreadable: its time');
 
   t.mock.timers.enable({ apis: ['setInterval'] });
   let at = 1;
