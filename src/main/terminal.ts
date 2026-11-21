@@ -2,7 +2,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { t } from './i18n';
 
 /**
@@ -16,7 +16,28 @@ const INSTALLER = {
   win32: 'irm https://claude.ai/install.ps1 | iex',
   other: 'curl -fsSL https://claude.ai/install.sh | bash',
 };
-const LINUX_TERMINALS = ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xfce4-terminal', 'xterm'];
+/** The usual Linux terminals, and the words before the program each one runs: most take `-e`, kitty and foot none. */
+const LINUX_TERMINALS: [string, string[]][] = [
+  ['xdg-terminal-exec', []],
+  ['x-terminal-emulator', ['-e']],
+  ['kitty', []],
+  ['foot', []],
+  ['alacritty', ['-e']],
+  ['ghostty', ['-e']],
+  ['wezterm', ['start', '--']],
+  ['gnome-terminal', ['--']],
+  ['konsole', ['-e']],
+  ['xfce4-terminal', ['-x']],
+  ['xterm', ['-e']],
+];
+
+/** The terminals to try, in order: the user's own ($TERMINAL) first, `-e` when it is not one of the usual ones. */
+export function linuxTerminals(own = ''): [string, string[]][] {
+  const name = basename(own.trim());
+  if (!name) return LINUX_TERMINALS;
+  const known = LINUX_TERMINALS.find(([t]) => t === name);
+  return [[own.trim(), known ? known[1] : ['-e']], ...LINUX_TERMINALS.filter(([t]) => t !== name)];
+}
 
 /** Opens the terminal window; false when none could be started (the screen then shows the command to type). */
 export async function openTerminal(cmd: TerminalCommand, env: Record<string, string>): Promise<boolean> {
@@ -24,9 +45,9 @@ export async function openTerminal(cmd: TerminalCommand, env: Record<string, str
     if (process.platform === 'win32') return windows(cmd, env);
     const script = scriptFile(cmd);
     if (process.platform === 'darwin') return await run('open', ['-a', 'Terminal', script], env);
-    for (const term of LINUX_TERMINALS) {
+    for (const [term, before] of linuxTerminals(process.env.TERMINAL)) {
       if (!(await run('which', [term], env))) continue;
-      const child = spawn(term, term === 'gnome-terminal' ? ['--', script] : ['-e', script], { env, detached: true, stdio: 'ignore' });
+      const child = spawn(term, [...before, script], { env, detached: true, stdio: 'ignore' });
       child.on('error', () => undefined);
       child.unref();
       return true;
