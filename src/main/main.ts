@@ -54,6 +54,8 @@ import {
   type ImageInput,
   type ImageType,
   type Mode,
+  type NewConversation,
+  type NewConversationResult,
   type PermissionDecision,
   type SettingsPatch,
   type Result,
@@ -219,6 +221,17 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
+
+/** A "New conversation" request from the window, checked field by field; null when anything is off. */
+function parseConversation(raw: unknown): NewConversation | null {
+  const r = raw as Partial<Record<keyof NewConversation, unknown>> | null;
+  const target = r?.target as Partial<Record<'kind' | 'provider' | 'model', unknown>> | null | undefined;
+  if (!r || !target || target.kind !== 'model' || !isStr(target.provider) || !/^[\w.-]{1,64}$/.test(target.provider)) return null;
+  if (!isStr(target.model) || (target.model !== '' && !MODEL.test(target.model))) return null;
+  if (r.effort !== null && !EFFORTS.includes(r.effort as Effort)) return null;
+  if (!isStr(r.cwd) || !isAbsolute(r.cwd) || r.cwd.length > 1000 || !isStr(r.name) || r.name.length > 80 || !isStr(r.message) || r.message.length > 100_000) return null;
+  return { target: { kind: 'model', provider: target.provider, model: target.model }, effort: (r.effort as Effort | null) ?? null, cwd: r.cwd, name: r.name, message: r.message };
+}
 
 /**
  * Quitting cuts the sessions at work: asked once, whichever way the quit started (window, Cmd+Q). Never for the
@@ -1159,6 +1172,11 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     on('session:resume', (id) => isStr(id) && mgr.resume(id));
     on('session:remove', (id) => isStr(id) && mgr.remove(id));
     on('session:open', (id) => isStr(id) && mgr.open(id));
+    handle('conversation:choices', () => mgr.conversationChoices());
+    handle('conversation:new', (spec): Promise<NewConversationResult> => {
+      const c = parseConversation(spec);
+      return c ? mgr.newConversation(c) : Promise.resolve({ ok: false, error: t('conversation.invalid') });
+    });
     handle('session:analyze', (id) => (isStr(id) ? mgr.analyze(id) : ''));
     handle('session:commands', (id) => (isStr(id) ? mgr.commands(id) : []));
     on('session:compact', (id, instructions) => isStr(id) && isStr(instructions) && instructions.length <= 4000 && mgr.compact(id, instructions));

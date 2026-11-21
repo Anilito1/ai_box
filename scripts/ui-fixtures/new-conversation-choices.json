@@ -1,0 +1,111 @@
+{
+ "groups": [
+  {
+   "id": "anthropic",
+   "label": "Anthropic",
+   "entries": [
+    {
+     "id": "anthropic:opus",
+     "label": "Opus 5.5",
+     "hint": "Le plus capable",
+     "target": {
+      "kind": "model",
+      "provider": "anthropic",
+      "model": "opus"
+     },
+     "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+     ]
+    },
+    {
+     "id": "anthropic:sonnet",
+     "label": "Sonnet 5.5",
+     "hint": "Rapide et équilibré",
+     "target": {
+      "kind": "model",
+      "provider": "anthropic",
+      "model": "sonnet"
+     },
+     "efforts": [
+      "low",
+      "medium",
+      "high"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "deepseek",
+   "label": "DeepSeek",
+   "entries": [
+    {
+     "id": "deepseek:deepseek-v4-pro",
+     "label": "DeepSeek V4 Pro",
+     "hint": "",
+     "target": {
+      "kind": "model",
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro"
+     },
+     "efforts": [
+      "low",
+      "medium",
+      "high"
+     ]
+    },
+    {
+     "id": "deepseek:deepseek-v4-flash",
+     "label": "DeepSeek V4 Flash",
+     "hint": "",
+     "target": {
+      "kind": "model",
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash"
+     },
+     "efforts": []
+    }
+   ]
+  },
+  {
+   "id": "venice",
+   "label": "Venice",
+   "entries": [
+    {
+     "id": "venice:llama-3.3-70b",
+     "label": "llama-3.3-70b",
+     "hint": "",
+     "target": {
+      "kind": "model",
+      "provider": "venice",
+      "model": "llama-3.3-70b"
+     },
+     "efforts": []
+    }
+   ]
+  }
+ ],
+ "folders": [
+  {
+   "path": "C:\\Users\\demo",
+   "label": "demo",
+   "writers": []
+  },
+  {
+   "path": "C:\\DEV\\demo-api",
+   "label": "demo-api",
+   "writers": [
+    "hub-refonte-auth"
+   ]
+  },
+  {
+   "path": "C:\\DEV\\demo-site",
+   "label": "demo-site",
+   "writers": []
+  }
+ ],
+ "cwd": "C:\\Users\\demo"
+}

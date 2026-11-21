@@ -62,6 +62,7 @@ import {
   type AwayView,
   type AccountKind,
   type ChatItem,
+  type ConversationChoices,
   type Effort,
   type HarnessId,
   type HubEventKind,
@@ -70,6 +71,9 @@ import {
   type Metrics,
   type Mode,
   type ModelOption,
+  type NewConversation,
+  type NewConversationResult,
+  type PickerGroup,
   type ProviderBadge,
   type PermissionDecision,
   type RateLimits,
@@ -87,6 +91,7 @@ import { lang, t, tn } from './i18n';
 import { AttachmentLimitError, AttachmentStore } from './attachments';
 import {
   clientDataVariant,
+  conversationPrompt,
   defaultMasterName,
   groupInfo,
   groupsText,
@@ -417,6 +422,7 @@ type Persisted = {
   | 'deliveries'
   | 'isolatedDirs'
   | 'extraTrees'
+  | 'userOpened'
 >;
 
 export interface ManagerOptions {
@@ -739,8 +745,10 @@ export class SessionManager extends EventEmitter {
     for (const [id, why] of this.resumeOnStart) {
       const s = this.sessions.get(id);
       if (!s) continue;
-      s.owesReport = true;
+      // The user's own conversation picks up its cut turn for the user: the master waits on nothing there.
+      s.owesReport = !s.userOpened;
       if (s.deliveries.some(e => e.state === 'queued')) void this.launch(s, s.started);
+      else if (s.userOpened) void this.launch(s, s.started, s.started ? { text: `${tags().hub} ${t('hub.restartedUser')}`, images: [], from: 'hub' } : undefined);
       else if (why === 'mission' || !s.started) void this.launch(s, false, this.missionPrompt(s));
       else
         void this.launch(s, true, {
@@ -760,10 +768,13 @@ export class SessionManager extends EventEmitter {
     void this.retireLeftovers();
   }
 
-  /** Worktrees of workers the hub closed when it quit, idle: checked one at a time, removed if nothing is lost. */
+  /**
+   * Worktrees of workers the hub closed when it quit, idle: checked one at a time, removed if nothing is lost. The
+   * user's own conversations keep theirs: they are asleep, not done.
+   */
   private async retireLeftovers(): Promise<void> {
     for (const s of [...this.sessions.values()]) {
-      if (this.sessionTrees(s).some(tree => tree.state === 'active') && !s.inbox && !this.quitting) await this.retire(s);
+      if (this.sessionTrees(s).some(tree => tree.state === 'active') && !s.inbox && !s.userOpened && !this.quitting) await this.retire(s);
     }
   }
 
@@ -828,6 +839,52 @@ export class SessionManager extends EventEmitter {
     this.deliver(s, { text: textForModel, images, shown, command, ...(saved.length > 0 ? { files: saved } : {}), ...(filed ? { topic: filed.id } : {}) });
   }
 
+  /**
+   * What the "New conversation" window offers, read where spawn_worker reads it: each connected provider's models a
+   * session may run (the Anthropic ones the user allows, the others' catalogs without their video models), then the
+   * folders the hub knows. Groups of another kind (graphs) would come after the providers'.
+   */
+  conversationChoices(): ConversationChoices {
+    const { cfg } = this.opts;
+    const groups: PickerGroup[] = this.providerBadges()
+      .filter((p) => p.connected)
+      .map((p) => {
+        const listed = p.models.filter((m) => m.value !== 'default');
+        // As the master is told (syncProviderLines): Claude's models are the ones the user allows workers.
+        // Before Claude Code first said its models, an allowed one goes by its name as the settings spell it.
+        const models = p.id === 'anthropic' ? cfg.workerModels.map((value) => listed.find((m) => m.value === value) ?? { value, label: value, description: '', efforts: [] }) : listed;
+        const entries = models.map((m) => ({ id: `${p.id}:${m.value}`, label: m.label, hint: m.description, target: { kind: 'model' as const, provider: p.id, model: m.value }, efforts: effortsFor(models, m.value) }));
+        // A provider whose models are not known yet runs its own: the session gets the account's choice.
+        if (entries.length === 0) entries.push({ id: `${p.id}:`, label: t('choices.providerModel'), hint: '', target: { kind: 'model', provider: p.id, model: '' }, efforts: [] });
+        return { id: p.id, label: p.label, entries };
+      });
+    const home = homedir();
+    const seen = new Set<string>();
+    const paths = [home, masterCwd(cfg), ...cfg.mainRepos.map((r) => mainRepoPath(cfg, r)), ...cfg.workspaces.flatMap((w) => findRepos(w).filter((r) => !r.worktreeOf).map((r) => r.path))]
+      .filter((path) => existsSync(path) && !seen.has(resolve(path).toLowerCase()) && seen.add(resolve(path).toLowerCase()));
+    const folders = paths.map((path) => {
+      const where = repoOf(path);
+      return { path, label: basename(path) || path, writers: where ? this.writersIn(where.checkout) : [] };
+    });
+    return { groups, folders, cwd: home };
+  }
+
+  /**
+   * A conversation the user opens: spawn_worker's way (same queue, folder checks and worktree rule), with the user's
+   * choices. Resolves to the new session, or why it could not be opened.
+   */
+  async newConversation(spec: NewConversation): Promise<NewConversationResult> {
+    const args = { name: spec.name.trim() || 'conversation', mission: spec.message, cwd: spec.cwd, provider: spec.target.provider, model: spec.target.model || null, effort: spec.effort };
+    const job = this.spawnQueue.then(() => this.spawnWorker(args, 'user'));
+    this.spawnQueue = job.catch(() => undefined);
+    try {
+      const { s } = await job;
+      return { ok: true, id: s.id, name: s.name, cwd: s.cwd, branch: s.tree?.branch ?? '' };
+    } catch (err) {
+      return { ok: false, error: errorText(err) };
+    }
+  }
+
   interrupt(id: string): void {
     const s = this.sessions.get(id);
     if (!s) return;
@@ -839,7 +896,8 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Also works while the session is still launching: launch() sees its inbox gone and gives up. A worker with a
-   * worktree of the hub's gets it checked, and removed if nothing would be lost (`retiring` holds the outcome).
+   * worktree of the hub's gets it checked, and removed if nothing would be lost (`retiring` holds the outcome). A
+   * conversation the user opened only falls asleep: its worktree goes when the user removes it.
    */
   stop(id: string): void {
     const s = this.sessions.get(id);
@@ -857,7 +915,7 @@ export class SessionManager extends EventEmitter {
     this.reap(s, s.procs.splice(0));
     s.installing?.kill();
     this.changed();
-    if (s.tree && !this.quitting) void this.retire(s);
+    if (s.tree && !s.userOpened && !this.quitting) void this.retire(s);
   }
 
   /** A worker whose worktree was removed: its job is over, its conversation can still be read. */
@@ -1736,6 +1794,7 @@ export class SessionManager extends EventEmitter {
         ...this.remoteBadge(s),
         ...(s.role === 'worker' && !s.diagOf ? { diagnosis: this.diagView(s.id) } : {}),
         ...(s.diagOf ? { diagFor: this.sessions.get(s.diagOf.target)?.name ?? '' } : {}),
+        ...(s.userOpened ? { userOpened: true } : {}),
       }));
     // The status bar shows the limits of the master's account.
     const shown = this.shownUsageAccount();
@@ -1910,7 +1969,9 @@ export class SessionManager extends EventEmitter {
     s.seen = isMaster ? rosterKey(cfg) : post ? roleKey(post) : '';
     const base = isMaster
       ? masterPrompt(cfg)
-      : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
+      : s.userOpened
+        ? conversationPrompt(cfg, s.name, this.workNote(s), clientDataVariant(cfg, account))
+        : workerPrompt(cfg, post ?? undefined, post && s.instanceOf ? this.instanceInfo(s, post) : undefined, groupInfo(cfg, this.groupsLed(s), this.groupOf(s)), clientDataVariant(cfg, account));
     // A program without Claude Code's SendMessage (or a worker on the server, whose peers are here) writes to the others
     // through the hub's tool of the same job.
     s.scratch = !isMaster && !remote && !s.readOnly ? this.prepareScratch(s) : null;
@@ -2487,7 +2548,7 @@ export class SessionManager extends EventEmitter {
   /** Takes a turn cut on the server up again: its mission, its last report, and what to check first. */
   private continueInterrupted(s: Session): void {
     if (s.remoteRun) s.remoteRun.interrupted = false;
-    s.owesReport = true;
+    s.owesReport = !s.userOpened;
     const tag = `worker-output-${randomTag()}`;
     const last = s.lastMessage ? inside(s.lastMessage.slice(0, 3000)) : t('hub.noText');
     this.deliver(s, { text: t('remote.interrupted.prompt', { mission: s.mission || t('hub.noText'), last, tag }), images: [], from: 'hub', shown: t('remote.interrupted.shown') });
@@ -3415,7 +3476,8 @@ export class SessionManager extends EventEmitter {
     prompt = this.withNote(s, prompt);
     if (s.inbox) return this.pushUser(s, this.withNews(s, prompt));
     // A worker closed before its CLI took the mission gets it back, ahead of the new message (a post's missions come one by one).
-    const lostMission = s.role === 'worker' && !s.roleId && !s.started && s.mission && !s.deliveries.some(e => e.state === 'queued' || e.state === 'unknown');
+    // The user's own conversation has no mission: its first message was the user's, delivered like this one.
+    const lostMission = s.role === 'worker' && !s.roleId && !s.userOpened && !s.started && s.mission && !s.deliveries.some(e => e.state === 'queued' || e.state === 'unknown');
     void this.launch(s, s.started, lostMission ? { ...prompt, command: false, text:`${this.missionPrompt(s).text}\n\n${prompt.text}` } : prompt);
   }
 
@@ -3716,10 +3778,13 @@ export class SessionManager extends EventEmitter {
   // ---------- master supervision ----------
 
   /** Wakes the master with a hub message about a worker it would otherwise wait on forever. */
-  /** `shown`: the short line the user reads; `note`: what the model alone needs (visibleText() hides it). */
+  /**
+   * `shown`: the short line the user reads; `note`: what the model alone needs (visibleText() hides it). Nothing about a
+   * conversation the user opened: the user talks to it and reads its notices there, the master waits on nothing.
+   */
   private notifyMaster(shown: string, note: string, about?: Session): void {
     const master = this.sessions.get(MASTER_ID);
-    if (!master || this.quitting) return;
+    if (!master || this.quitting || about?.userOpened) return;
     const topic = this.workerTopic(about);
     this.deliver(master, {
       text: `${tags().hub} ${shown}\n<hub-note>\n${note}\n</hub-note>${topic ? `\n${topicBlock(topic, 'hub')}` : ''}`,
@@ -3840,6 +3905,14 @@ export class SessionManager extends EventEmitter {
         this.sleep(s, PERMANENT_SLEEP_MIN);
         continue;
       }
+      // The user's own conversation falls asleep as it is: no handoff note (its next message goes on with the whole
+      // conversation) and its worktree stays (stop() leaves it).
+      if (s.userOpened) {
+        this.event(s, 'idle_closed');
+        this.stop(s.id);
+        this.notice(s, t('notice.asleepIdle', { min: IDLE_CLOSE_MIN }), 'info');
+        continue;
+      }
       if (this.askHandoff(s)) continue;
       this.event(s, 'idle_closed');
       this.stop(s.id);
@@ -3927,8 +4000,9 @@ export class SessionManager extends EventEmitter {
       const line = r.ok ? t('install.done', { secs: Math.round(r.ms / 1000) }) : t('install.failed');
       const tag = `install-output-${randomTag()}`;
       const note = r.ok ? t('install.done.note', { command }) : t('install.failed.note', { command, tag, output: inside(r.output.slice(-1500)) });
-      // Only while the worker may still need them: an idle one that has reported is not woken for this.
-      if (this.isWorking(s) || s.owesReport || s.status === 'starting') {
+      // Only while the worker may still need them: an idle one that has reported is not woken for this, nor the user's
+      // conversation waiting for its first message (a turn the user did not ask for).
+      if (this.isWorking(s) || s.owesReport || (s.status === 'starting' && !s.userOpened)) {
         this.pushUser(s, { text: `${tags().hub} ${line}\n<hub-note>\n${note}\n</hub-note>`, images: [], from: 'hub' });
       } else this.notice(s, line, r.ok ? 'info' : 'error', r.ok ? '' : r.output);
     });
@@ -4134,7 +4208,7 @@ export class SessionManager extends EventEmitter {
               // One at a time: two parallel calls would pick the same names and both pass the limits.
               const job = this.spawnQueue.then(() => this.spawnWorker(args));
               this.spawnQueue = job.catch(() => undefined);
-              return job;
+              return (await job).text;
             }),
         ),
         tool(
@@ -4164,6 +4238,8 @@ export class SessionManager extends EventEmitter {
           ({ name, force }) =>
             run(async () => {
               const s = this.findWorker(name);
+              // The user's own conversation: they alone close it (it falls asleep by itself when idle).
+              if (s.userOpened) throw new Error(t('close.userOpened', { name: s.name }));
               if (!s.query) {
                 const tree = s.retiring ? await s.retiring : '';
                 return tree || t(s.roleId ? 'close.alreadyAsleep' : this.ended(s) ? 'close.alreadyEnded' : 'close.already', { name: s.name });
@@ -4312,6 +4388,10 @@ export class SessionManager extends EventEmitter {
    * An ad-hoc worker, or with `role` one more instance of a post (its prompt, folders and model rule). A worker that
    * would write in a checkout another one writes in (or a post holds) gets its own worktree, so does every instance;
    * `read_only` shares the folder with Edit and Write off instead.
+   *
+   * `by: 'user'`: a conversation the user opens ("New conversation"), the same way: the user's choices stand (no grid,
+   * no cap on its effort or on the workers running), `mission` is the user's first message if any, and it owes the
+   * master no report.
    */
   private async spawnWorker(args: {
     name: string;
@@ -4325,22 +4405,24 @@ export class SessionManager extends EventEmitter {
     ultracode?: boolean | null;
     account?: string | null;
     provider?: string | null;
-  }): Promise<string> {
+  }, by: 'master' | 'user' = 'master'): Promise<{ s: Session; text: string }> {
     const { cfg } = this.opts;
+    const user = by === 'user';
     const mission = args.mission.trim();
-    if (!mission) throw new Error(t('spawn.empty'));
+    if (!mission && !user) throw new Error(t('spawn.empty'));
     // A provider is how the master names where a worker runs; an account name still works.
     const accountId = args.provider?.trim() ? this.providerRef(args.provider) : args.account?.trim() ? this.accountRef(args.account) : '';
     const post = args.role?.trim() ? this.findRole(args.role) : null;
     if (post && !post.enabled) throw new Error(t('instance.off', { name: post.name }));
     const folder = post ? post.folders[0] : args.cwd?.trim() || masterCwd(cfg);
     if (isNetworkPath(folder) || !isAbsolute(folder) || !existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(t('spawn.badDir', { cwd: folder }));
-    const over = this.overCap(post?.id ?? null);
+    const over = user ? '' : this.overCap(post?.id ?? null);
     if (over) throw new Error(over);
     // An instance follows the grid, like an ad-hoc worker: the post's fixed model or effort only fills what the master leaves out.
-    const choice = this.choose(null, args, null, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
+    // The user's model is checked the same way; the effort they pick is theirs (the cap holds the master only).
+    const choice = this.choose(null, user ? { model: args.model } : args, null, accountId || firstAccount(cfg.accounts, post?.account, cfg.workerAccount));
     const model = choice.model ?? (post?.model || cfg.worker.model);
-    const effort = choice.effort ?? (post?.effort || cfg.worker.effort || null);
+    const effort = (user ? args.effort : choice.effort) ?? (post?.effort || cfg.worker.effort || null);
     const readOnly = !!args.read_only;
     const where = repoOf(folder);
     const writers = where ? this.writersIn(where.checkout) : [];
@@ -4362,23 +4444,29 @@ export class SessionManager extends EventEmitter {
     }
     const cwd = made?.cwd ?? folder;
     // The limits again, right before the worker exists: a message_worker may have woken one meanwhile.
-    const overNow = this.overCap(post?.id ?? null);
+    const overNow = user ? '' : this.overCap(post?.id ?? null);
     if (overNow) {
       for (const tree of [...(made ? [made.tree] : []), ...extraTrees]) void retireTree(tree, () => true);
       throw new Error(overNow);
     }
     const name = post ? this.uniqueName(`${post.name}-${topic || 'work'}`, 48) : this.uniqueName(args.name);
     const s = this.create(`w-${randomUUID().slice(0, 8)}`, 'worker', name, mission, cwd, model, effort);
-    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, extraTrees, isolatedDirs, readOnly, owesReport: true, accountId });
+    Object.assign(s, { instanceOf: post?.id ?? null, tree: made?.tree ?? null, extraTrees, isolatedDirs, readOnly, owesReport: !user, accountId });
+    // Picked by hand: the master's later choices leave them alone, as after a pick in the composer.
+    if (user) Object.assign(s, { userOpened: true, userModel: !!choice.model, userEffort: !!args.effort, userAccount: !!accountId });
     // Asked by the master or held by the post; refused (and said) where the account's plan does not have it.
     const ultracodeNote = args.ultracode ?? post?.ultracode ? this.startUltracode(s, args.ultracode === true) : '';
-    this.topics.alias(spawnedName(args), s.name);
+    if (!user) this.topics.alias(spawnedName(args), s.name);
     const plan = s.tree ? installPlan(s.tree) : null;
     // Only where nothing waits for an approval: an install runs the packages' own scripts.
     const byHub = !!plan && this.modeOf(s) === 'bypassPermissions';
     if (plan && byHub) this.install(s, plan);
-    void this.launch(s, false, this.missionPrompt(s, made?.stale));
-    this.openMission(s, 'start', choice.model ? 'master' : post?.model ? 'post' : 'auto');
+    // The user's first message goes as if typed in its composer; without one, it starts and waits for it. Its name
+    // and worktree are in its instructions (conversationPrompt).
+    if (!user) void this.launch(s, false, this.missionPrompt(s, made?.stale));
+    else if (mission) this.send(s.id, mission);
+    else void this.launch(s, false);
+    this.openMission(s, 'start', user ? 'user' : choice.model ? 'master' : post?.model ? 'post' : 'auto');
 
     // Other workers of the same repo, in any of its checkouts: worth naming in the briefs.
     const repoKey = (dir: string) => (repoOf(dir)?.main ?? resolve(dir)).toLowerCase();
@@ -4395,7 +4483,7 @@ export class SessionManager extends EventEmitter {
     if (posts.length > 0) notes.push(t('spawn.post', { names: posts.join(', ') }));
     if (!where) notes.push(t('spawn.noRepo', { cwd: folder }));
     const others = post ? this.instances(post.id).filter((w) => w !== s && w.inbox).map((w) => w.name) : [];
-    return [
+    const text = [
       t('spawn.started', { name: s.name, model: model || t('spawn.usualModel'), effort: effort ?? t('spawn.usualEffort'), cwd }),
       ...(cfg.accounts.length > 0 ? [t('spawn.account', { account: this.accountName(this.accountOf(s)) })] : []),
       ...(post ? [t('instance.started', { post: post.name, main: sessionNameOf(post), others: others.join(', ') || t('report.none') })] : []),
@@ -4406,14 +4494,19 @@ export class SessionManager extends EventEmitter {
       ...notes,
       t('spawn.howTo', { name: s.name }),
     ].join('\n');
+    return { s, text };
   }
 
-  /** Workers that write in a checkout: posts with a folder in it (asleep or not), running workers working in it. */
+  /**
+   * Workers that write in a checkout: posts with a folder in it (asleep or not), running workers working in it, the
+   * user's own conversations there (asleep or not: the user's next message wakes them).
+   */
   private writersIn(checkout: string): string[] {
     const key = checkout.toLowerCase();
     const inIt = (dir: string) => (repoOf(dir)?.checkout ?? resolve(dir)).toLowerCase() === key;
+    const claims = (w: Session) => !!w.inbox || (!!w.userOpened && !this.ended(w));
     return this.visible()
-      .filter((w) => w.role === 'worker' && !w.readOnly && (w.roleId ? !!this.roleOf(w)?.folders.some(inIt) : !!w.inbox && [w.cwd, ...(w.isolatedDirs ?? this.postOf(w)?.folders.slice(1) ?? [])].some(inIt)))
+      .filter((w) => w.role === 'worker' && !w.readOnly && (w.roleId ? !!this.roleOf(w)?.folders.some(inIt) : claims(w) && [w.cwd, ...(w.isolatedDirs ?? this.postOf(w)?.folders.slice(1) ?? [])].some(inIt)))
       .map((w) => w.name);
   }
 
@@ -4462,7 +4555,9 @@ export class SessionManager extends EventEmitter {
     if (args.ultracode != null && args.ultracode !== s.ultracode) {
       ultracodeNote = s.userUltracode ? t('ultracode.locked', { name: s.name }) : this.setUltracode(s.id, args.ultracode, false);
     }
-    if (args.interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
+    // The master does not cut a turn of the user's own conversation: its message waits for the end of it.
+    const interrupt = !!args.interrupt && !s.userOpened;
+    if (interrupt && s.query && wasWorking) await s.query.interrupt().catch(() => undefined);
     // Before the message: an idle worker restarts on the new account right away, and the message goes to that process.
     const accountNote =
       accountId === null || accountId === this.accountOf(s)
@@ -4470,7 +4565,8 @@ export class SessionManager extends EventEmitter {
         : s.userAccount
           ? t('account.locked', { name: s.name, account: this.accountName(this.accountOf(s)) })
           : this.setAccount(s.id, accountId, false);
-    s.owesReport = true;
+    // The user's own conversation answers if it sees fit: the hub chases no report from it.
+    s.owesReport = !s.userOpened;
     // Its report goes to whoever wrote last: the lead, or the master (who may reach a member directly).
     s.reportTo = by?.id ?? null;
     s.closeWhenDone = false;
@@ -4478,12 +4574,13 @@ export class SessionManager extends EventEmitter {
     this.deliver(s, { text: `${head}\n${message}`, images: [], from: by?.name ?? masterName() });
     const state = wasClosed
       ? t(s.roleId ? 'message.woken' : 'message.wasClosed', { name: s.name })
-      : args.interrupt && wasWorking
+      : interrupt && wasWorking
         ? t('message.interrupted', { name: s.name })
         : t(wasWorking ? 'message.queued' : 'message.delivered', { name: s.name });
     const runs = choice.model || choice.effort ? [t('message.runs', { model: s.modelLabel || s.model || t('spawn.usualModel'), effort: s.effort ?? t('spawn.usualEffort') })] : [];
     const top = args.retry && !args.model && !args.effort && !step ? [t('retry.top', { name: s.name })] : [];
-    return [state, ...runs, ...top, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
+    const mine = s.userOpened ? [t('message.userOpened', { name: s.name })] : [];
+    return [state, ...mine, ...runs, ...top, ...(ultracodeNote ? [ultracodeNote] : []), ...(accountNote ? [accountNote] : []), ...this.choiceNotes(choice.notes)].join('\n');
   }
 
   /**
@@ -4499,14 +4596,19 @@ export class SessionManager extends EventEmitter {
 
   /** A mission, with what the model alone needs of its worktree, its install or the folder it reads. */
   private missionPrompt(s: Session, stale = false): Prompt {
+    const note = this.workNote(s, stale);
+    return { text: `${tags().mission(s.name)}\n${s.mission}${note ? `\n\n${note}` : ''}`, images: [], from: masterName() };
+  }
+
+  /** What the model alone needs of its worktree, its install or the folder it reads ('' when nothing). */
+  private workNote(s: Session, stale = false): string {
     const tree = s.tree;
     const plan = tree && !s.installing ? installPlan(tree) : null;
-    const note = missionNote({
+    return missionNote({
       tree: tree ? { path: tree.path, cwd: s.cwd, branch: tree.branch, baseRef: tree.baseRef, base: tree.base, stale } : undefined,
       install: s.installing ? { by: 'hub', command: s.installing.command } : plan ? { by: 'worker', command: planText(plan) } : undefined,
       sharedWith: s.readOnly ? this.writersIn(repoOf(s.cwd)?.checkout ?? s.cwd).filter((n) => n !== s.name) : undefined,
     });
-    return { text: `${tags().mission(s.name)}\n${s.mission}${note ? `\n\n${note}` : ''}`, images: [], from: masterName() };
   }
 
   /** The model and effort a mission asked by the master runs with (shared/team.ts decides). */
@@ -5079,8 +5181,10 @@ export class SessionManager extends EventEmitter {
   /** What both views of a worker say: its status (and since when it works), model/effort, context. */
   private workerFacts(s: Session): { status: string; since: string; model: string; ctx: string } {
     const m = s.metrics;
+    // The user's own conversation says so first: the master neither closes it nor waits for its reports.
+    const mine = s.userOpened ? `${t('workers.userOpened')} · ` : '';
     return {
-      status: s.roleId && s.status === 'exited' && !s.error ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`),
+      status: mine + ((s.roleId || s.userOpened) && s.status === 'exited' && !s.error && !this.ended(s) ? t('status.asleep') : this.ended(s) ? t('status.ended') : t(`status.${s.status}`)),
       since: s.busySince && s.status !== 'idle' ? t('workers.since', { n: minutesSince(s.busySince) }) : '',
       model: `${s.modelLabel || s.model || t('spawn.usualModel')}/${s.effort ?? t('spawn.usualEffort')}`,
       ctx: m?.contextPct != null ? `ctx ${m.estimated ? '~' : ''}${Math.round(m.contextPct)}%` : 'ctx —',
@@ -5904,9 +6008,11 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       deliveries: s.deliveries,
       isolatedDirs: s.isolatedDirs,
       extraTrees: s.extraTrees,
+      ...(s.userOpened ? { userOpened: true } : {}),
       // Read at close time: a worker cut mid-work (or before its CLI took the mission) is picked up at the next start.
-      // A post woken without a mission has none to get back.
-      ...(s.inbox && !s.remoteRun && !s.started && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && !s.remoteRun && this.isWorking(s) ? { resume: 'work' as const } : {}),
+      // A post woken without a mission has none to get back, nor the user's own conversation (its first message is a
+      // delivery like the others).
+      ...(s.inbox && !s.remoteRun && !s.started && !s.userOpened && (!s.roleId || s.owesReport) ? { resume: 'mission' as const } : s.inbox && !s.remoteRun && this.isWorking(s) ? { resume: 'work' as const } : {}),
     }));
     // Write-then-rename: a crash mid-save can never leave a truncated state.json behind.
     const tmp = `${this.stateFile}.tmp`;

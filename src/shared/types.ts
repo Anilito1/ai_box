@@ -383,7 +383,63 @@ export interface SessionView {
   diagnosis?: DiagnosisView | null;
   /** A diagnosis worker: the name of the worker it looks into. */
   diagFor?: string;
+  /**
+   * A conversation the user opened by hand ("New conversation"): the user talks to it, it owes the master no report,
+   * and idleness puts it to sleep with its conversation and its worktree.
+   */
+  userOpened?: boolean;
 }
+
+/**
+ * What a conversation talks to. A model of a connected provider for now; the picker is built for other kinds too (a
+ * graph of models, `{ kind: 'graph'; graph: string }`, in a group of its own).
+ */
+export type TalkTarget = { kind: 'model'; provider: string; model: string };
+
+/** One line of the "New conversation" picker; `id` is unique across its groups. */
+export interface PickerEntry {
+  id: string;
+  label: string;
+  /** A short description, '' when there is none. */
+  hint: string;
+  target: TalkTarget;
+  /** The efforts it takes; empty: it takes none. */
+  efforts: Effort[];
+}
+
+/** A group of the picker: the models of a provider, as spawn_worker may run them. */
+export interface PickerGroup {
+  id: string;
+  label: string;
+  entries: PickerEntry[];
+}
+
+/** A folder offered to work in; `writers`: the workers that already write in its checkout (a worktree is made then). */
+export interface PickerFolder {
+  path: string;
+  label: string;
+  writers: string[];
+}
+
+/** What the "New conversation" window offers: the same models and folders as the master's spawn_worker. */
+export interface ConversationChoices {
+  groups: PickerGroup[];
+  folders: PickerFolder[];
+  /** The folder picked first. */
+  cwd: string;
+}
+
+/** A conversation the user opens: '' and null leave the usual choice (name, effort); `message` may be empty. */
+export interface NewConversation {
+  target: TalkTarget;
+  effort: Effort | null;
+  cwd: string;
+  name: string;
+  message: string;
+}
+
+/** The new conversation (its session id and where it works), or why it could not be opened. */
+export type NewConversationResult = { ok: true; id: string; name: string; cwd: string; branch: string } | { ok: false; error: string };
 
 /**
  * `moving`: saving its work before it moves (or comes back); `server`: its process runs there; `detached`: the link is
@@ -991,6 +1047,10 @@ export interface HubApi {
   /** Whether the saved GitHub sign-in still works (expired or revoked token, gh signed out). */
   githubCheck(): Promise<Result>;
   pickFolder(): Promise<string | null>;
+  /** The models, efforts and folders a new conversation can take: those of the master's spawn_worker. */
+  conversationChoices(): Promise<ConversationChoices>;
+  /** Opens a worker conversation the user talks to, the way the master starts its workers. */
+  newConversation(spec: NewConversation): Promise<NewConversationResult>;
   scanRepos(roots: string[]): Promise<FoundRepo[]>;
   /** Repositories of the connected GitHub account, most recently pushed first. */
   githubRepos(): Promise<Result & { repos: GithubRepo[] }>;

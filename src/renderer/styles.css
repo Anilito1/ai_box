@@ -563,6 +563,40 @@ kbd,
   line-height: 1.55;
   white-space: pre-line;
 }
+/* "New conversation", right under the master's card: a dashed row the width of the cards. */
+.side-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--ctl-md);
+  margin-top: 6px;
+  padding: 0 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text-2);
+  font: 500 var(--fs-sm) var(--font-ui);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-2),
+    border-color var(--dur-2),
+    color var(--dur-2);
+}
+.side-new:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.side-new:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.side-new .ico {
+  width: 13px;
+  height: 13px;
+  color: var(--accent);
+}
 
 /* ---------- source control (bottom of the sidebar): VS Code's SCM view and Source Control Graph, denser ---------- */
 .side-repos {
@@ -3543,6 +3577,75 @@ kbd,
   gap: 6px;
   padding: var(--sp-3) var(--sp-6);
   border-top: 1px solid var(--line);
+}
+/* "New conversation" reuses the notes card: model and effort side by side, then folder, name and first message. */
+.conv-card {
+  width: min(540px, 100%);
+  max-height: min(640px, 100%);
+}
+.conv-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: var(--sp-3);
+}
+.conv-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.conv-field.conv-wide {
+  grid-column: 1 / -1;
+}
+.conv-label {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+/* Over .setup-select and .setup-input, declared further down. */
+.conv-card .conv-select,
+.conv-card .conv-input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+.conv-card .conv-input {
+  font-family: inherit;
+  font-size: var(--fs-md);
+}
+.conv-row {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.conv-row .conv-select {
+  flex: 1;
+}
+.conv-browse {
+  flex: none;
+}
+.conv-message {
+  min-height: 84px;
+  max-height: 220px;
+}
+.conv-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.conv-error {
+  margin: var(--sp-3) 0 0;
+  color: var(--danger-text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  white-space: pre-line;
+}
+.conv-empty {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
 }
 /* The update confirmation reuses the notes card: versions, then what the new one adds. */
 .update-modal {

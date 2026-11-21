@@ -26,6 +26,7 @@ import { initCliUpdates } from './cliUpdate';
 import { showReleaseNotes } from './releaseNotes';
 import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
+import { newConversationOpen, openNewConversation } from './newConversation';
 import { openSubagent, refreshSubagent, renderSubagentRows, setSubagentSource } from './subagents';
 import { splitBackground } from '../shared/subagentList';
 
@@ -96,6 +97,8 @@ interface Card {
   avatar: Avatar;
   /** Branch mark of a worker in its own worktree. */
   tree: HTMLSpanElement;
+  /** Mark of a conversation the user opened. */
+  mine: HTMLSpanElement;
   name: HTMLSpanElement;
   model: HTMLSpanElement;
   pct: HTMLSpanElement;
@@ -113,6 +116,31 @@ const store = new Map<string, Map<string, ChatItem>>();
 let snapshot: HubSnapshot = { sessions: [], costToday: { day: 0, cost: 0 }, models: [], catalogs: {}, usage: null, topics: [], accounts: [], providers: [] };
 // Worker whose conversation is open beside the master; null = the master alone.
 let opened: string | null = null;
+/** A conversation the user just opened: shown beside the master as soon as a snapshot has it. */
+let pendingOpen: string | null = null;
+
+// "New conversation", under the master's card: the user opens a worker conversation of their own.
+const newButton = h('button', 'side-new');
+newButton.type = 'button';
+newButton.id = 'new-conversation';
+newButton.title = `${t('side.newConversation')} · ${shortcut('N')}`;
+newButton.append(icon(ICONS.plus), h('span', '', t('side.newConversation')));
+masterSlot.after(newButton);
+newButton.addEventListener('click', () => newConversation());
+
+function newConversation(): void {
+  void openNewConversation(hub, (id) => {
+    pendingOpen = id;
+    openPending();
+  });
+}
+
+function openPending(): void {
+  if (!pendingOpen || !snapshot.sessions.some((s) => s.id === pendingOpen)) return;
+  const id = pendingOpen;
+  pendingOpen = null;
+  openWorker(id);
+}
 
 setSubagentSource((id) => snapshot.sessions.find((s) => s.id === id));
 
@@ -141,13 +169,20 @@ const ended = (s: SessionView) =>
   isClosed(s) && (s.tree?.state === 'removed' || (!!s.instance && !snapshot.sessions.some((p) => p.post?.id === s.instance?.postId)));
 
 function renderActions(c: Card, s: SessionView): void {
-  const key = `${s.role}:${isClosed(s)}:${s.post !== null}:${ended(s)}`;
+  const key = `${s.role}:${isClosed(s)}:${s.post !== null}:${ended(s)}:${!!s.userOpened}`;
   if (c.actionsKey === key) return;
   c.actionsKey = key;
   c.actions.replaceChildren();
   // A permanent worker sleeps and wakes; it goes away with its post, in the settings.
   if (s.post) {
     c.actions.append(isClosed(s) ? actionButton(t('card.wake'), ICONS.resume, () => hub.resume(s.id)) : actionButton(t('card.sleep'), ICONS.moon, () => hub.stop(s.id)));
+    return;
+  }
+  // The user's own conversation sleeps and wakes too (its worktree stays); removing it is what ends it.
+  if (s.userOpened) {
+    if (!isClosed(s)) c.actions.append(actionButton(t('card.sleepConversation'), ICONS.moon, () => hub.stop(s.id)));
+    else if (!ended(s)) c.actions.append(actionButton(t('card.wake'), ICONS.resume, () => hub.resume(s.id)));
+    if (isClosed(s)) c.actions.append(actionButton(t('card.remove'), ICONS.remove, () => hub.remove(s.id)));
     return;
   }
   if (!isClosed(s) && s.role === 'worker') c.actions.append(actionButton(t('card.close'), ICONS.stop, () => hub.stop(s.id)));
@@ -186,8 +221,10 @@ function layout(sessions: SessionView[]): Layout {
   const team = [...tree.folders.flatMap((f) => f.posts.flat()), ...tree.root.flat(), ...extra.flat()];
   const folded = new Set(tree.folders.filter((f) => f.folder.collapsed).flatMap((f) => f.posts.flat()));
   const rest = sessions.filter((s) => s.role === 'worker' && !team.includes(s));
+  // The user's own conversations stay among the active ones while they sleep: a message wakes them.
+  const shown = (s: SessionView) => !isClosed(s) || (!!s.userOpened && !ended(s));
   // Newest first: the latest missions are the ones worth a look.
-  return { team, folded, tree, extra, active: rest.filter((s) => !isClosed(s)), closed: rest.filter(isClosed).reverse() };
+  return { team, folded, tree, extra, active: rest.filter(shown), closed: rest.filter((s) => !shown(s)).reverse() };
 }
 
 /** A post shown under its group's lead, when the lead is a post too. */
@@ -217,8 +254,12 @@ function ensureCard(s: SessionView): Card {
   tree.append(icon(ICONS.branch));
   tree.setAttribute('aria-hidden', 'true');
   tree.hidden = true;
+  const mine = h('span', 'card-tree card-mine');
+  mine.append(icon(ICONS.user));
+  mine.setAttribute('aria-hidden', 'true');
+  mine.hidden = true;
   const name = h('span', 'card-name');
-  row.append(tree, name);
+  row.append(mine, tree, name);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -236,7 +277,7 @@ function ensureCard(s: SessionView): Card {
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, tree, name, model, pct, fill, sub, subs, actions, actionsKey: '' };
+  const card = { root, avatar, tree, mine, name, model, pct, fill, sub, subs, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -288,15 +329,17 @@ function renderCard(s: SessionView): void {
   const m = s.metrics;
   const last = lastOf(store.get(s.id));
   c.root.classList.toggle('selected', s.id === opened);
-  // A resting permanent worker gets the compact card of a closed one, without its faded look.
-  c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker' && !s.post);
-  c.root.classList.toggle('asleep', isClosed(s) && s.post !== null);
+  // A resting permanent worker (or the user's own conversation) gets the compact card of a closed one, without its faded look.
+  const resting = isClosed(s) && (s.post !== null || asleep(s));
+  c.root.classList.toggle('closed', isClosed(s) && s.role === 'worker' && !resting);
+  c.root.classList.toggle('asleep', resting);
   // Under its post the job is enough ("agenda"); elsewhere the post goes with it ("brain · agenda").
   const inTeam = nested(s);
   c.root.classList.toggle('instance', inTeam);
   c.root.classList.toggle('member', inGroup(s));
   c.avatar.update(s, last, sessionMascot(s, snapshot.accounts), s.role === 'master' ? workersBusy() : 0);
   c.tree.hidden = s.tree?.state !== 'active';
+  c.mine.hidden = !s.userOpened;
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
   setText(c.pct, fmtPct(m?.contextPct, m?.estimated));
@@ -311,7 +354,7 @@ function renderCard(s: SessionView): void {
   else renderSubagentRows(c.subs, s, 'card', openSub);
   // A worktree is named by its branch, never by its path.
   const where = s.instance && s.tree ? t('card.instanceTip', { post: s.instance.post, branch: s.tree.branch }) : s.tree ? t('card.treeTip', { branch: s.tree.branch }) : s.cwd;
-  const groups = [s.leads?.length > 0 ? t('card.leadOf', { list: s.leads.join(', ') }) : '', s.group ? t('card.memberOf', { name: s.group.name }) : ''].filter(Boolean);
+  const groups = [s.userOpened ? t('card.userOpened') : '', s.leads?.length > 0 ? t('card.leadOf', { list: s.leads.join(', ') }) : '', s.group ? t('card.memberOf', { name: s.group.name }) : ''].filter(Boolean);
   const tip = groups.length > 0 ? `${groups.join(' · ')}\n${where}` : where;
   if (c.root.title !== tip && c.root.dataset.tip !== tip) c.root.title = tip;
   renderActions(c, s);
@@ -504,6 +547,7 @@ function commands(): Command[] {
   shown.forEach((s, i) => list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), keys: i < 8 ? shortcut(String(i + 2)) : undefined, run: () => openWorker(s.id) }));
   for (const s of folded) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: statusLabel(s), run: () => openWorker(s.id) });
   if (opened) list.push({ title: t('palette.hideWorker'), run: () => openWorker(null) });
+  list.push({ title: t('side.newConversation'), keys: shortcut('N'), run: newConversation });
   list.push(
     { title: t('side.settings'), keys: shortcut(','), run: () => void setup.open('settings') },
     { title: t('forum.title'), run: () => void forumView.open() },
@@ -533,6 +577,9 @@ document.addEventListener('keydown', (e) => {
   } else if (isMod(e, true) && e.code === 'KeyG') {
     e.preventDefault();
     repoPanel.toggle();
+  } else if (isMod(e) && e.code === 'KeyN') {
+    e.preventDefault();
+    newConversation();
   } else if (isMod(e) && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
     // 1: the master; 2 to 9: the team and the active workers, in the sidebar's order. Physical keys: on an AZERTY
     // keyboard the digits are shifted.
@@ -549,6 +596,7 @@ hub.onSnapshot((next) => {
   snapshot = next;
   awayButton.update(next.away);
   render();
+  openPending();
 });
 hub.onItems((id, items, reset) => {
   let map = store.get(id);
@@ -602,7 +650,7 @@ initNews(hub);
 initCliUpdates(hub);
 hub.ready();
 // An unattended restart waits while a message is being written or the settings are open.
-initUpdates(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
+initUpdates(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen() || newConversationOpen() || [...document.querySelectorAll('textarea')].some((el) => el.value.trim() !== ''), updateSlot);
 masterView.focus();
 // A first run opens the setup; so does a language change made in the middle of it (the page reloads).
 if (!setup.resume()) {
@@ -611,4 +659,4 @@ if (!setup.resume()) {
   });
 }
 // What changed since the last start (none on a new install): over the window once.
-void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen());
+void showReleaseNotes(hub, () => setup.isOpen || capsView.isOpen || forumView.isOpen || purgeView.isOpen || paletteOpen() || newConversationOpen());

@@ -6,8 +6,11 @@ export const displayName = (s: SessionView) =>
 
 /** Closed on an error (its last start or run failed), not closed on purpose. */
 export const failed = (s: SessionView) => s.status === 'exited' && s.error !== '';
-/** A permanent worker with nothing to do: closed on purpose, a message wakes it. */
-export const asleep = (s: SessionView) => s.post !== null && s.status === 'exited' && s.error === '';
+/**
+ * A permanent worker with nothing to do, or a conversation the user opened left idle: closed on purpose, a message
+ * wakes it.
+ */
+export const asleep = (s: SessionView) => (s.post !== null || (!!s.userOpened && s.tree?.state !== 'removed')) && s.status === 'exited' && s.error === '';
 /** The state's word, with "stopped on an error" for a failed session and "asleep" for a resting permanent one. */
 export const statusLabel = (s: SessionView) =>
   (failed(s) ? t('status.failed') : asleep(s) ? t('status.asleep') : t(`status.${s.status}`)) + (s.remote ? ` · ${t(`remote.badge.${s.remote.state}`)}` : '');
