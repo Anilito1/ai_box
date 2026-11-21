@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { safeStorage } from 'electron';
+import { fixedKeyBlob } from './keychain';
 
 /**
  * `account:<id>`: the key of an extra account (an Anthropic API key, an OpenAI key). `forumToken`: this install's
@@ -15,9 +16,8 @@ const isName = (name: string): name is SecretName => NAMES.includes(name) || /^a
 
 /**
  * Secrets encrypted with the OS keychain (DPAPI, Keychain, libsecret/kwallet) through Electron's safeStorage, in
- * secrets.json. Never stored in clear: without a real keychain (Linux "basic_text" backend) nothing is saved. The
- * values are decrypted once at start and never leave the main process, except as environment variables of the
- * processes that need them.
+ * secrets.json. Never stored in clear: without a real keychain nothing is saved. The values are decrypted once at
+ * start and never leave the main process, except as environment variables of the processes that need them.
  */
 export class Secrets {
   private readonly file: string;
@@ -29,7 +29,7 @@ export class Secrets {
   }
 
   async load(): Promise<void> {
-    this.usable = (await safeStorage.isAsyncEncryptionAvailable()) && (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text');
+    this.usable = await this.keychain();
     if (!this.usable || !existsSync(this.file)) return;
     let stale = false;
     try {
@@ -37,7 +37,10 @@ export class Secrets {
       for (const name of Object.keys(stored).filter(isName)) {
         const v = stored[name];
         if (typeof v !== 'string' || !v) continue;
-        const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(v, 'base64'));
+        const blob = Buffer.from(v, 'base64');
+        // Not a keychain's: written without one, or on Windows, whose blobs start alike. Never decrypted here.
+        if (fixedKeyBlob(blob)) continue;
+        const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(blob);
         this.values[name] = result;
         stale ||= shouldReEncrypt;
       }
@@ -46,6 +49,20 @@ export class Secrets {
       this.values = {};
     }
     if (stale) await this.write();
+  }
+
+  /**
+   * The backend Electron names is no proof on Linux: it says "basic_text" on a desktop it does not know (Hyprland,
+   * Sway) while the encryption goes through the Secret Service, and names libsecret when that service cannot be reached.
+   */
+  private async keychain(): Promise<boolean> {
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return false;
+    if (process.platform !== 'linux') return true;
+    try {
+      return !fixedKeyBlob(await safeStorage.encryptStringAsync('probe'));
+    } catch {
+      return false;
+    }
   }
 
   available(): boolean {
