@@ -150,7 +150,8 @@ test('a provider the user added: checked with its list, tested with a short chat
   const { port } = server.address() as { port: number };
   const url = `http://127.0.0.1:${port}/api/v1`;
   try {
-    assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: '', error: '', models: ['venice-uncensored'] });
+    // Every model of the list comes with its shape (here a guess from its name: the list says nothing of it).
+    assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: '', error: '', models: ['venice-uncensored'], shapes: [{ model: 'venice-uncensored', name: '', preset: 'llm', source: 'guessed' }] });
     assert.deepEqual(asked[0], { path: '/api/v1/models', auth: `Bearer ${KEY}`, body: {} });
     // A list that says what each model makes: the ones that make videos or images are no models for a session.
     answer = () => ({ status: 200, body: { data: [{ id: 'wan-video', type: 'video' }, { id: 'venice-uncensored', type: 'text' }, { id: 'flux-image', type: 'image' }, { id: 'qwen-chat', type: 'chat' }, { id: 'plain' }] } });

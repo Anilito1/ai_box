@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { DictationEvent } from '../shared/dictation';
+import type { GraphRunEvent } from '../shared/graph/protocol';
 import type { ChatItem, HubApi, HubEventKind, HubSnapshot, RepoStatus, SessionPulse, TeamRole } from '../shared/types';
 import type { NewsToast } from '../shared/news';
 import type { CliRun } from '../shared/cliUpdate';
@@ -68,6 +69,19 @@ const api: HubApi = {
   installProvider: (provider) => ipcRenderer.invoke('providers:install', provider),
   anthropicAccount: (action, id) => ipcRenderer.invoke('providers:anthropicAccount', action, id),
   customProvider: (action, draft, key) => ipcRenderer.invoke('providers:custom', action, draft, key),
+  graphsList: () => ipcRenderer.invoke('graphs:list'),
+  graphsGet: (id) => ipcRenderer.invoke('graphs:get', id),
+  graphsCreate: (seed) => ipcRenderer.invoke('graphs:create', seed),
+  graphsSave: (id, graph) => ipcRenderer.invoke('graphs:save', id, graph),
+  graphsDelete: (id) => ipcRenderer.invoke('graphs:delete', id),
+  graphsCatalog: () => ipcRenderer.invoke('graphs:catalog'),
+  graphsPrefs: (prefs) => ipcRenderer.invoke('graphs:prefs', prefs ?? null),
+  graphsRun: (runId, request) => ipcRenderer.invoke('graphs:run', runId, request),
+  graphsCancel: (runId) => ipcRenderer.send('graphs:cancel', runId),
+  graphsMedia: (runId, file) => ipcRenderer.invoke('graphs:media', runId, file),
+  onGraphRun: (cb) => {
+    ipcRenderer.on('graphs:event', (_e, runId: string, event: GraphRunEvent) => cb(runId, event));
+  },
   saveAccount: (account, key) => ipcRenderer.invoke('accounts:save', account, key),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   checkAccount: (id) => ipcRenderer.invoke('accounts:check', id),

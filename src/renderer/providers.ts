@@ -1,11 +1,13 @@
 import { OWN_ACCOUNT } from '../shared/accounts';
 import { CLI_PACKAGES } from '../shared/news';
 import { isProviderId, PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
-import type { CustomProviderAction, HubApi, ProviderAccountView, ProviderView } from '../shared/types';
+import { guessedShape, isChatPreset, isPresetId, MAX_IMAGES_LIMIT, PRESET_IDS, type ModelCap, type PresetId } from '../shared/modelCaps';
+import type { CustomProviderAction, HubApi, ModelShapeView, ProviderAccountView, ProviderView } from '../shared/types';
 import { videoApiOf } from '../shared/video';
 import { errorNote, h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
 import { mascotMark } from './mascot';
+import { presetLabel, shapePorts, signatureText, signatureView, sourceLabel } from './graphs/shape';
 
 // Settings › Accounts: one row per provider, all built the same way. A row says whether the provider is connected and
 // offers one action; the way of connecting (an account or an API key, Anthropic's other accounts) waits behind its
@@ -36,6 +38,12 @@ interface CustomForm {
   videoListed: string[];
   videoModels: string[];
   videoTyped: string;
+  /** What the server's list says each model takes and gives, the shapes declared by hand, the declaration being typed. */
+  shapes: ModelShapeView[];
+  modelCaps: Record<string, ModelCap>;
+  capTyped: string;
+  capPreset: PresetId;
+  capMax: string;
   busy: CustomProviderAction | '';
   /** The last error: its code, the field it is about, the server's words. */
   error: string;
@@ -45,7 +53,7 @@ interface CustomForm {
   passed: string;
 }
 
-const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], videoListed: [], videoModels: [], videoTyped: '', busy: '', error: '', field: '', detail: '', passed: '' });
+const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], videoListed: [], videoModels: [], videoTyped: '', shapes: [], modelCaps: {}, capTyped: '', capPreset: 'reference-to-image', capMax: '', busy: '', error: '', field: '', detail: '', passed: '' });
 
 /** The models typed in the form: one per line, or separated by commas or spaces. */
 const parseModels = (text: string) => [...new Set(text.split(/[\s,]+/).filter(Boolean))];
@@ -683,7 +691,7 @@ export class ProvidersPanel {
       field('models', t('provider.custom.models'), modelsRow, h('span', 'setup-hint', t('provider.custom.modelsHint'))),
     );
     if (f.listed.length > 0) box.append(this.modelChips(f));
-    box.append(video);
+    box.append(video, this.shapesSection(f));
 
     const actions = h('div', 'acct-actions');
     actions.append(
@@ -776,6 +784,97 @@ export class ProvidersPanel {
     return box;
   }
 
+  /**
+   * What each model takes and gives: the server's list says it for most (Venice's, OpenRouter's), the name suggests it
+   * for the others, and the user corrects it here. A model declared as anything but a chat model runs no session: a
+   * "reference to image" one is never taken for an LLM.
+   */
+  private shapesSection(f: CustomForm): HTMLElement {
+    const box = h('div', 'setup-field acct-field acct-shapes');
+    box.append(h('span', 'setup-label', t('provider.custom.shapes')), h('span', 'setup-hint', t('provider.custom.shapesHint')));
+    const listed = new Map(f.shapes.map((s) => [s.model.toLowerCase(), s]));
+    if (f.shapes.length > 0) {
+      // The list at a glance: how many models of each shape.
+      const counts = new Map<string, number>();
+      for (const s of f.shapes) counts.set(signatureText(shapePorts(s)), (counts.get(signatureText(shapePorts(s))) ?? 0) + 1);
+      const chips = h('div', 'acct-chips');
+      for (const [sig, n] of [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12)) chips.append(h('span', 'acct-chip static', `${n} × ${sig}`));
+      box.append(h('span', 'acct-video-count', t('provider.custom.shapesListed', { count: f.shapes.length })), chips);
+    }
+    const declaredOf = (model: string) => Object.entries(f.modelCaps).find(([id]) => id.toLowerCase() === model.toLowerCase());
+    const models = [...new Set([...parseModels(f.models), ...Object.keys(f.modelCaps)])].slice(0, 120);
+    if (models.length > 0) {
+      const list = h('div', 'acct-shape-list');
+      for (const model of models) {
+        const declared = declaredOf(model);
+        const auto = listed.get(model.toLowerCase()) ?? guessedShape(model);
+        const shape = declared ? { preset: declared[1].preset, maxImages: declared[1].maxImages, source: 'manual' as const } : auto;
+        const pick = h('select', 'setup-input acct-shape-pick');
+        pick.setAttribute('aria-label', t('provider.custom.shapeOf', { model }));
+        pick.append(Object.assign(h('option', '', t('provider.custom.shapeAuto', { preset: presetLabel(auto.preset) })), { value: '' }));
+        for (const id of PRESET_IDS) pick.append(Object.assign(h('option', '', presetLabel(id)), { value: id }));
+        pick.value = declared ? declared[1].preset : '';
+        pick.disabled = f.busy !== '';
+        pick.addEventListener('change', () => {
+          if (declared) delete f.modelCaps[declared[0]];
+          if (isPresetId(pick.value)) this.declare(f, model, pick.value, undefined);
+          this.host.rerender();
+        });
+        const row = h('div', 'acct-shape-row');
+        row.append(h('span', 'acct-shape-model', model), signatureView(shapePorts(shape)), h('span', `acct-shape-source s-${shape.source}`, sourceLabel(shape.source)), pick);
+        list.append(row);
+      }
+      box.append(list);
+    } else box.append(h('span', 'setup-hint', t('provider.custom.shapesNone')));
+
+    // A model the list lacks, or one to correct without typing it among the session models.
+    const typed = h('input', 'setup-input');
+    typed.value = f.capTyped;
+    typed.placeholder = t('provider.custom.shapePlaceholder');
+    typed.spellcheck = false;
+    typed.autocomplete = 'off';
+    typed.setAttribute('aria-label', t('provider.custom.shapeDeclare'));
+    typed.addEventListener('input', () => (f.capTyped = typed.value));
+    const preset = h('select', 'setup-input acct-shape-pick');
+    preset.setAttribute('aria-label', t('provider.custom.shapeKind'));
+    for (const id of PRESET_IDS) preset.append(Object.assign(h('option', '', presetLabel(id)), { value: id }));
+    preset.value = f.capPreset;
+    preset.addEventListener('change', () => (f.capPreset = isPresetId(preset.value) ? preset.value : f.capPreset));
+    const max = h('input', 'setup-input acct-shape-max');
+    max.type = 'number';
+    max.min = '1';
+    max.max = String(MAX_IMAGES_LIMIT);
+    max.value = f.capMax;
+    max.placeholder = t('provider.custom.shapeMax');
+    max.title = t('provider.custom.shapeMaxHint');
+    max.addEventListener('input', () => (f.capMax = max.value));
+    const add = () => {
+      const model = f.capTyped.trim();
+      if (!model) return;
+      const n = Number.parseInt(f.capMax, 10);
+      const was = declaredOf(model);
+      if (was) delete f.modelCaps[was[0]];
+      this.declare(f, model, f.capPreset, Number.isInteger(n) && n >= 1 && n <= MAX_IMAGES_LIMIT ? n : undefined);
+      Object.assign(f, { capTyped: '', capMax: '' });
+      this.host.rerender();
+    };
+    typed.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      add();
+    });
+    const row = h('div', 'acct-keyrow acct-shape-add');
+    row.append(typed, preset, max, this.button(t('provider.custom.shapeDeclare'), 'btn ghost small', add, f.busy !== ''));
+    box.append(row);
+    return box;
+  }
+
+  /** A shape declared for a model: one that answers no conversation leaves the session models. */
+  private declare(f: CustomForm, model: string, preset: PresetId, maxImages: number | undefined): void {
+    f.modelCaps[model] = { preset, ...(maxImages !== undefined ? { maxImages } : {}) };
+    if (!isChatPreset(preset)) f.models = parseModels(f.models).filter((m) => m.toLowerCase() !== model.toLowerCase()).join('\n');
+  }
+
   /** A custom provider's error, said for the field it is about. */
   private customError(f: CustomForm): string {
     const byField: Record<string, Key> = {
@@ -802,7 +901,7 @@ export class ProvidersPanel {
   }
 
   private editCustom(v: ProviderView, c: NonNullable<ProviderView['custom']>): void {
-    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n'), videoListed: c.video.listed, videoModels: [...c.video.manual] };
+    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n'), videoListed: c.video.listed, videoModels: [...c.video.manual], shapes: c.shapes.listed, modelCaps: { ...c.shapes.manual } };
     this.confirming = '';
     delete this.errors[v.id];
     this.host.rerender();
@@ -815,7 +914,7 @@ export class ProvidersPanel {
     Object.assign(f, { busy: action, error: '', field: '', detail: '', passed: '' });
     this.host.rerender();
     const models = parseModels(f.models);
-    const r = await this.hub.customProvider(action, { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models, videoModels: videoNamed(f) }, f.key.trim() || null);
+    const r = await this.hub.customProvider(action, { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models, videoModels: videoNamed(f), modelCaps: f.modelCaps }, f.key.trim() || null);
     f.busy = '';
     if (r.views.length > 0) this.views = r.views;
     if (this.form !== f) return this.host.rerender();
@@ -823,6 +922,7 @@ export class ProvidersPanel {
     else if (action === 'models') {
       f.listed = r.models;
       f.videoListed = r.videoModels;
+      f.shapes = r.shapes;
       // A short list is taken whole when nothing was typed; a long one waits for the user's picks.
       if (models.length === 0 && r.models.length <= PICK_ALL_MAX) f.models = r.models.join('\n');
     } else if (action === 'test') f.passed = t('provider.custom.passed', { model: models[0] ?? '', reply: r.detail || '…' });
@@ -835,7 +935,7 @@ export class ProvidersPanel {
     delete this.errors[id];
     this.phases.set(id, 'disconnect');
     this.host.rerender();
-    const r = await this.hub.customProvider('remove', { id: accountId, name: '', baseUrl: '', models: [], videoModels: [] }, null);
+    const r = await this.hub.customProvider('remove', { id: accountId, name: '', baseUrl: '', models: [], videoModels: [], modelCaps: {} }, null);
     this.phases.delete(id);
     if (r.views.length > 0) this.views = r.views;
     if (!r.ok) this.fail(id, r.error || 'unknown', () => void this.removeCustom(id, accountId));

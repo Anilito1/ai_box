@@ -137,6 +137,8 @@ import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './
 import { winJobs } from './winJobs';
 import { explore, type ExploreHost } from './providers/claude/explore';
 import { textModels } from '../shared/video';
+import type { GraphService } from './graph/service';
+import { graphTools } from './graph/tools';
 import type { VideoService } from './video/service';
 import { videoTools } from './video/tools';
 import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
@@ -447,6 +449,8 @@ export interface ManagerOptions {
   capabilities(): Promise<string>;
   /** The providers' video models and the videos made with them: list_video_models and generate_video. */
   video?: VideoService;
+  /** The user's graphs of models: list_graphs and run_graph. */
+  graphs?: GraphService;
   /** The remote server's power (remote workers on): switched on before a move, told when it may switch off. */
   remoteServer?: RemoteServerControl;
   /** Where the scratch folders of workers without a project go (their folder is too wide: the home folder, a workspace). */
@@ -4080,6 +4084,8 @@ export class SessionManager extends EventEmitter {
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
     // Videos are made by the hub with a provider's video model, for any session that asks; such a model runs none.
     const video = this.opts.video ? videoTools(this.opts.video, () => s.cwd, run) : [];
+    // The user's graphs of models, beside the videos: a session may run one on a message.
+    const graph = this.opts.graphs ? graphTools(this.opts.graphs, () => s.cwd, run) : [];
     const memory = tool('topic_memory', t(role === 'worker' ? 'tool.topicMemory.worker' : 'tool.topicMemory'),
       {
         topic: z.string().optional(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
@@ -4151,7 +4157,7 @@ export class SessionManager extends EventEmitter {
       // A diagnosis worker reads who does what and reports: no message to a worker, no topic memory to write.
       if (s.diagOf) return [listWorkers, toMaster];
       const exploreTool = harness === 'claude' && !remote ? [this.exploreTool(s, run)] : [];
-      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, ...video, toMaster, ...toLead, ...exploreTool, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
+      return [...(this.topics.linkOf(s.name) ? [memory] : []), ...leadTools, listRepos, listCapabilities, ...video, ...graph, toMaster, ...toLead, ...exploreTool, ...(harness === 'claude' && !remote ? [] : [sendMessage])];
     }
     const signalOf = (extra: unknown) => (extra as { signal?: AbortSignal } | undefined)?.signal ?? new AbortController().signal;
 
@@ -4184,6 +4190,7 @@ export class SessionManager extends EventEmitter {
     return [
         memory,
         ...video,
+        ...graph,
         tool(
           'spawn_worker',
           t('tool.spawn'),

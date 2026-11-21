@@ -1,0 +1,31 @@
+[
+  {
+    "id": "venice",
+    "label": "Venice",
+    "connected": true,
+    "method": "apikey",
+    "methods": { "apikey": { "connected": true, "detail": "", "error": "" } },
+    "cli": null,
+    "custom": {
+      "accountId": "a-ven00001",
+      "baseUrl": "https://api.venice.ai/api/v1",
+      "models": ["venice-uncensored", "qwen-2.5-vl", "my-picture-model"],
+      "video": { "listed": ["wan-2.5-preview-image-to-video", "wan-2.5-preview-text-to-video"], "manual": [] },
+      "shapes": {
+        "listed": [
+          { "model": "venice-uncensored", "preset": "llm", "source": "listed" },
+          { "model": "qwen-2.5-vl", "preset": "llm-vision", "maxImages": 5, "source": "listed" },
+          { "model": "gemini-3-flash", "preset": "llm-video", "maxImages": 10, "source": "listed" },
+          { "model": "flux-dev", "preset": "text-to-image", "source": "listed" },
+          { "model": "venice-sd35", "preset": "text-to-image", "source": "listed" },
+          { "model": "firered-image-edit", "preset": "reference-to-image", "maxImages": 3, "source": "listed" },
+          { "model": "qwen-edit-uncensored", "preset": "reference-to-image", "maxImages": 1, "source": "listed" },
+          { "model": "wan-2.5-preview-image-to-video", "preset": "image-to-video", "source": "listed" },
+          { "model": "wan-2.5-preview-text-to-video", "preset": "text-to-video", "source": "listed" },
+          { "model": "tts-kokoro", "preset": "text-to-speech", "source": "listed" }
+        ],
+        "manual": { "reference-to-image-v2": { "preset": "reference-to-image", "maxImages": 4 } }
+      }
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  ["size", "1700", "900"],
+  ["press", "Escape"],
+  ["click", ".ph-graphs"],
+  ["wait", ".gr-node"],
+  ["eval", "JSON.stringify({graph: document.querySelector('.gr-graph-name').textContent, nodes: document.querySelectorAll('.gr-node').length, wires: document.querySelectorAll('.gr-wire').length, issues: document.querySelector('.gr-issues').textContent})"],
+  ["shot", "/tmp/graphs-editor.png"],
+  ["click", ".gr-suggestion"],
+  ["wait", ".gr-answer video"],
+  ["eval", "JSON.stringify({summary: document.querySelector('details.gr-run summary').textContent, states: [...document.querySelectorAll('.gr-node')].map((n) => n.dataset.state).join(','), answer: document.querySelector('.gr-answer').textContent.slice(0, 80)})"],
+  ["shot", "/tmp/graphs-run.png"],
+  ["drag", ".gr-port.out[data-ref='video.video'] .gr-dot", ".gr-port.in[data-ref='writer.prompt'] .gr-dot"],
+  ["text", ".gr-toast-text"]
+]

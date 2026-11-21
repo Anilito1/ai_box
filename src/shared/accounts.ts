@@ -1,4 +1,5 @@
 import { ACCOUNT_KINDS, type Account, type AccountKind, type HarnessId } from './types';
+import { isChatPreset, normalizeCaps } from './modelCaps';
 import { VIDEO_MODELS_MAX, videoAmong } from './video';
 
 // Accounts sessions can run on: checks shared by the settings screen and the main process. No Node and no DOM.
@@ -83,7 +84,10 @@ export function normalizeAccount(raw: unknown): Account {
   const kind = ACCOUNT_KINDS.includes(o.kind as AccountKind) ? (o.kind as AccountKind) : 'claude';
   const server = hasServer(kind);
   const slug = kind === 'openai' ? str(o.slug).trim().toLowerCase() : '';
-  const models = slug && Array.isArray(o.models) ? [...new Set(o.models.map((m) => str(m).trim()).filter(Boolean))] : [];
+  const modelCaps = slug ? normalizeCaps(o.modelCaps, (id) => MODEL.test(id)) : {};
+  // A model declared as making images, videos or sounds runs no session, whatever list it was typed in.
+  const notChat = new Set(Object.entries(modelCaps).flatMap(([id, cap]) => (isChatPreset(cap.preset) ? [] : [id.toLowerCase()])));
+  const models = slug && Array.isArray(o.models) ? [...new Set(o.models.map((m) => str(m).trim()).filter((m) => m && !notChat.has(m.toLowerCase())))] : [];
   const videoModels = slug && Array.isArray(o.videoModels) ? [...new Set(o.videoModels.map((m) => str(m).trim()).filter(Boolean))] : [];
   return {
     id: str(o.id),
@@ -96,6 +100,7 @@ export function normalizeAccount(raw: unknown): Account {
     slug,
     models,
     ...(videoModels.length > 0 ? { videoModels } : {}),
+    ...(Object.keys(modelCaps).length > 0 ? { modelCaps } : {}),
     // A Gemini account always has a folder of its own: its sign-in and its conversations live there.
     isolated: kind === 'gemini' || kind === 'gemini-key' || (kind === 'codex' && o.isolated === true),
   };

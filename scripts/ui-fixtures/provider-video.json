@@ -20,7 +20,8 @@
           "wan-2.5-preview-text-to-video"
         ],
         "manual": ["my-own-video-model"]
-      }
+      },
+      "shapes": { "listed": [], "manual": {} }
     }
   },
   {
@@ -30,6 +31,6 @@
     "method": "apikey",
     "methods": { "apikey": { "connected": true, "detail": "", "error": "" } },
     "cli": null,
-    "custom": { "accountId": "a-llm00001", "baseUrl": "http://localhost:11434/v1", "models": ["llama-4"], "video": { "listed": [], "manual": [] } }
+    "custom": { "accountId": "a-llm00001", "baseUrl": "http://localhost:11434/v1", "models": ["llama-4"], "video": { "listed": [], "manual": [] }, "shapes": { "listed": [], "manual": {} } }
   }
 ]

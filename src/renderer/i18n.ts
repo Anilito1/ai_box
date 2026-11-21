@@ -1,6 +1,7 @@
 import { APP_NAME, LOGO } from '../shared/brand';
 import { isLang, translator, type Lang } from '../shared/i18n';
 import { EFFORTS } from '../shared/types';
+import { graphWordsEn, graphWordsFr } from './graphs/words';
 
 const en = {
   'side.workers': 'Workers',
@@ -1664,6 +1665,7 @@ const en = {
   'purge.problem.wide': 'That folder is too wide: pick a project inside it.',
   'purge.problem.system': 'System and program folders cannot be cleaned up.',
   'purge.problem.appData': 'The app\'s own folder cannot be added.',
+  ...graphWordsEn,
 };
 
 export type Key = keyof typeof en;
@@ -3333,6 +3335,7 @@ const fr: Record<Key, string> = {
   'purge.problem.wide': 'Ce dossier est trop large : choisis un projet à l\'intérieur.',
   'purge.problem.system': 'Les dossiers du système et des programmes ne peuvent pas être nettoyés.',
   'purge.problem.appData': 'Le dossier de l\'app ne peut pas être ajouté.',
+  ...graphWordsFr,
 };
 
 const query = new URLSearchParams(location.search);

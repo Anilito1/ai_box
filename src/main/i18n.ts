@@ -1,4 +1,5 @@
 import { translator, type Lang } from '../shared/i18n';
+import { graphEn, graphFr } from './graph/i18n';
 
 // Text the main process shows (menus, dialogs, notices) or gives the models (hub tools, hub messages).
 
@@ -670,9 +671,10 @@ const en = {
   'video.list.more': '… and {count} more: narrow with search.',
   'video.list.manual': 'named by hand',
   'video.list.jobs': 'Still being made (generate_video job_id):',
+  ...graphEn,
 };
 
-type Key = keyof typeof en;
+export type Key = keyof typeof en;
 
 const fr: Record<Key, string> = {
   'menu.cut': 'Couper',
@@ -1350,6 +1352,7 @@ const fr: Record<Key, string> = {
   'video.list.more': '… et {count} de plus : réduis avec search.',
   'video.list.manual': 'nommé à la main',
   'video.list.jobs': 'Encore en cours (generate_video job_id) :',
+  ...graphFr,
 };
 
 let current: Lang = 'en';

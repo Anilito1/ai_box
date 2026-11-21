@@ -4,6 +4,7 @@ import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { ForumView } from './forum';
+import { GraphsView } from './graphs/view';
 import { AwayButton } from './remote';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
@@ -66,6 +67,12 @@ const capButton = (label: string, path: string): HTMLButtonElement => {
   b.append(icon(path), h('span', '', label));
   return b;
 };
+// The graphs of models: a view of their own, in the conversations' place, while it is open.
+const graphsButton = capButton(t('side.graphs'), ICONS.graph);
+graphsButton.title = t('side.graphsHint');
+graphsButton.classList.add('ph-graphs');
+graphsButton.removeAttribute('aria-haspopup');
+graphsButton.setAttribute('aria-pressed', 'false');
 const forumButton = capButton(t('side.forum'), ICONS.bulb);
 const mcpButton = capButton(t('side.mcp'), ICONS.plug);
 const skillsButton = capButton(t('side.skills'), ICONS.sparkle);
@@ -76,7 +83,7 @@ const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
 // "I'm stepping away": only once remote workers are on (the snapshot says so).
 const awayButton = new AwayButton(hub);
-headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, purgeButton, settingsButton);
+headActions.append(updateSlot, awayButton.el, graphsButton, forumButton, mcpButton, skillsButton, purgeButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 // The master's header is the window's top bar: it spans the open worker too, which opens under it.
@@ -86,6 +93,14 @@ const topicsView = new TopicsView($('pane-master'), masterView, hub);
 const capsView = new CapsView(hub);
 const forumView = new ForumView(hub);
 const purgeView = new PurgeView(hub);
+const graphsView = new GraphsView(hub, workspace, {
+  openProviders: () => void setup.open('settings', 'accounts'),
+  toggled: (open) => {
+    graphsButton.classList.toggle('on', open);
+    graphsButton.setAttribute('aria-pressed', String(open));
+  },
+});
+graphsButton.addEventListener('click', () => graphsView.toggle());
 forumButton.addEventListener('click', () => void forumView.open());
 settingsButton.addEventListener('click', () => void setup.open('settings'));
 mcpButton.addEventListener('click', () => void capsView.open('mcp'));
@@ -235,6 +250,8 @@ const nested = (s: SessionView) => !!s.instance && !isClosed(s) && snapshot.sess
 
 /** Shows a worker's conversation beside the master (a closed one is read from its transcript), or hides it. */
 function openWorker(id: string | null): void {
+  // A conversation asked for: it takes its place back from the Graphs view.
+  graphsView.close();
   opened = id;
   if (id) hub.open(id);
   render();
@@ -273,8 +290,10 @@ function ensureCard(s: SessionView): Card {
   const actions = h('div', 'card-actions');
   root.append(avatar.root, row, meta, meter, sub, subs, actions);
   root.addEventListener('click', () => {
-    if (s.role === 'master') masterView.focus();
-    else openWorker(opened === s.id ? null : s.id);
+    if (s.role === 'master') {
+      graphsView.close();
+      masterView.focus();
+    } else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
   const card = { root, avatar, tree, mine, name, model, pct, fill, sub, subs, actions, actionsKey: '' };

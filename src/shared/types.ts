@@ -7,6 +7,9 @@ import type { DiagnosisView } from './diagnosis';
 import type { DictationEvent, DictationSettings, DictationSupport, SttPresetId } from './dictation';
 import type { ForumAction, ForumResult } from './forum';
 import type { Lang } from './i18n';
+import type { ModelCap, ModelShape } from './modelCaps';
+import type { GraphCatalogView, GraphListing, GraphPrefs, GraphResult, GraphRunEvent, GraphRunRequest, GraphSeed } from './graph/protocol';
+import type { Graph } from './graph/format';
 import type { NewsToast, ProviderNews } from './news';
 import type { CliRun, UpdateAction } from './cliUpdate';
 import type { KeepReason } from './parallel';
@@ -211,6 +214,12 @@ export interface Account {
   models: string[];
   /** A provider the user added: video models named by hand, beside the ones its API lists. They never run a session. */
   videoModels?: string[];
+  /**
+   * A provider the user added: the shapes declared by hand ("this model takes reference images and makes an image"),
+   * by model id. They win over what the provider's list says; a model declared as anything but a chat model runs no
+   * session. What the list says is never stored: it is read again.
+   */
+  modelCaps?: Record<string, ModelCap>;
   /** codex only: signed in in a Codex folder of the hub's own (true), or the one the user's Codex already uses (false). */
   isolated: boolean;
 }
@@ -237,6 +246,8 @@ export interface AccountStatus {
   error: string;
   /** openai: the models the server lists, for the model fields. */
   models: string[];
+  /** openai: every model of the list the hub can call, with its shape (chat, image, video...). */
+  shapes?: ModelShape[];
 }
 
 /** What the sidebar shows of a permanent worker's post. */
@@ -721,6 +732,15 @@ export interface ProviderVideoView {
   manual: string[];
 }
 
+/** A model's shape as a provider's form shows it. */
+export type ModelShapeView = Pick<ModelShape, 'model' | 'preset' | 'maxImages' | 'source'>;
+
+/** A provider's models and their shapes in its form: the ones its list describes, and the ones declared by hand. */
+export interface ProviderShapesView {
+  listed: ModelShapeView[];
+  manual: Record<string, ModelCap>;
+}
+
 /** A provider's block in Settings › Accounts. */
 export interface ProviderView {
   /** A built-in provider, or the slug of one the user added. */
@@ -735,7 +755,7 @@ export interface ProviderView {
   /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
   cli: { found: boolean; version: string; outdated: boolean } | null;
   /** A provider the user added: what its form shows again. Its key never comes back. */
-  custom?: { accountId: string; baseUrl: string; models: string[]; video: ProviderVideoView };
+  custom?: { accountId: string; baseUrl: string; models: string[]; video: ProviderVideoView; shapes: ProviderShapesView };
 }
 
 /** A provider the user adds or changes in Settings › Accounts: any server that speaks OpenAI's Chat Completions. */
@@ -747,6 +767,8 @@ export interface CustomProviderDraft {
   models: string[];
   /** Video models named by hand. */
   videoModels: string[];
+  /** Shapes declared by hand, by model id. */
+  modelCaps: Record<string, ModelCap>;
 }
 export type CustomProviderAction = 'models' | 'test' | 'save' | 'remove';
 /**
@@ -756,6 +778,8 @@ export type CustomProviderAction = 'models' | 'test' | 'save' | 'remove';
 export interface CustomProviderResult extends ProviderResult {
   models: string[];
   videoModels: string[];
+  /** `models`: every model of the server's list with its shape. */
+  shapes: ModelShapeView[];
   detail: string;
 }
 
@@ -1023,6 +1047,20 @@ export interface HubApi {
    * null for the stored one (used only while the address stays the same).
    */
   customProvider(action: CustomProviderAction, draft: CustomProviderDraft, key: string | null): Promise<CustomProviderResult>;
+  /** The Graphs view: the saved graphs, their models, a test run. Keys stay in the main process. */
+  graphsList(): Promise<GraphListing>;
+  graphsGet(id: string): Promise<Graph | null>;
+  graphsCreate(seed: GraphSeed): Promise<GraphResult>;
+  graphsSave(id: string, graph: Graph): Promise<GraphResult>;
+  graphsDelete(id: string): Promise<GraphResult>;
+  graphsCatalog(): Promise<GraphCatalogView>;
+  graphsPrefs(prefs?: GraphPrefs): Promise<GraphPrefs>;
+  /** Runs a graph; its events come by onGraphRun, its end resolves the call. */
+  graphsRun(runId: string, request: GraphRunRequest): Promise<void>;
+  graphsCancel(runId: string): void;
+  /** A medium a run made, by its file name. */
+  graphsMedia(runId: string, file: string): Promise<{ mime: string; data: Uint8Array } | null>;
+  onGraphRun(cb: (runId: string, event: GraphRunEvent) => void): void;
   /**
    * Creates (empty id) or changes an account. `key`: an API key to check and store, null to keep the stored one,
    * '' to remove it. A key is checked with its service first; `field` names the field refused.

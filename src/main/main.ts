@@ -1,5 +1,8 @@
 import { openLocalFile } from './localFiles';
 import { VideoService } from './video/service';
+import { GraphService } from './graph/service';
+import type { ModelShape } from '../shared/modelCaps';
+import type { GraphRunRequest, GraphSeed } from '../shared/graph/protocol';
 import { textModels, videoAmong } from '../shared/video';
 import './shellPath';
 import { randomBytes } from 'node:crypto';
@@ -221,6 +224,11 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
+/** How the page asks for a new graph: empty, from an example, or a copy of another. */
+const graphSeed = (v: unknown): GraphSeed => {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
+  return isStr(o.example) ? { example: o.example } : isStr(o.copy) ? { copy: o.copy } : { blank: true };
+};
 
 /** A "New conversation" request from the window, checked field by field; null when anything is off. */
 function parseConversation(raw: unknown): NewConversation | null {
@@ -320,6 +328,14 @@ class Hub {
   readonly costLog = new CostLog(this.dataDir);
   /** The video models of the providers the user added, and the videos made with them. */
   readonly video = new VideoService({ accounts: () => this.cfg.accounts, key: (id) => this.secrets.get(`account:${id}`), outDir: () => videosDir() });
+  /** The user's graphs of models (Graphs view, run_graph), and what each provider's models take and give. */
+  readonly graphs = new GraphService({
+    dir: join(this.dataDir, 'graphs'),
+    runsDir: join(this.dataDir, 'graph-runs'),
+    outDir: () => videosDir(),
+    accounts: () => this.cfg.accounts,
+    key: (id) => this.secrets.get(`account:${id}`),
+  });
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
   /** The remote server (experimental): inert while remote workers are off. */
@@ -421,6 +437,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       costLog: this.costLog,
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
       video: this.video,
+      graphs: this.graphs,
       remoteServer: this.remote,
       scratchRoot: join(this.dataDir, 'scratch'),
       wideFolders: () => this.wideFolders(),
@@ -626,7 +643,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
         method: customViews[i].connected ? ('apikey' as const) : ('' as const),
         methods: { apikey: customViews[i] },
         cli: null,
-        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models, video: this.video.view(a) },
+        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models, video: this.video.view(a), shapes: this.graphs.shapesView(a) },
       })),
     ];
     const states: Record<string, ProviderState> = {
@@ -729,12 +746,13 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
    */
   async customProvider(action: CustomProviderAction, raw: unknown, key: unknown): Promise<CustomProviderResult> {
     // Listing and testing leave the blocks as they are: only a save or a removal checks them again.
-    const out = async (r: { ok: boolean; error: string; field?: string; models?: string[]; videoModels?: string[]; detail?: string }, views = false) => ({
+    const out = async (r: { ok: boolean; error: string; field?: string; models?: string[]; videoModels?: string[]; shapes?: ModelShape[]; detail?: string }, views = false) => ({
       ok: r.ok,
       error: r.error,
       field: r.field ?? '',
       models: r.models ?? [],
       videoModels: r.videoModels ?? [],
+      shapes: (r.shapes ?? []).map(({ model, preset, maxImages, source }) => ({ model, preset, ...(maxImages !== undefined ? { maxImages } : {}), source })),
       detail: r.detail ?? '',
       views: views ? await this.providerViews() : [],
     });
@@ -746,7 +764,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       return out({ ok: r.ok, error: r.error }, true);
     }
     const slug = before?.slug ?? customSlug(isStr(d.name) ? d.name : '', this.cfg.accounts.map((a) => a.slug).filter(Boolean));
-    const draft = normalizeAccount({ id: before?.id ?? '', kind: 'openai', name: d.name, baseUrl: d.baseUrl, models: d.models, videoModels: d.videoModels, slug, isolated: false });
+    const draft = normalizeAccount({ id: before?.id ?? '', kind: 'openai', name: d.name, baseUrl: d.baseUrl, models: d.models, videoModels: d.videoModels, modelCaps: d.modelCaps, slug, isolated: false });
     const typed = isStr(key) ? key.trim() : '';
     // The stored key goes to the address it was given for, never to another one typed since.
     const k = typed || (before && before.baseUrl === draft.baseUrl ? this.secrets.get(`account:${before.id}`) : '');
@@ -768,7 +786,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     if (!k && !isLocalUrl(draft.baseUrl)) return out({ ok: false, error: 'required', field: 'key' });
     if (action === 'models') {
       const [st, listed] = await Promise.all([checkOpenAI(draft.baseUrl, k), videoListed()]);
-      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models, videoModels: listed });
+      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models, videoModels: listed, shapes: st.shapes });
       if (st.ready || /^http-(404|405|501)$/.test(st.error)) return out({ ok: false, error: 'no-list', field: 'models' });
       return out({ ok: false, error: st.error, field: /^(unauthorized|forbidden)$/.test(st.error) ? 'key' : 'baseUrl' });
     }
@@ -970,6 +988,8 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
           ? await checkCustom(a.baseUrl, key)
           : await checkOpenAI(a.baseUrl, key);
     await video;
+    // What the list says of each model (chat, image, video...): the graphs' catalog and the provider's form.
+    if (status.ready) this.graphs.noteListed(a.id, status.shapes);
     if (custom) this.dropVideoModels(a);
     // OpenAI's own list: each session picks among its chat models. A provider the user added: among the ones they chose.
     const catalog = custom ? a.models : chatModels(status.models);
@@ -1025,6 +1045,8 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     if (!account.id) account.id = `a-${randomBytes(6).toString('base64url').toLowerCase().replace(/[^a-z0-9]/g, '0').slice(0, 8)}`;
     if (storesKey) await this.secrets.set(`account:${account.id}`, typed || null);
     this.cfg.accounts = before ? this.cfg.accounts.map((a) => (a.id === account.id ? account : a)) : [...this.cfg.accounts, account];
+    // Another address is another list of models: the one read at the old address is no longer theirs.
+    if (before && before.baseUrl !== account.baseUrl) this.graphs.forget(account.id);
     if (account.kind === 'claude') prepareClaudeDir(accountDir(this.dataDir, account.id));
     if (account.kind === 'codex' && account.isolated) prepareCodexDir(accountDir(this.dataDir, account.id));
     if (account.kind === 'gemini' || account.kind === 'gemini-key') prepareGeminiDir(accountDir(this.dataDir, account.id));
@@ -1041,6 +1063,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     const env = this.mgr.environment(a.id);
     this.cfg.accounts = this.cfg.accounts.filter((x) => x.id !== a.id);
     this.video.forget(a.id);
+    this.graphs.forget(a.id);
     knownAccounts(this.cfg);
     this.save();
     // Its sessions move to their usual account first: none runs on it when it goes.
@@ -1191,6 +1214,18 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       const records = (await this.costLog.read(from, to)).map((r) => (r.repo !== undefined ? r : { ...r, repo: mgr.costRepoOf(r.id) ?? '' }));
       return { records, since: this.costLog.since, missions: await this.costLog.readMissions(from, to) };
     });
+    // The Graphs view. Graphs and runs are named by ids the service checks; no path comes from the page.
+    const graphs = this.graphs;
+    handle('graphs:list', () => graphs.list());
+    handle('graphs:get', (id) => (isStr(id) ? graphs.get(id) : null));
+    handle('graphs:create', (seed) => graphs.create(graphSeed(seed)));
+    handle('graphs:save', (id, graph) => (isStr(id) ? graphs.save(id, graph) : { ok: false, error: 'not-found' }));
+    handle('graphs:delete', (id) => (isStr(id) ? graphs.delete(id) : { ok: false, error: 'not-found' }));
+    handle('graphs:catalog', () => graphs.catalogView());
+    handle('graphs:prefs', (prefs) => graphs.prefs(prefs ?? undefined));
+    handle('graphs:run', (runId, request) => (isStr(runId) && request && typeof request === 'object' ? graphs.run(runId, request as GraphRunRequest, (event) => send('graphs:event', runId, event)) : undefined));
+    on('graphs:cancel', (runId) => isStr(runId) && graphs.cancel(runId));
+    handle('graphs:media', (runId, file) => (isStr(runId) && isStr(file) ? graphs.media(runId, file) : null));
     handle('repo:graph', (path, filter, limit) => {
       const c = checkout(path);
       if ((filter !== 'auto' && filter !== 'all') || typeof limit !== 'number' || !Number.isFinite(limit)) throw new Error(t('repo.badRequest'));
@@ -1365,7 +1400,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('providers:custom', (action, draft, key) =>
       action === 'models' || action === 'test' || action === 'save' || action === 'remove'
         ? this.customProvider(action, draft, key)
-        : { ok: false, error: 'unsupported', field: '', models: [], videoModels: [], detail: '', views: [] },
+        : { ok: false, error: 'unsupported', field: '', models: [], videoModels: [], shapes: [], detail: '', views: [] },
     );
     // A built-in provider or the id of one the user added: the session manager resolves it, or says it is unknown.
     const isProviderRef = (v: unknown): v is string => isProviderId(v) || (isStr(v) && CUSTOM_SLUG.test(v));

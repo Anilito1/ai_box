@@ -4,7 +4,8 @@ import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { ACCOUNT_ID, isLocalUrl } from '../shared/accounts';
 import type { Account, AccountStatus } from '../shared/types';
-import { modelKind } from '../shared/video';
+import { chatShapes, detectModels } from '../shared/modelCaps';
+import { videoApiOf } from '../shared/video';
 import { adjustRequest, errorMessage } from './bridgeFormat';
 import { errorCode, httpCode } from './errors';
 
@@ -185,27 +186,26 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
   const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
   if (!key && !isLocalUrl(baseUrl)) return { ...none, error: 'no-key' };
   try {
-    // The key goes to this address only: a redirect is refused, not followed.
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
+    // The key goes to this address only: a redirect is refused, not followed. Venice lists only its text models
+    // unless every type is asked for: the others are read too, for the graphs.
+    const all = videoApiOf(baseUrl) === 'venice' ? '?type=all' : '';
+    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/models${all}`, {
       headers: key ? { authorization: `Bearer ${key}` } : {},
       redirect: 'error',
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) return { ...none, error: httpCode(res.status) };
-    let body: { data?: { id?: unknown; type?: unknown }[] } = {};
+    let body: { data?: unknown[] } = {};
     try {
       body = (JSON.parse(await readCapped(res, 8 * 1024 * 1024)) as typeof body | null) ?? {};
     } catch {
       // Not a list: no models.
     }
-    const models = (Array.isArray(body.data) ? body.data : [])
-      // A list that says what each model makes (Venice, Together): the ones that make images or videos run no session.
-      .filter((m) => modelKind(m?.type) === 'text')
-      .map((m) => m.id)
-      .filter((id): id is string => typeof id === 'string')
-      .sort()
-      .slice(0, 500);
-    return { ready: true, detail: '', error: '', models };
+    // Each model's shape, from what the list says of it (Venice, Together, OpenRouter) or else from its name: the ones
+    // that make images, videos or sounds run no session.
+    const shapes = detectModels(body, 600);
+    const models = chatShapes(shapes).sort().slice(0, 500);
+    return { ready: true, detail: '', error: '', models, shapes };
   } catch (err) {
     return { ...none, error: errorCode(err) };
   }

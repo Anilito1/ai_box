@@ -16,6 +16,8 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - « Nouvelle conversation », sous la carte du maître (Ctrl+N) : parlez vous-même à un de vos modèles, dans le dossier de votre choix, sans passer par le maître. Elle s'endort quand elle ne sert plus et reprend avec toute sa conversation à votre message suivant.
 - Génération de vidéos avec un fournisseur ajouté (Venice) : ses modèles vidéo sont trouvés tout seuls et listés dans Réglages › Comptes, sous « Vidéo », où vous pouvez aussi en ajouter un à la main. Demandez une vidéo au maître ou à un worker : il annonce le prix, la génère et vous donne un lien pour l'ouvrir ; elle est enregistrée dans votre dossier Vidéos › AI-Box. Ces modèles ne sont jamais proposés pour faire tourner une session.
+- Graphes de modèles : depuis « Graphes » en haut de la fenêtre, enchaînez des modèles de vos fournisseurs (un LLM qui écrit le prompt, un modèle d'image, un modèle vidéo, un LLM qui analyse…) en un seul chatbot, essayez-le en simulé sans clé puis en réel avec un plafond de coût, et demandez au maître ou à un worker de le faire tourner.
+- Réglages › Comptes montre ce que fait chaque modèle d'un fournisseur ajouté (texte, image, vidéo…) et vous laisse le corriger : un modèle d'image comme « Reference to Image » n'est plus pris pour un modèle de conversation.
 
 ### Modifié
 
