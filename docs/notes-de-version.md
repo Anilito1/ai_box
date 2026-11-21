@@ -10,6 +10,14 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-22
+
+### Modifié
+
+- Sous Linux, vos clés et jetons s'enregistrent dans le trousseau du système sur tous les bureaux (Hyprland, Sway…) ; sans trousseau, l'app le dit et n'enregistre rien.
+- Sous Linux, « Se connecter » ouvre votre terminal habituel (kitty, foot, alacritty…).
+- Sous Linux, fermer une session ou quitter l'app arrête aussi ce qu'elle avait lancé (serveurs, commandes en arrière-plan), comme sous Windows.
+
 ## 2026-11-21
 
 ### Ajouté
