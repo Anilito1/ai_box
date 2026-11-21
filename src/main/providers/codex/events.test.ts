@@ -71,7 +71,7 @@ test('an error that will be retried is a retry; a usage limit is a limit signal 
   s.handle('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1790000000 }, secondary: { usedPercent: 40, resetsAt: 1790500000 } } });
   const events = s.handle('error', { error: { message: 'limit', codexErrorInfo: 'usageLimitExceeded' }, willRetry: false, turnId: 't1' });
   assert.deepEqual(events[0], { type: 'limit', signal: { kind: 'quota', resetsAt: 1790000000, source: 'codex:usageLimitExceeded' } });
-  assert.deepEqual(events[1], { type: 'assistant', id: 'error-t1', blocks: [], error: 'rate_limit', contextTokens: 0 });
+  assert.deepEqual(events[1], { type: 'assistant', id: 'error-t1', blocks: [{ type: 'text', text: 'usageLimitExceeded: limit' }], error: 'rate_limit', contextTokens: 0 });
 });
 
 test('error names: a bare name, or an object keyed by it', () => {

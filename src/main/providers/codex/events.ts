@@ -257,7 +257,9 @@ export class CodexStream {
         const events: AgentEvent[] = [];
         const limit = limitOf(name, this.limits, status);
         if (limit) events.push({ type: 'limit', signal: limit });
-        events.push({ type: 'assistant', id: `error-${str(p.turnId) || Date.now()}`, blocks: [], error: errorCodeOf(name, status), contextTokens: 0 });
+        // Its wording is not shown (the hub's notice says the error); it tells a connection cut from another failure.
+        const text = [name, str(error.message)].filter(Boolean).join(': ');
+        events.push({ type: 'assistant', id: `error-${str(p.turnId) || Date.now()}`, blocks: text ? [{ type: 'text', text }] : [], error: errorCodeOf(name, status), contextTokens: 0 });
         return events;
       }
       case 'turn/completed': {
@@ -270,6 +272,7 @@ export class CodexStream {
             subtype: status === 'completed' ? 'success' : status === 'interrupted' ? 'interrupted' : 'error_during_execution',
             isError: failed || (status !== 'completed' && status !== 'interrupted'),
             result: status === 'completed' ? this.lastAnswer : '',
+            ...(failed ? { failed } : {}),
             queued: null,
             contextWindows: this.contextSize > 0 ? { [this.model()]: this.contextSize } : {},
             usage: this.usage,

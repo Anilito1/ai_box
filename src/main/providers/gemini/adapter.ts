@@ -250,8 +250,9 @@ export class GeminiProcess implements AgentProcess {
     const events: AgentEvent[] = this.stream.flush();
     const limit = limitOfError(code, message, Date.now());
     if (limit) events.push({ type: 'limit', signal: limit });
-    events.push({ type: 'assistant', id: `error-${Date.now()}`, blocks: [], error: errorCodeOf(code, message), contextTokens: 0 });
-    events.push({ type: 'turn', subtype: 'error_during_execution', isError: true, result: '', queued: null, contextWindows: {}, usage: this.stream.usage });
+    // The wording is not shown (the hub's notice says the error); it tells a connection cut from another failure.
+    events.push({ type: 'assistant', id: `error-${Date.now()}`, blocks: message ? [{ type: 'text', text: message }] : [], error: errorCodeOf(code, message), contextTokens: 0 });
+    events.push({ type: 'turn', subtype: 'error_during_execution', isError: true, result: '', failed: true, queued: null, contextWindows: {}, usage: this.stream.usage });
     return events;
   }
 

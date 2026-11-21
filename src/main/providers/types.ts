@@ -130,6 +130,8 @@ export type AgentEvent =
       subtype: string;
       isError: boolean;
       result: string;
+      /** The program gave up on the turn on an error (its error frame says which), rather than being stopped. */
+      failed?: boolean;
       /** Prompts still waiting in the program's queue, when it says. */
       queued: number | null;
       /** The window the program reports for each model of the turn, by model id (a subagent's too). */

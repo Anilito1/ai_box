@@ -317,7 +317,7 @@ export class CodexProcess implements AgentProcess {
     for (const a of this.asks.values()) a.abort();
     this.queue.push(event ?? {
       type: 'turn', subtype: terminal === 'failed' ? 'error_during_execution' : terminal, isError: terminal === 'failed',
-      result: '', queued: this.pending.length, contextWindows: this.stream.contextSize ? { [this.model]: this.stream.contextSize } : {}, usage: this.stream.usage,
+      result: '', ...(terminal === 'failed' ? { failed: true } : {}), queued: this.pending.length, contextWindows: this.stream.contextSize ? { [this.model]: this.stream.contextSize } : {}, usage: this.stream.usage,
     });
     // Keep the old operation's terminal ahead of the next prompt's acceptance.
     if (advance) void this.startNext().catch((err) => this.queue.fail(err));

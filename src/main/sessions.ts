@@ -23,7 +23,8 @@ import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../
 import { keepAlive, KEEP_ALIVE_MAX_PINGS, MAX_PINGS, pingRead, programStamp, sameProgram } from '../shared/keepAlive';
 import { buildHandoff } from '../shared/passation';
 import { USAGE_MIN_GAP_MS, USAGE_POLL_MS, usageAccount, usageFailed, usageRead, usageState, type UsageRecord } from '../shared/usage';
-import { faultWait, FAULT_WAITS_MS, passingFault } from '../shared/providerFault';
+import { faultKind, faultWait, waitsOf, type FaultKind } from '../shared/providerFault';
+import { NetworkWatch, type NetworkWatchDeps } from './networkWatch';
 import { tokensOf, TurnTokens } from '../shared/pulse';
 import { portOf } from '../shared/backgroundTask';
 import { SCRATCH_DIR, SCRATCH_ENV, SCRATCH_PARENT, scratchName } from '../shared/purge';
@@ -187,10 +188,21 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   backNote: string;
   /** The provider's error of the reply in progress, if any: what its turn ends on. */
   fault: string;
+  /** That error's wording, for a program that ends such a turn without one (Codex, Gemini). */
+  faultText: string;
   /** Turns in a row that the provider cut. */
   faults: number;
   /** The wait before the hub asks it to take up a turn the provider cut. */
   faultTimer: NodeJS.Timeout | null;
+  /** What cut the turn that waits: a connection cut is tried again as soon as the network is back. */
+  cut: FaultKind | null;
+  /** When its process started: one older than the last network change may hold connections of the old network. */
+  launchedAt: number;
+  /** The model's last output, and the last time the turn handed it something to answer (a prompt, tool results). */
+  heardAt: number;
+  askedAt: number;
+  /** After a network change, the check of a turn that may hang on a connection of the old network. */
+  stallTimer: NodeJS.Timeout | null;
   /** The hub's tools served over HTTP to its running process (programs that cannot take them in-process), else null. */
   mcpLease: McpLease | null;
   /** True once the conversation exists on disk, i.e. it can be resumed. */
@@ -437,6 +449,8 @@ export interface ManagerOptions {
   wideFolders?(): string[];
   /** A worker's stretch of work ended: the purge's journal of who worked where, whatever the program. */
   onActivity?(record: ActivityRecord): void;
+  /** The computer's network, watched while a session works: a turn cut by a switch is taken up as soon as it is back. */
+  network?: NetworkWatchDeps;
 }
 
 export interface RemoteServerControl {
@@ -470,6 +484,16 @@ const HISTORY_MAX = 400;
 const REPORT_ITEMS = 12;
 // A queued message starts its turn within this delay; only a worker still idle after it has really stopped.
 const SILENCE_MS = 5_000;
+/**
+ * After a network change, a turn waiting for the model that hears nothing from it this long hangs on a connection of the
+ * old network: its process is started again on the same conversation. The program's own watch takes minutes.
+ */
+const STALL_MS = 90_000;
+/** When the network comes back, a cut turn is taken up after the new connection settles, sessions this far apart. */
+const NET_SETTLE_MS = 2_000;
+const NET_SPREAD_MS = 1_000;
+/** A connection cut due while the computer is offline is looked at again after this; the network's return comes first. */
+const OFFLINE_RECHECK_MS = 30_000;
 /** A diagnosis reads processes and files and writes a short report: a fast model is enough. */
 const DIAG_MODEL = 'sonnet';
 const DIAG_EFFORT: Effort = 'medium';
@@ -683,9 +707,14 @@ export class SessionManager extends EventEmitter {
   private reapRun: Promise<void> = Promise.resolve();
   /** Topics of the master's conversation; items a later call settles are filed again with theirs. */
   private readonly topics = new TopicTracker((ids, topic, also) => this.refile(ids, topic, also));
+  /** Watches the network while a session works or waits on it; none in tests unless given. */
+  private readonly net: NetworkWatch | null;
+  /** When the network last changed (0: not seen since the hub started). */
+  private netChangedAt = 0;
 
   constructor(private readonly opts: ManagerOptions) {
     super();
+    this.net = opts.network ? new NetworkWatch(opts.network, () => this.needsNetwork(), () => this.networkChanged()) : null;
     this.stateFile = join(opts.dataDir, 'state.json');
     this.attachDir = join(opts.dataDir, 'attachments');
     this.contextMemory = new TopicMemory(join(opts.dataDir, 'context-memory.sqlite'));
@@ -880,6 +909,7 @@ export class SessionManager extends EventEmitter {
   killAll(): void {
     this.quitting = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.net?.stop();
     try {
       this.save();
     } catch {
@@ -1952,6 +1982,7 @@ export class SessionManager extends EventEmitter {
     s.warmProgram = program;
     s.explorer = harness === 'claude' && !remote ? { cwd: spec.cwd, dirs: [...spec.extraDirs, ...spec.readDirs], executable: spec.executable, env: spec.env } : null;
     s.query = q;
+    s.launchedAt = Date.now();
     s.usageSeen = null;
     s.remoteExit = null;
     s.remoteRun = remote ? { state: 'live', conv: s.sessionId, seq: this.remoteSeq(s), ...(s.remoteRun?.interrupted ? { interrupted: true } : {}) } : null;
@@ -2530,6 +2561,8 @@ export class SessionManager extends EventEmitter {
     s.handoff = false;
     s.noteSending = false;
     this.clearFault(s);
+    if (s.stallTimer) clearTimeout(s.stallTimer);
+    s.stallTimer = null;
     this.resetActivity(s);
     if (s.noteFresh && !this.quitting) this.freshStart(s);
   }
@@ -2600,6 +2633,9 @@ export class SessionManager extends EventEmitter {
       s.warmAt = s.activeAt;
       s.pings = 0;
     }
+    // The model got through to this process; or the turn now waits on it.
+    if ((ev.type === 'assistant' && !ev.error) || ev.type === 'stream' || ev.type === 'output') s.heardAt = s.activeAt;
+    else if (ev.type === 'promptTaken' || ev.type === 'toolResults') s.askedAt = s.activeAt;
     switch (ev.type) {
       case 'conversation':
         s.started = true;
@@ -2695,6 +2731,7 @@ export class SessionManager extends EventEmitter {
         // An error frame is how a provider goes on to say the limit it just signalled: only a real reply ends it.
         if (!ev.error) s.limit = null;
         s.fault = ev.error;
+        s.faultText = ev.error ? ev.blocks.map((b) => (b.type === 'text' ? String(b.text ?? '') : '')).join('\n').trim() : '';
         this.markBusy(s, true);
         const mission = this.missions.get(s.id);
         if (mission) {
@@ -2822,7 +2859,8 @@ export class SessionManager extends EventEmitter {
         this.windows.learn(ev.contextWindows);
         this.setContext(s, s.metrics?.contextTokens ?? 0, this.windows.ofTurn(ev.contextWindows, model));
         this.countTurn(s, ev.usage);
-        this.afterFault(s, q, ok, ev.subtype === 'success' ? ev.result : '', handoff);
+        // Codex and Gemini end a turn they gave up on without its wording: their error frame has it.
+        this.afterFault(s, q, ok, ev.subtype === 'success' ? ev.result : ev.failed ? s.faultText : '', handoff, ev.subtype !== 'success');
         this.lookAgainSoon(s, q);
         if (s.switchPending || s.ultracodePending) setTimeout(() => this.switchIfDone(s, q), SILENCE_MS);
         if (s.fallbackPending) setTimeout(() => this.fallbackIfDone(s, q), SILENCE_MS);
@@ -2856,21 +2894,29 @@ export class SessionManager extends EventEmitter {
    * to take it up again, a few times, further and further apart. Until then it counts as working: it is neither put to
    * sleep nor reported silent. A turn that ends well clears the count; the handoff note has its own retry.
    */
-  private afterFault(s: Session, q: AgentProcess, ok: boolean, result: string, handoff: boolean): void {
+  private afterFault(s: Session, q: AgentProcess, ok: boolean, result: string, handoff: boolean, failed = false): void {
     const fault = s.fault;
     s.fault = '';
+    s.faultText = '';
     if (ok) s.faults = 0;
-    // A limit moves the session to another account; a queued message starts the next turn by itself.
-    if (ok || handoff || !result || !passingFault(fault, result) || s.fallbackPending || s.queued > 0 || s.closeWhenDone) return;
-    const wait = faultWait(++s.faults);
+    const kind = result ? faultKind(fault, result) : null;
+    // A limit moves the session to another account; a queued message starts the next turn by itself. A turn the program
+    // gave up on (Codex, Gemini) may have failed for any reason: only a connection cut is taken up.
+    if (ok || handoff || !kind || (failed && kind !== 'network') || s.fallbackPending || s.queued > 0 || s.closeWhenDone) return;
+    const waits = waitsOf(kind);
+    const wait = faultWait(++s.faults, Math.random(), waits);
+    const network = kind === 'network';
     if (wait === null) {
       s.faults = 0;
-      this.notice(s, t('notice.faultGaveUp', { n: FAULT_WAITS_MS.length }), 'error');
-      if (s.role === 'worker') this.notifyMaster(t('hub.faultGaveUp', { name: displayName(s), n: FAULT_WAITS_MS.length }), t('hub.faultGaveUp.note'), s);
+      this.notice(s, t(network ? 'notice.netGaveUp' : 'notice.faultGaveUp', { n: waits.length }), 'error');
+      if (s.role === 'worker') this.notifyMaster(t(network ? 'hub.netGaveUp' : 'hub.faultGaveUp', { name: displayName(s), n: waits.length }), t('hub.faultGaveUp.note'), s);
       return;
     }
-    this.notice(s, t('notice.faultRetry', { min: Math.max(1, Math.round(wait / 60_000)) }), 'info');
+    s.cut = kind;
+    if (network) this.notice(s, t('notice.netRetry', { delay: wait < 60_000 ? `${Math.max(1, Math.round(wait / 1000))} s` : `${Math.round(wait / 60_000)} min` }), 'info');
+    else this.notice(s, t('notice.faultRetry', { min: Math.max(1, Math.round(wait / 60_000)) }), 'info');
     s.faultTimer = setTimeout(() => this.resumeAfterFault(s, q), wait);
+    this.net?.wake();
   }
 
   private resumeAfterFault(s: Session, q: AgentProcess): void {
@@ -2880,7 +2926,86 @@ export class SessionManager extends EventEmitter {
     if (s.closeWhenDone) return this.closeIfDone(s, q);
     // Set to work again meanwhile (a message of a peer, a task that came back): that turn takes it up.
     if (s.status !== 'idle' || s.queued > 0) return this.changed();
-    this.deliver(s, { text: `${tags().hub} ${t('hub.faultResume')}`, images: [], from: 'hub' });
+    const network = s.cut === 'network';
+    // No network at all: a try would only fail and count. The network's return sets it off; this is the fallback.
+    if (network && !this.online()) {
+      s.faultTimer = setTimeout(() => this.resumeAfterFault(s, q), OFFLINE_RECHECK_MS);
+      return;
+    }
+    const prompt: Prompt = { text: `${tags().hub} ${t(network ? 'hub.netResume' : 'hub.faultResume')}`, images: [], from: 'hub' };
+    // Cut again by a process older than the last network change: its connections may still be the old network's
+    // (Claude Code keeps them, anthropics/claude-code#23744). A new process on the same conversation takes the turn up.
+    if (network && s.faults >= 2 && this.mayRestart(s)) return this.restartOnConversation(s, q, prompt);
+    this.deliver(s, prompt);
+  }
+
+  private online(): boolean {
+    return this.net?.online() ?? true;
+  }
+
+  /** A session works or waits on the network: the watch runs. Nothing is watched while none does. */
+  private needsNetwork(): boolean {
+    for (const s of this.sessions.values()) if (s.query && (s.status === 'busy' || s.faultTimer || s.stallTimer)) return true;
+    return false;
+  }
+
+  /**
+   * The network changed (another connection, a hotspot, back from sleep). A turn cut by the connection is taken up now
+   * rather than after its wait (a few seconds apart, the new connection settling first); a turn waiting on the model is
+   * watched, in case its request hangs on a connection of the old network.
+   */
+  networkChanged(): void {
+    if (this.quitting) return;
+    this.netChangedAt = Date.now();
+    const online = this.online();
+    let at = NET_SETTLE_MS;
+    for (const s of this.sessions.values()) {
+      const q = s.query;
+      if (!q) continue;
+      if (s.faultTimer && s.cut === 'network') {
+        if (!online) continue;
+        clearTimeout(s.faultTimer);
+        s.faultTimer = setTimeout(() => this.resumeAfterFault(s, q), at);
+        at += NET_SPREAD_MS;
+      } else if (s.status === 'busy' && !s.remoteRun) this.watchStall(s, q, this.netChangedAt, STALL_MS);
+    }
+  }
+
+  private watchStall(s: Session, q: AgentProcess, since: number, wait: number): void {
+    if (s.stallTimer) clearTimeout(s.stallTimer);
+    s.stallTimer = setTimeout(() => this.checkStall(s, q, since), wait);
+    this.net?.wake();
+  }
+
+  /** A turn that heard nothing from the model since the network changed, while nothing else of it runs: started again. */
+  private checkStall(s: Session, q: AgentProcess, since: number): void {
+    s.stallTimer = null;
+    // Over, replaced, or the model got through: this process reaches it.
+    if (s.query !== q || this.quitting || s.status !== 'busy' || s.heardAt >= since) return;
+    // A tool, a subagent or a compaction at work, or no network: looked at again later. A turn that only now handed
+    // the model something gets the whole delay.
+    const left = STALL_MS - (Date.now() - Math.max(since, s.askedAt));
+    if (s.tools.size > 0 || s.agents > 0 || s.compacting || !this.online()) return this.watchStall(s, q, since, STALL_MS / 3);
+    if (left > 0) return this.watchStall(s, q, since, left);
+    if (!this.mayRestart(s)) return;
+    this.restartOnConversation(s, q, { text: `${tags().hub} ${t('hub.netResume')}`, images: [], from: 'hub' });
+  }
+
+  /** Started before the last network change, on this PC, with a conversation to take up (and no handoff note that would start a new one). */
+  private mayRestart(s: Session): boolean {
+    return s.launchedAt < this.netChangedAt && !s.remoteRun && s.started && !s.noteFresh && !s.closeWhenDone;
+  }
+
+  /** A new process on the same conversation, which takes the cut turn up (unless a queued message does). */
+  private restartOnConversation(s: Session, q: AgentProcess, prompt: Prompt): void {
+    s.inbox?.close();
+    this.teardown(s);
+    q.close();
+    this.notice(s, t('notice.netRestart'), 'info');
+    this.event(s, 'retry');
+    if (s.queued > 0) void this.launch(s, true);
+    else this.deliver(s, prompt);
+    this.changed();
   }
 
   private wentIdle(s: Session): void {
@@ -3007,6 +3132,7 @@ export class SessionManager extends EventEmitter {
       s.tokens.reset(); // A reading that came between turns belongs to neither.
     }
     s.status = 'busy';
+    this.net?.wake();
   }
 
   /** Nothing running and nothing on the way: no turn, no background task, no prompt waiting in the queue. */
@@ -5551,8 +5677,14 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       tokens: new TurnTokens(),
       limit: null,
       fault: '',
+      faultText: '',
       faults: 0,
       faultTimer: null,
+      cut: null,
+      launchedAt: 0,
+      heardAt: 0,
+      askedAt: 0,
+      stallTimer: null,
       error: '',
       sessionId: randomUUID(),
       started: false,
