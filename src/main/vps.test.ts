@@ -8,6 +8,8 @@ import { LAUNCHER_VERSION, type ServerStatus, type VpsState } from '../shared/vp
 import { parseRemote } from './remote';
 import { newTopic, VpsWizard, type Exec, type Tty } from './vps';
 
+/** Local checkouts, absolute on this platform (the wizard resolves them). */
+const [SITE, OTHER] = process.platform === 'win32' ? ['C:\\code\\site', 'C:\\code\\other'] : ['/code/site', '/code/other'];
 const KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample';
 
 /**
@@ -110,7 +112,7 @@ function wizard(allowed = ['octo/site', 'octo/shop', 'acme-corp/crm']) {
     user: 'me',
     current: () => saved,
     save: (r) => (saved = parseRemote(r)),
-    checkouts: () => ['C:\\code\\site', 'C:\\code\\other'],
+    checkouts: () => [SITE, OTHER],
     originOf: (dir) => (dir.endsWith('site') ? 'github.com/octo/site' : 'github.com/acme-corp/crm'),
     token: () => token,
     githubRepos: async (owners, t) => {
@@ -192,7 +194,7 @@ test('"owner/*": the server holds what GitHub gives the token of that owner, nev
   assert.deepEqual(fake.srv.listed, [['octo', 'github_pat_example_0123456789']]);
   assert.deepEqual(s.repos.map((k) => k.slug), ['octo/site', 'octo/shop']);
   assert.deepEqual(saved().allowed, ['octo/*', 'acme-corp/crm']);
-  assert.deepEqual(saved().repos, { 'C:\\code\\site': '/home/aibox/repos/site' });
+  assert.deepEqual(saved().repos, { [SITE]: '/home/aibox/repos/site' });
 });
 
 test('a refused address never reaches ssh', async () => {

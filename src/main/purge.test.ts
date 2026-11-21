@@ -209,7 +209,7 @@ test('purge roots: too wide, system, network, the app\'s data and relative folde
     assert.equal(svc.rootProblem(fx.base), 'wide');
     assert.equal(svc.rootProblem(join(fx.base, 'system', 'x')), 'system');
     assert.equal(svc.rootProblem(join(fx.data, 'scratch')), 'appData');
-    assert.equal(svc.rootProblem('\\\\server\\share\\p'), 'network');
+    assert.equal(svc.rootProblem(process.platform === 'win32' ? '\\\\server\\share\\p' : '//server/share/p'), 'network');
     assert.equal(svc.rootProblem('relative/p'), 'relative');
     assert.equal(svc.rootProblem(join(homedir(), '.claude', 'projects')), 'system');
     assert.equal(svc.addProject(join(fx.base, 'nope')), 'missing');
