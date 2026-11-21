@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { z, type ZodRawShape } from 'zod';
 import { ContextWindows } from '../shared/contextWindow';
-import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type MissionEvent, type Totals } from '../shared/costs';
+import { addUsage, sumUsage, turnDelta, ZERO, type CostRole, type MissionEvent, type Totals, type TurnRecord, type Usage } from '../shared/costs';
 import { capReached, isSafeBranch, topicOf, type KeepReason } from '../shared/parallel';
 import { pruneFolders } from '../shared/teamFolders';
 import { resolveTopicRepo } from '../shared/topicGroups';
@@ -18,7 +18,7 @@ import { FILE_LIMITS, type AttachedFile, type FileInput } from '../shared/attach
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
-import { DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
+import { costProviderOf, DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { keepAlive, KEEP_ALIVE_MAX_PINGS, MAX_PINGS, pingRead, programStamp, sameProgram } from '../shared/keepAlive';
 import { buildHandoff } from '../shared/passation';
@@ -133,11 +133,12 @@ import { installPlan, makeTrees, planText, retireTree, runInstall, type InstallP
 import { adapterFor } from './providers';
 import { claudeLimit } from './providers/claude/events';
 import { Inbox, type InboxEntry } from './providers/inbox';
+import { builtinRate, priceTurn, type Rate } from './providers/pricing';
 import { EXIT_WAIT_MS, leftBehind, listProcs, reapTrees, type CliProc } from './procTree';
 import { winJobs } from './winJobs';
 import { explore, type ExploreHost } from './providers/claude/explore';
 import { textModels } from '../shared/video';
-import type { VideoService } from './video/service';
+import { videoSpending, type VideoService, type VideoSpend } from './video/service';
 import { videoTools } from './video/tools';
 import { DIAG_ACTIVITY, diagContext, diagMission, diagPrompt, type DiagFacts } from './diagnosis';
 import { readReport, type DiagnosisView } from '../shared/diagnosis';
@@ -443,6 +444,8 @@ export interface ManagerOptions {
   persist(): void;
   /** Where each turn's cost goes. */
   costLog: CostLog;
+  /** The prices the providers' model lists give: the turns spent there are priced with them (else the hub's own). */
+  prices?: { rate(provider: string, model: string, at?: number): Rate | undefined };
   /** The MCP servers and skills installed, as list_capabilities gives them. */
   capabilities(): Promise<string>;
   /** The providers' video models and the videos made with them: list_video_models and generate_video. */
@@ -1212,6 +1215,11 @@ export class SessionManager extends EventEmitter {
     );
   }
 
+  /** A provider's name for the user: its block's, the name of the one the user added, else its id. */
+  private providerLabel(id: string): string {
+    return this.providerBadges().find((p) => p.id === id)?.label ?? id;
+  }
+
   /** The built-in providers, then the ones the user added (by their id, under the name they gave). */
   private providerBadges(): ProviderBadge[] {
     const defs = [...PROVIDER_DEFS.map((d) => ({ id: d.id as string, label: d.label })), ...this.opts.cfg.accounts.filter(isCustomAccount).map((a) => ({ id: a.slug, label: a.name }))];
@@ -1742,6 +1750,8 @@ export class SessionManager extends EventEmitter {
         }),
       );
     }
+    const unpriced = mine.filter((r) => r.unpriced?.length);
+    if (unpriced.length > 0) lines.push(tn('notice.costUnpriced', unpriced.length, { n: unpriced.length, provider: [...new Set(unpriced.map((r) => this.providerLabel(r.provider ?? '')))].join(', ') }));
     if (s.createdAt < costLog.since) lines.push(t('notice.costSince', { date: new Date(costLog.since).toLocaleDateString(lang(), { day: 'numeric', month: 'long' }) }));
     this.notice(s, lines.join(' · '), 'info');
   }
@@ -3297,6 +3307,30 @@ export class SessionManager extends EventEmitter {
     return s.role === 'master' ? 'master' : s.roleId ? 'post' : s.instanceOf ? 'instance' : 'worker';
   }
 
+  /**
+   * Where what a session spends on an account counts, and what it cost there: the account's provider, its models
+   * priced at that provider's rates (priceTurn: Claude Code's own figure is at Anthropic's, whatever the server).
+   */
+  private spending(account: string, models: Record<string, Usage>, at: number): Pick<TurnRecord, 'models' | 'provider' | 'unpriced'> {
+    const id = this.canon(account);
+    const provider = costProviderOf(this.opts.cfg.accounts.find((a) => a.id === id));
+    const rate = (model: string) => (this.opts.prices ? this.opts.prices.rate(provider, model, at) : builtinRate(provider, model, at));
+    const priced = priceTurn(provider, harnessOf(this.kindOf(id)), models, rate);
+    return { models: priced.models, provider, ...(priced.unpriced.length > 0 ? { unpriced: priced.unpriced } : {}) };
+  }
+
+  /**
+   * A video queued for a session: its price (the provider's quote) goes to the cost log under its provider, marked
+   * unpriced when the provider gave none, and to the session's cost.
+   */
+  private videoSpent(s: Session, v: VideoSpend): void {
+    const mission = this.missions.get(s.id)?.id;
+    const models = { [v.model]: { ...ZERO, cost: v.usd ?? 0 } };
+    this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role: this.costRole(s), models, provider: v.provider, ...(v.usd === null ? { unpriced: [v.model] } : {}), repo: this.repoOfDir(s.cwd) ?? '', ...(mission ? { mission } : {}), kind: 'video' });
+    if (s.metrics && v.usd) s.metrics.costUsd += v.usd;
+    this.changed();
+  }
+
   /** A result's running totals: what the turn spent goes to the cost log and to the session's cost (card, status bar). */
   private countTurn(s: Session, totals: Totals): void {
     const prev = s.usageSeen;
@@ -3306,6 +3340,7 @@ export class SessionManager extends EventEmitter {
     if (harnessOf(this.kindOf(s.runAccount || this.accountOf(s))) === 'gemini') s.geminiUsage = totals;
     const at = Date.now();
     const role = this.costRole(s);
+    const account = s.runAccount || this.accountOf(s);
     // What the turn did, for the missions in the cost panel: counted since the last turn, then started over.
     const m = this.missions.get(s.id);
     const work = { ...(m ? { mission: m.id, tools: m.tools, errors: m.errors, ...(m.since ? { ms: at - m.since } : {}) } : {}), ...(s.effort ? { effort: s.effort } : {}) };
@@ -3314,10 +3349,11 @@ export class SessionManager extends EventEmitter {
       if (before === 'unknown') return;
       const models = turnDelta(before, totals);
       if (!models) return;
-      this.opts.costLog.append({ at, id: s.id, name: s.name, role, models, repo: this.repoOfDir(s.cwd) ?? '', ...work });
+      const spent = this.spending(account, models, at);
+      this.opts.costLog.append({ at, id: s.id, name: s.name, role, ...spent, repo: this.repoOfDir(s.cwd) ?? '', ...work });
       if (!s.metrics) return;
       const costBefore = s.metrics.costUsd;
-      s.metrics.costUsd += sumUsage(models).cost;
+      s.metrics.costUsd += sumUsage(spent.models).cost;
       if (COST_MILESTONES.some((m) => costBefore < m && (s.metrics?.costUsd ?? 0) >= m)) this.event(s, 'cost_milestone');
       this.changed();
     });
@@ -3878,7 +3914,8 @@ export class SessionManager extends EventEmitter {
         .then(
           (result) => {
             if (Object.keys(result.totals.models).length > 0) {
-              this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role, models: result.totals.models, repo: this.repoOfDir(s.cwd) ?? '', kind: 'keepAlive' });
+              const at = Date.now();
+              this.opts.costLog.append({ at, id: s.id, name: s.name, role, ...this.spending(s.runAccount || this.accountOf(s), result.totals.models, at), repo: this.repoOfDir(s.cwd) ?? '', kind: 'keepAlive' });
             }
             return pingRead(result);
           },
@@ -4079,7 +4116,8 @@ export class SessionManager extends EventEmitter {
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
     const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
     // Videos are made by the hub with a provider's video model, for any session that asks; such a model runs none.
-    const video = this.opts.video ? videoTools(this.opts.video, () => s.cwd, run) : [];
+    // The videos one of its calls queues are this session's spending.
+    const video = this.opts.video ? videoTools(this.opts.video, () => s.cwd, (fn) => run(() => videoSpending.run((v) => this.videoSpent(s, v), fn))) : [];
     const memory = tool('topic_memory', t(role === 'worker' ? 'tool.topicMemory.worker' : 'tool.topicMemory'),
       {
         topic: z.string().optional(), action: z.enum(['read', 'update', 'decision', 'remember', 'compact']),
@@ -4344,7 +4382,9 @@ export class SessionManager extends EventEmitter {
           const r = await explore(host, { question: a.question, paths: a.paths ?? [], thorough: a.thorough === true }, signal);
           if (r.totals && Object.keys(r.totals.models).length > 0) {
             const mission = this.missions.get(s.id)?.id;
-            this.opts.costLog.append({ at: Date.now(), id: s.id, name: s.name, role: this.costRole(s), models: r.totals.models, repo: this.repoOfDir(s.cwd) ?? '', ...(mission ? { mission } : {}), kind: 'explore' });
+            const at = Date.now();
+            const spent = this.spending(s.runAccount || this.accountOf(s), r.totals.models, at);
+            this.opts.costLog.append({ at, id: s.id, name: s.name, role: this.costRole(s), ...spent, repo: this.repoOfDir(s.cwd) ?? '', ...(mission ? { mission } : {}), kind: 'explore' });
           }
           if (r.error) throw new Error(r.text);
           return r.text;

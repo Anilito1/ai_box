@@ -3937,6 +3937,12 @@ kbd,
 .sb-cost:hover {
   background: var(--hover-strong);
 }
+/* Some of today's turns have no known price: not in the figure. */
+.sb-unpriced {
+  margin-left: 2px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
 
 .cost-panel {
   /* One series: the accent, a step lighter on the dark surface (validated: lightness band and 3:1 against it). */
@@ -3998,6 +4004,16 @@ kbd,
 .cost-periods .seg {
   white-space: nowrap;
 }
+/* Total, then each provider: they wrap onto a second line rather than squeeze their names. */
+.cost-providers {
+  flex-wrap: wrap;
+}
+.cost-providers .seg {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
 .cost-body {
   display: flex;
   flex-direction: column;
@@ -4024,14 +4040,41 @@ kbd,
 .cost-missions {
   margin-top: 12px;
 }
-.cost-missions-title {
+.cost-missions-title,
+.cost-section-title {
   font-size: 11px;
   color: var(--text-dim);
   margin: 0 0 4px;
 }
-.cost-mission-facts {
+.cost-mission-facts,
+.cost-facts {
   grid-column: 1 / -1;
   font-size: 11px;
+}
+/* Tokens or videos without a known price: said, never shown as $0.00. */
+.cost-unpriced {
+  margin-top: calc(-1 * var(--sp-2));
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+.cost-row-unpriced {
+  color: var(--warn);
+}
+.cost-amount-unknown {
+  color: var(--text-3);
+  font-style: italic;
+}
+/* A provider of the Total view opens its own. */
+.cost-pick {
+  margin: 0 calc(-1 * var(--sp-2));
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.cost-pick:hover,
+.cost-pick:focus-visible {
+  background: var(--hover);
+  outline: none;
 }
 
 .cost-list {

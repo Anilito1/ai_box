@@ -34,10 +34,10 @@ export class CostLog {
     this.day = this.readDay(Date.now());
   }
 
-  /** Today's cost; 0 from midnight on. */
+  /** Today's cost, and how many of its turns have a part without a known price; 0 from midnight on. */
   today(now = Date.now()): DayCost {
     const day = dayOf(now);
-    if (this.day.day !== day) this.day = { day, cost: 0 };
+    if (this.day.day !== day) this.day = { day, cost: 0, unpriced: 0 };
     return this.day;
   }
 
@@ -46,6 +46,7 @@ export class CostLog {
     const day = dayOf(now);
     const end = dayOf(day + 36 * 3_600_000);
     let cost = 0;
+    let unpriced = 0;
     for (const name of new Set([monthFile(day), monthFile(end - 1)])) {
       let text: string;
       try {
@@ -55,10 +56,12 @@ export class CostLog {
       }
       for (const line of text.split('\n')) {
         const r = line ? decodeRecord(line) : null;
-        if (r && r.at >= day && r.at < end) cost += sumUsage(r.models).cost;
+        if (!r || r.at < day || r.at >= end) continue;
+        cost += sumUsage(r.models).cost;
+        if (r.unpriced?.length) unpriced++;
       }
     }
-    return { day, cost };
+    return { day, cost, unpriced };
   }
 
   private readSince(): number {
@@ -82,7 +85,7 @@ export class CostLog {
   append(record: TurnRecord): void {
     const line = `${encodeRecord(record)}\n`;
     const today = this.today();
-    if (dayOf(record.at) === today.day) this.day = { ...today, cost: today.cost + sumUsage(record.models).cost };
+    if (dayOf(record.at) === today.day) this.day = { day: today.day, cost: today.cost + sumUsage(record.models).cost, unpriced: (today.unpriced ?? 0) + (record.unpriced?.length ? 1 : 0) };
     this.tail = this.tail
       .then(async () => {
         await mkdir(this.dir, { recursive: true });

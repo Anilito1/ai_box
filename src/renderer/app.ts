@@ -418,8 +418,10 @@ function renderStatusbar(usage: UsageState | null): void {
   const attention = workers.filter((s) => s.status === 'attention').length;
   const master = snapshot.sessions.find((s) => s.role === 'master');
   // From midnight on, today's figure is 0 until a turn brings a new snapshot.
-  const today = snapshot.costToday.day === dayOf(Date.now()) ? snapshot.costToday.cost : 0;
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), usage, usageClock()]);
+  const sameDay = snapshot.costToday.day === dayOf(Date.now());
+  const today = sameDay ? snapshot.costToday.cost : 0;
+  const unpriced = sameDay ? (snapshot.costToday.unpriced ?? 0) : 0;
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), unpriced, usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -434,12 +436,13 @@ function renderStatusbar(usage: UsageState | null): void {
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
   $('sb-left').replaceChildren(...left);
 
-  // Today's cost; a click opens the cost by repo.
+  // Today's cost; a click opens the cost by provider and by repo. Turns without a known price are not in it: "+?" says so.
   const cost = h('button', 'sb-item sb-cost');
-  cost.title = `${t('sb.costHint')}\n${t('cost.open')}`;
+  cost.title = [t('sb.costHint'), ...(unpriced > 0 ? [tn('sb.costUnpriced', unpriced, { n: unpriced })] : []), t('cost.open')].join('\n');
   cost.setAttribute('aria-haspopup', 'dialog');
   cost.append(h('span', '', t('sb.cost')), h('span', 'sb-num', fmtCost(today)));
-  cost.addEventListener('click', () => toggleCostPanel(hub, cost));
+  if (unpriced > 0) cost.append(h('span', 'sb-unpriced', '+?'));
+  cost.addEventListener('click', () => toggleCostPanel(hub, cost, () => snapshot.providers));
   const right: HTMLElement[] = [cost];
   // Only the windows that apply to the account and hold a figure; none: the cost item tells why in its hint.
   const gauges = usage ? usageGauges(usage, Date.now()) : [];

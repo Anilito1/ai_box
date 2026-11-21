@@ -4,7 +4,7 @@ import { test } from 'node:test';
 // The periods follow the computer's time zone: these tests pin one with a change of time (25 Oct 2026, 03:00 → 02:00).
 process.env.TZ = 'Europe/Paris';
 
-const { decodeMission, decodeRecord, encodeMission, encodeRecord, missionRows, modelName, periodRange, summarize, totalsOf, turnDelta } = await import('./costs');
+const { byProvider, decodeMission, decodeRecord, encodeMission, encodeRecord, missionRows, modelName, ofProvider, periodRange, recordProvider, summarize, totalsOf, turnDelta } = await import('./costs');
 type TurnRecord = import('./costs').TurnRecord;
 
 const u = (cost: number, input = 0, output = 0, cacheRead = 0, cacheWrite = 0) => ({ cost, input, output, cacheRead, cacheWrite });
@@ -171,4 +171,67 @@ test('a keep-alive or an exploration counts in the cost, not in the turns', () =
   assert.equal(+sum.total.cost.toFixed(2), 1.11);
   const [row] = missionRows([work, helper], [{ at: day - 1, mission: 'm-1', id: 'w', name: 'hub-w', kind: 'start', model: 'opus', effort: 'high', by: 'master' }]);
   assert.deepEqual([row.turns, +row.cost.toFixed(2)], [1, 1.01]);
+});
+
+test('a turn keeps its provider and its models without a price; a video is logged as such', () => {
+  const r: TurnRecord = { at: 1, id: 'w', name: 'hub-w', role: 'worker', models: { 'venice-uncensored': u(0.9, 1_000_000, 100_000), 'qwen-x': u(0, 5000, 10) }, provider: 'venice', unpriced: ['qwen-x'] };
+  const back = decodeRecord(encodeRecord(r));
+  assert.equal(back?.provider, 'venice');
+  assert.deepEqual(back?.unpriced, ['qwen-x']);
+  const video: TurnRecord = { ...r, models: { 'wan-2.5': u(0.085) }, unpriced: undefined, kind: 'video' };
+  assert.equal(decodeRecord(encodeRecord(video))?.kind, 'video');
+  assert.equal('unpriced' in (decodeRecord(encodeRecord(video)) ?? {}), false, 'nothing without a price: no mark');
+  // A model marked that the turn does not have, or junk, is dropped; an empty provider is none.
+  const odd = decodeRecord(encodeRecord(r).replace('"up":["qwen-x"]', '"up":["nope",3,"qwen-x"]').replace('"p":"venice"', '"p":""'));
+  assert.deepEqual([odd?.unpriced, 'provider' in (odd ?? {})], [['qwen-x'], false]);
+});
+
+test('the turns logged before the provider was kept are still read, and go to the provider their models say', () => {
+  // A line as the hub wrote it before: no "p", no "up".
+  const old = decodeRecord('{"t":1700000000000,"id":"w","n":"hub-w","r":"worker","m":{"claude-opus-5-5":[1.5,10,20,30,40]},"w":"/dev/shop"}');
+  assert.ok(old);
+  assert.equal(old.provider, undefined);
+  assert.equal(recordProvider(old), 'anthropic');
+  const legacy = (model: string) => recordProvider({ models: { [model]: u(1) } });
+  assert.deepEqual(['gpt-5.3-codex', 'gemini-2.5-pro', 'deepseek-v4-pro', 'sonnet', 'mystery-model'].map(legacy), ['openai', 'gemini', 'deepseek', 'anthropic', 'anthropic']);
+  // A provider the user added that lists the model now; the provider logged always wins.
+  const known = (m: string) => (m === 'venice-uncensored' ? 'venice' : undefined);
+  assert.equal(recordProvider({ models: { 'venice-uncensored': u(1) } }, known), 'venice');
+  assert.equal(recordProvider({ models: { 'venice-uncensored': u(1) }, provider: 'openrouter' }, known), 'openrouter');
+});
+
+test('by provider: each at its own prices, the general total is their sum, a price unknown is said and never $0', () => {
+  const day = at(2026, 11, 21, 10);
+  const range = periodRange('today', new Date(day));
+  const w = { id: 'w', name: 'hub-w', role: 'worker' as const };
+  const records: TurnRecord[] = [
+    { ...w, at: day, models: { 'claude-opus-5-5': u(100, 1000, 100) } }, // logged before the provider was kept: Anthropic
+    { ...w, at: day + 1, models: { 'venice-uncensored': u(1.5, 1_000_000, 100_000), 'qwen-x': u(0, 2_000_000, 50_000) }, provider: 'venice', unpriced: ['qwen-x'] },
+    { ...w, at: day + 2, models: { 'wan-2.5': u(0.5) }, provider: 'venice', kind: 'video' },
+    { ...w, at: day + 3, models: { 'kling-x': u(0) }, provider: 'venice', kind: 'video', unpriced: ['kling-x'] },
+    { ...w, at: day + 4, models: { 'gpt-6.1-sol': u(14, 2_000_000, 1_000_000) }, provider: 'openai' },
+    { ...w, at: day + 5, models: { 'deepseek-v4-pro': u(2, 1_000_000, 100_000) }, provider: 'deepseek' },
+    { ...w, at: day - 86_400_000, models: { 'gpt-6.1-sol': u(99) }, provider: 'openai' }, // another day
+  ];
+  const rows = byProvider(records, range);
+  assert.deepEqual(rows.map((r) => [r.key, +r.usage.cost.toFixed(2), r.turns, r.videos]), [['anthropic', 100, 1, 0], ['openai', 14, 1, 0], ['venice', 2, 1, 2], ['deepseek', 2, 1, 0]]); // same cost: the most tokens first
+  const venice = rows.find((r) => r.key === 'venice');
+  assert.deepEqual(venice?.unpriced, { tokens: 2_050_000, videos: 1 });
+  assert.deepEqual(rows.find((r) => r.key === 'openai')?.unpriced, { tokens: 0, videos: 0 });
+
+  const all = summarize(records, range);
+  assert.equal(+all.total.cost.toFixed(2), 118);
+  assert.equal(+all.total.cost.toFixed(2), +rows.reduce((sum, r) => sum + r.usage.cost, 0).toFixed(2));
+  assert.deepEqual([all.turns, all.videos, all.unpriced], [4, 2, { tokens: 2_050_000, videos: 1 }]);
+
+  // One provider's view: its turns alone, by model, the one without a price last and marked.
+  const mine = summarize(ofProvider(records, 'venice'), range);
+  assert.deepEqual([+mine.total.cost.toFixed(2), mine.turns, mine.videos], [2, 1, 2]);
+  assert.deepEqual(mine.models.map((m) => [m.model, m.usage.cost, m.unpriced]), [
+    ['venice-uncensored', 1.5, { tokens: 0, videos: 0 }],
+    ['wan-2.5', 0.5, { tokens: 0, videos: 0 }],
+    ['qwen-x', 0, { tokens: 2_050_000, videos: 0 }],
+    ['kling-x', 0, { tokens: 0, videos: 1 }],
+  ]);
+  assert.equal(ofProvider(records, 'anthropic').length, 1);
 });

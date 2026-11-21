@@ -6,7 +6,7 @@ import { after, test } from 'node:test';
 import type { Account } from '../../shared/types';
 import { manualVideoModel, type VideoModel } from '../../shared/video';
 import { runVideo, videoRequest, VideoRunError } from './generate';
-import { VideoService } from './service';
+import { videoSpending, VideoService, type VideoSpend } from './service';
 import { venice, veniceError, veniceModel } from './venice';
 
 // Venice's video API, answered here: no call leaves this computer, and the key is a made-up one.
@@ -323,4 +323,38 @@ test('the hub’s video service: the models of each provider, a video made by it
   await assert.rejects(keyless.generate({ prompt: 'a fox', model: T2V.id }, { cwd, signal }), /No key is stored for venice/);
   const none = new VideoService({ accounts: () => [accounts[1]], key: () => KEY, outDir: () => outDir, fetch: s.fetch });
   await assert.rejects(none.list({}, signal), /No provider with a video API is connected/);
+});
+
+test('a video queued is a spending of its provider, at the price it quoted; a quote alone or a resumed job is none', async () => {
+  let quote: unknown = 0.085;
+  let ready = false;
+  const s = server({
+    '/models?type=video': () => json(LISTED),
+    '/video/quote': () => (quote === 'down' ? json({ error: 'busy' }, 500) : json({ quote })),
+    '/video/queue': (_c, n) => json({ model: T2V.id, queue_id: `q-s${n}` }),
+    '/video/retrieve': () => (ready ? mp4() : json({ status: 'PROCESSING', average_execution_time: 1, execution_duration: 1 })),
+    '/video/complete': () => json({ success: true }),
+  });
+  const accounts = [account()];
+  const video = new VideoService({ accounts: () => accounts, key: () => KEY, outDir: folder, fetch: s.fetch, ...clock() });
+  const spent: VideoSpend[] = [];
+  const ctx = { cwd: folder(), signal: new AbortController().signal };
+  // The session that calls sets who pays around its call, as sessions.ts does.
+  const call = (args: Parameters<VideoService['generate']>[0]) => videoSpending.run((v) => spent.push(v), () => video.generate(args, ctx));
+
+  await call({ prompt: 'a fox', model: T2V.id, quote_only: true });
+  assert.deepEqual(spent, [], 'a quote alone spends nothing');
+  // Queued, then not waited for: paid all the same.
+  await assert.rejects(call({ prompt: 'a fox', model: T2V.id, wait_minutes: 1 }), /job_id "q-s1"/);
+  assert.deepEqual(spent, [{ provider: 'venice', model: T2V.id, usd: 0.085 }]);
+  ready = true;
+  await call({ job_id: 'q-s1' });
+  assert.equal(spent.length, 1, 'a resumed job is not paid twice');
+  // A price the provider could not give: the video is made, its price said unknown.
+  quote = 'down';
+  await call({ prompt: 'a fox', model: T2V.id });
+  assert.deepEqual(spent.at(-1), { provider: 'venice', model: T2V.id, usd: null });
+  // Outside a session's call (no one to charge): made all the same, nothing logged.
+  await video.generate({ prompt: 'a fox', model: T2V.id }, ctx);
+  assert.equal(spent.length, 2);
 });

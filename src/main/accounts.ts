@@ -7,6 +7,7 @@ import type { Account, AccountStatus } from '../shared/types';
 import { modelKind } from '../shared/video';
 import { adjustRequest, errorMessage } from './bridgeFormat';
 import { errorCode, httpCode } from './errors';
+import { listedRates, type Rate } from './providers/pricing';
 
 // The accounts' side of the main process: the Claude Code folder of each Claude account, the environment that puts
 // a session on an account, and the checks the settings run. The sign-ins themselves stay inside Claude Code.
@@ -177,11 +178,14 @@ export function accountEnv(account: Account, ctx: AccountEnvContext): { set: Rec
 const OPENAI_KEY = /^[\w.:\-/+=]{8,400}$/;
 export const isOpenAIKey = (key: string) => OPENAI_KEY.test(key);
 
+/** A check of a server's model list, with the prices it gives (Venice, OpenRouter), for the cost of its sessions' turns. */
+export type ListedStatus = AccountStatus & { prices?: Record<string, Rate> };
+
 /**
- * Checks an OpenAI (or compatible) server with its model list, a free call: ready with the models it lists, or an
- * error code. A local server may need no key.
+ * Checks an OpenAI (or compatible) server with its model list, a free call: ready with the models it lists and the
+ * prices it gives, or an error code. A local server may need no key.
  */
-export async function checkOpenAI(baseUrl: string, key: string): Promise<AccountStatus> {
+export async function checkOpenAI(baseUrl: string, key: string): Promise<ListedStatus> {
   const none: AccountStatus = { ready: false, detail: '', error: '', models: [] };
   if (!key && !isLocalUrl(baseUrl)) return { ...none, error: 'no-key' };
   try {
@@ -205,7 +209,8 @@ export async function checkOpenAI(baseUrl: string, key: string): Promise<Account
       .filter((id): id is string => typeof id === 'string')
       .sort()
       .slice(0, 500);
-    return { ready: true, detail: '', error: '', models };
+    const prices = listedRates(body.data);
+    return { ready: true, detail: '', error: '', models, ...(Object.keys(prices).length > 0 ? { prices } : {}) };
   } catch (err) {
     return { ...none, error: errorCode(err) };
   }
@@ -234,7 +239,7 @@ export async function readCapped(res: Response, max: number): Promise<string> {
  * Checks a provider the user added with its model list. A server without one (404, 405, 501) is ready all the same,
  * unchecked: its key shows at the first request. A refused key or an unreachable server is an error.
  */
-export async function checkCustom(baseUrl: string, key: string): Promise<AccountStatus> {
+export async function checkCustom(baseUrl: string, key: string): Promise<ListedStatus> {
   const st = await checkOpenAI(baseUrl, key);
   return !st.ready && /^http-(404|405|501)$/.test(st.error) ? { ready: true, detail: 'unchecked', error: '', models: [] } : st;
 }

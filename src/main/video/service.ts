@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
-import { isCustomAccount } from '../../shared/providers';
+import { costProviderOf, isCustomAccount } from '../../shared/providers';
 import type { Account, ProviderVideoView } from '../../shared/types';
 import { mergeVideoModels, videoApiOf, type VideoModel } from '../../shared/video';
 import { t } from '../i18n';
@@ -39,6 +40,19 @@ export interface VideoServiceOptions {
   now?(): number;
   sleep?(ms: number, signal: AbortSignal): Promise<void>;
 }
+
+/** A video queued at a provider: its model and its price (the provider's quote, null when it gave none). */
+export interface VideoSpend {
+  provider: string;
+  model: string;
+  usd: number | null;
+}
+
+/**
+ * Who pays for the videos queued inside a call: the session that called generate_video sets it around the call
+ * (sessions.ts), the cost log gets each video queued in it. Set by the caller, not passed along: the tools stay as they are.
+ */
+export const videoSpending = new AsyncLocalStorage<(v: VideoSpend) => void>();
 
 /** What generate_video takes, as the tool's schema names it. */
 export interface GenerateArgs {
@@ -233,9 +247,12 @@ export class VideoService {
     const request = resume || !model ? undefined : await videoRequest(model, { prompt: args.prompt ?? '', negativePrompt: args.negative_prompt, duration: args.duration, aspectRatio: args.aspect_ratio, resolution: args.resolution, audio: args.audio, image: args.image }, ctx.cwd);
     const wait = Math.min(WAIT_MAX, Math.max(1, args.wait_minutes ?? WAIT_DEFAULT));
     let queued = resume;
+    // The price the provider quoted for this video, for the cost log once it is queued (paid then, waited for or not).
+    let quoted: number | null = null;
+    const quoting: VideoAdapter = { ...adapter, quote: async (c, req) => (quoted = await adapter.quote(c, req)) };
     try {
       const r = await runVideo({
-        adapter,
+        adapter: quoting,
         baseUrl: account.baseUrl,
         key,
         request,
@@ -248,6 +265,7 @@ export class VideoService {
         onJob: (job) => {
           queued = job;
           this.remember(account.id, job);
+          videoSpending.getStore()?.({ provider: costProviderOf(account), model: job.model, usd: quoted });
         },
         fetch: this.o.fetch,
         sleep: this.o.sleep,

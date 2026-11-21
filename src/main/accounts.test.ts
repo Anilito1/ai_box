@@ -155,6 +155,9 @@ test('a provider the user added: checked with its list, tested with a short chat
     // A list that says what each model makes: the ones that make videos or images are no models for a session.
     answer = () => ({ status: 200, body: { data: [{ id: 'wan-video', type: 'video' }, { id: 'venice-uncensored', type: 'text' }, { id: 'flux-image', type: 'image' }, { id: 'qwen-chat', type: 'chat' }, { id: 'plain' }] } });
     assert.deepEqual((await checkCustom(url, KEY)).models, ['plain', 'qwen-chat', 'venice-uncensored']);
+    // A list that gives each model's price (Venice's, per million tokens): kept for the cost of its sessions' turns.
+    answer = () => ({ status: 200, body: { data: [{ id: 'venice-uncensored', type: 'text', model_spec: { pricing: { input: { usd: 0.2 }, output: { usd: 0.9 } } } }, { id: 'plain' }] } });
+    assert.deepEqual((await checkCustom(url, KEY)).prices, { 'venice-uncensored': [0.2, 0.9] });
     answer = () => ({ status: 200, body: { data: [{ id: 'venice-uncensored' }] } });
     answer = () => ({ status: 404, body: {} });
     assert.deepEqual(await checkCustom(url, KEY), { ready: true, detail: 'unchecked', error: '', models: [] }, 'no list: accepted, unchecked');

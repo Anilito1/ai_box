@@ -29,7 +29,8 @@ import { backgroundTokens } from '../shared/background';
 import { parseFiles } from '../shared/attachments';
 import { APP_ID } from '../shared/brand';
 import { capabilitiesText } from '../shared/capabilities';
-import { DEEPSEEK_URL, isCustomAccount, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
+import { recordProvider } from '../shared/costs';
+import { costProviderOf, DEEPSEEK_URL, isCustomAccount, isProviderId, MANAGED_NAMES, pickOpenAIModel, chatModels, providerDef, providerOfAccount, type ProviderId, type ProviderMethod, type ProviderState } from '../shared/providers';
 import type { Lang } from '../shared/i18n';
 import { brewPackage, type CliUpdate } from '../shared/news';
 import {
@@ -64,7 +65,7 @@ import {
 } from '../shared/types';
 import { isTopicId } from '../shared/topics';
 import { UPDATE_CHOICES, type UpdateChoice } from '../shared/update';
-import { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir, testChat } from './accounts';
+import { accountDir, accountEnv, checkAnthropicCompatible, checkCustom, checkOpenAI, claudeLogout, isOpenAIKey, prepareClaudeDir, prepareCodexDir, prepareGeminiDir, removeClaudeDir, removeCodexDir, removeGeminiDir, testChat, type ListedStatus } from './accounts';
 import { agentFiles } from './agents';
 import { CapabilityStore } from './capabilities';
 import { Dictation } from './dictation';
@@ -76,6 +77,7 @@ import { checkCodex, CODEX_MIN_VERSION, codexExecutable, codexLogout, codexVersi
 import { checkApiKey, claudeEnv, claudeExecutable, claudeStatus, claudeVersion } from './providers/claude/cli';
 import { applyPatch, isDir, knownAccounts, loadConfig, mainRepoPath, saveConfig, type HubConfig } from './config';
 import { CostLog } from './costLog';
+import { PriceBook } from './providers/pricing';
 import { errorCode } from './errors';
 import { Forum } from './forum';
 import { RemoteServer, scriptsDir } from './remoteServer';
@@ -318,6 +320,8 @@ class Hub {
   readonly cfg: HubConfig;
   readonly secrets = new Secrets(this.dataDir);
   readonly costLog = new CostLog(this.dataDir);
+  /** The prices the providers' model lists give (Venice, OpenRouter): the turns of their sessions are priced with them. */
+  readonly prices = new PriceBook(join(this.dataDir, 'usage', 'prices.json'));
   /** The video models of the providers the user added, and the videos made with them. */
   readonly video = new VideoService({ accounts: () => this.cfg.accounts, key: (id) => this.secrets.get(`account:${id}`), outDir: () => videosDir() });
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
@@ -419,6 +423,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       sessionEnv: (account, model) => this.sessionEnv(account, model),
       persist: () => this.save(),
       costLog: this.costLog,
+      prices: this.prices,
       capabilities: async () => capabilitiesText(await this.caps.fresh(CAPS_MAX_AGE)),
       video: this.video,
       remoteServer: this.remote,
@@ -962,13 +967,14 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     const custom = isCustomAccount(a);
     // A provider the user added may have a video API beside its chat one: its video models are read along.
     const video = custom ? this.video.refresh(a) : null;
-    const status = deepseek
+    const { prices, ...status }: ListedStatus = deepseek
       ? await checkOpenAI('https://api.deepseek.com', key)
       : a.kind === 'anthropic-compatible'
         ? await checkAnthropicCompatible(a.baseUrl, key)
         : custom
           ? await checkCustom(a.baseUrl, key)
           : await checkOpenAI(a.baseUrl, key);
+    if (prices) this.prices.set(costProviderOf(a), prices);
     await video;
     if (custom) this.dropVideoModels(a);
     // OpenAI's own list: each session picks among its chat models. A provider the user added: among the ones they chose.
@@ -1017,7 +1023,9 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       if (before && typed === null && before.baseUrl !== account.baseUrl && this.secrets.has(`account:${before.id}`)) return fail('required', 'key');
       const k = typed ?? (before ? this.secrets.get(`account:${before.id}`) : '');
       if (!k && !isLocalUrl(account.baseUrl)) return fail('required', 'key');
-      status = isCustomAccount(account) ? await checkCustom(account.baseUrl, k) : account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
+      const { prices, ...st }: ListedStatus = isCustomAccount(account) ? await checkCustom(account.baseUrl, k) : account.kind === 'openai' ? await checkOpenAI(account.baseUrl, k) : await checkAnthropicCompatible(account.baseUrl, k);
+      status = st;
+      if (prices && st.ready) this.prices.set(costProviderOf(account), prices);
       if (!status.ready) return fail(status.error, /^(unauthorized|forbidden)$/.test(status.error) ? 'key' : 'baseUrl');
     }
     const storesKey = (account.kind === 'anthropic-key' || account.kind === 'openai' || account.kind === 'anthropic-compatible' || account.kind === 'gemini-key') && typed !== null;
@@ -1187,8 +1195,14 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('cost:history', async (from, to) => {
       const ok = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
       if (!ok(from) || !ok(to) || from >= to) throw new Error(t('cost.badRange'));
-      // Turns logged before their repo was kept: the repo of their session, when it is still known.
-      const records = (await this.costLog.read(from, to)).map((r) => (r.repo !== undefined ? r : { ...r, repo: mgr.costRepoOf(r.id) ?? '' }));
+      // Turns logged before their repo was kept: the repo of their session, when it is still known. Before their
+      // provider was kept: the provider the user added that lists their model, else the one their model's name says.
+      const listed = new Map(this.cfg.accounts.filter(isCustomAccount).flatMap((a) => a.models.map((m) => [m, a.slug] as const)));
+      const records = (await this.costLog.read(from, to)).map((r) => ({
+        ...r,
+        ...(r.repo !== undefined ? {} : { repo: mgr.costRepoOf(r.id) ?? '' }),
+        provider: recordProvider(r, (m) => listed.get(m)),
+      }));
       return { records, since: this.costLog.since, missions: await this.costLog.readMissions(from, to) };
     });
     handle('repo:graph', (path, filter, limit) => {

@@ -52,6 +52,14 @@ export function providerOfAccount(a: (Pick<Account, 'kind' | 'baseUrl'> & Partia
   return host(a.baseUrl) === host(DEEPSEEK_URL) ? 'deepseek' : null;
 }
 
+/**
+ * Where an account's spending counts in the cost panel: its provider, else (an older, hand-made account none of the
+ * blocks stands for) its server's address. The built-in accounts are Anthropic's.
+ */
+export function costProviderOf(a: Pick<Account, 'kind' | 'baseUrl' | 'slug' | 'name'> | undefined): string {
+  return a ? (providerOfAccount(a) ?? (host(a.baseUrl) || a.name)) : 'anthropic';
+}
+
 /** An account that stands for a provider the user added (any OpenAI-compatible server), reached through the bridge. */
 export const isCustomAccount = (a: Pick<Account, 'kind' | 'slug'>) => a.kind === 'openai' && a.slug !== '';
 

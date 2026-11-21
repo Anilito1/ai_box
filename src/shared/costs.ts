@@ -37,8 +37,18 @@ export interface TurnRecord {
   ms?: number;
   tools?: number;
   errors?: number;
-  /** Not a turn of its work: a keep-alive of its prompt cache (keepAlive.ts), or an exploration it asked for. */
-  kind?: 'keepAlive' | 'explore';
+  /**
+   * Not a turn of its work: a keep-alive of its prompt cache (keepAlive.ts), an exploration it asked for, or a video it
+   * had made (generate_video: no tokens, the provider's price as the cost of its model).
+   */
+  kind?: 'keepAlive' | 'explore' | 'video';
+  /**
+   * The provider it was spent at (shared/providers.ts: "anthropic", "deepseek", or the id of one the user added such as
+   * "venice"), its costs at that provider's prices. Missing on the turns logged before it was kept: recordProvider().
+   */
+  provider?: string;
+  /** Models whose price at that provider is not known: their tokens are real, their cost 0 is not a price. */
+  unpriced?: string[];
 }
 
 /**
@@ -108,10 +118,10 @@ export function turnDelta(prev: Totals | null, cur: Totals): Record<string, Usag
 
 // ---------- storage: one JSON line per turn ----------
 
-/** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo}` */
+/** `{"t":…,"id":…,"n":…,"r":…,"m":{"model":[cost,input,output,cacheRead,cacheWrite]},"w":repo,"p":provider,"up":[model]}` */
 export function encodeRecord(r: TurnRecord): string {
   const m = Object.fromEntries(Object.entries(r.models).map(([model, u]) => [model, FIELDS.map((f) => (f === 'cost' ? +u[f].toFixed(8) : u[f]))]));
-  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors, kd: r.kind };
+  const extra = { mi: r.mission, e: r.effort, d: r.ms, k: r.tools, x: r.errors, kd: r.kind, p: r.provider, up: r.unpriced?.length ? r.unpriced : undefined };
   return JSON.stringify({ t: r.at, id: r.id, n: r.name, r: r.role, m, ...(r.repo === undefined ? {} : { w: r.repo }), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) });
 }
 
@@ -132,9 +142,51 @@ export function decodeRecord(line: string): TurnRecord | null {
     models[model] = Object.fromEntries(FIELDS.map((f, i) => [f, num(arr[i])])) as unknown as Usage;
   }
   const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
-  const extra = { mission: typeof o.mi === 'string' ? o.mi : undefined, effort: typeof o.e === 'string' ? o.e : undefined, ms: count(o.d), tools: count(o.k), errors: count(o.x), kind: o.kd === 'keepAlive' || o.kd === 'explore' ? (o.kd as TurnRecord['kind']) : undefined };
+  const unpriced = Array.isArray(o.up) ? o.up.filter((x): x is string => typeof x === 'string' && Object.hasOwn(models, x)) : [];
+  const extra = {
+    mission: typeof o.mi === 'string' ? o.mi : undefined,
+    effort: typeof o.e === 'string' ? o.e : undefined,
+    ms: count(o.d),
+    tools: count(o.k),
+    errors: count(o.x),
+    kind: o.kd === 'keepAlive' || o.kd === 'explore' || o.kd === 'video' ? (o.kd as TurnRecord['kind']) : undefined,
+    provider: typeof o.p === 'string' && o.p ? o.p : undefined,
+    unpriced: unpriced.length > 0 ? unpriced : undefined,
+  };
   return { at: o.t, id: o.id, name: o.n, role: o.r as CostRole, models, ...(typeof o.w === 'string' ? { repo: o.w } : {}), ...Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined)) };
 }
+
+// ---------- providers: where a turn was spent ----------
+
+/** Model names that say their provider, for the turns logged before it was kept. */
+const FAMILIES: [RegExp, string][] = [
+  [/^(claude-|(opus|sonnet|haiku|fable)\b)/i, 'anthropic'],
+  [/^(gpt-|o\d|chatgpt-|codex)/i, 'openai'],
+  [/^gemini-/i, 'gemini'],
+  [/^deepseek-/i, 'deepseek'],
+];
+
+/**
+ * The provider of a turn: the one it was logged with; else (logged before it was kept) the provider that lists one of
+ * its models now (`known`: a provider the user added), or the one its models' names say. Anthropic when nothing says
+ * otherwise: the hub ran on Claude alone before it had other providers.
+ */
+export function recordProvider(r: Pick<TurnRecord, 'provider' | 'models'>, known?: (model: string) => string | undefined): string {
+  if (r.provider) return r.provider;
+  for (const model of Object.keys(r.models)) {
+    const listed = known?.(model);
+    if (listed) return listed;
+    const family = FAMILIES.find(([re]) => re.test(model));
+    if (family) return family[1];
+  }
+  return 'anthropic';
+}
+
+/** The turns spent at one provider. */
+export const ofProvider = (records: TurnRecord[], provider: string) => records.filter((r) => recordProvider(r) === provider);
+
+/** All the tokens of a usage: input, output, cache read and written. */
+export const tokenCount = (u: Usage) => u.input + u.output + u.cacheRead + u.cacheWrite;
 
 const BY: MissionEvent['by'][] = ['user', 'post', 'master', 'auto'];
 
@@ -248,13 +300,92 @@ export interface RepoCostRow {
   sessions: Pick<CostRow, 'label' | 'role'>[];
 }
 
+/** What has no known price: the tokens of models no price is known for, the videos made without one. In no cost. */
+export interface Unpriced {
+  tokens: number;
+  videos: number;
+}
+
+/** What one model spent, its videos included (a video model makes no tokens). */
+export interface ModelCostRow {
+  model: string;
+  usage: Usage;
+  videos: number;
+  unpriced: Unpriced;
+}
+
+/** What one provider spent, at its own prices. */
+export interface ProviderCostRow {
+  /** Its id (recordProvider()). */
+  key: string;
+  usage: Usage;
+  turns: number;
+  videos: number;
+  unpriced: Unpriced;
+}
+
 export interface CostSummary {
   total: Usage;
   turns: number;
+  videos: number;
+  /** Not in `total.cost`. */
+  unpriced: Unpriced;
   /** Most expensive first. */
   sessions: CostRow[];
   /** Most expensive first, the turns outside any repo last. */
   repos: RepoCostRow[];
+  /** Most expensive first, then the most tokens: a model without a price costs nothing known. */
+  models: ModelCostRow[];
+}
+
+const noUnpriced = (): Unpriced => ({ tokens: 0, videos: 0 });
+
+/** What of a turn's models has no known price. */
+function unpricedOf(r: TurnRecord): Unpriced {
+  const out = noUnpriced();
+  for (const model of r.unpriced ?? []) {
+    const u = r.models[model];
+    if (!u) continue;
+    if (r.kind === 'video') out.videos++;
+    else out.tokens += tokenCount(u);
+  }
+  return out;
+}
+
+const addUnpriced = (a: Unpriced, b: Unpriced): Unpriced => ({ tokens: a.tokens + b.tokens, videos: a.videos + b.videos });
+
+/** The providers of the range, most expensive first (then the most tokens), each at its own prices. */
+export function byProvider(records: TurnRecord[], range: Range): ProviderCostRow[] {
+  const rows = new Map<string, ProviderCostRow>();
+  for (const r of records) {
+    if (r.at < range.from || r.at >= range.to) continue;
+    const key = recordProvider(r);
+    const row = rows.get(key) ?? { key, usage: ZERO, turns: 0, videos: 0, unpriced: noUnpriced() };
+    rows.set(key, {
+      key,
+      usage: addUsage(row.usage, sumUsage(r.models)),
+      turns: row.turns + (r.kind ? 0 : 1),
+      videos: row.videos + (r.kind === 'video' ? 1 : 0),
+      unpriced: addUnpriced(row.unpriced, unpricedOf(r)),
+    });
+  }
+  return [...rows.values()].sort((a, b) => b.usage.cost - a.usage.cost || tokenCount(b.usage) - tokenCount(a.usage) || a.key.localeCompare(b.key));
+}
+
+/** The models of the range, most expensive first, then the most tokens. */
+function modelRows(records: TurnRecord[], range: Range): ModelCostRow[] {
+  const rows = new Map<string, ModelCostRow>();
+  for (const r of records) {
+    if (r.at < range.from || r.at >= range.to) continue;
+    const unpriced = new Set(r.unpriced ?? []);
+    for (const [model, u] of Object.entries(r.models)) {
+      const row = rows.get(model) ?? { model, usage: ZERO, videos: 0, unpriced: noUnpriced() };
+      const video = r.kind === 'video' ? 1 : 0;
+      const none = unpriced.has(model) ? { tokens: video ? 0 : tokenCount(u), videos: video } : noUnpriced();
+      rows.set(model, { model, usage: addUsage(row.usage, u), videos: row.videos + video, unpriced: addUnpriced(row.unpriced, none) });
+    }
+  }
+  return [...rows.values()].sort((a, b) => b.usage.cost - a.usage.cost || tokenCount(b.usage) - tokenCount(a.usage) || b.videos - a.videos || a.model.localeCompare(b.model));
 }
 
 /** Last folder of a path, Windows or POSIX. */
@@ -266,12 +397,16 @@ export function summarize(records: TurnRecord[], range: Range): CostSummary {
   const byModel = new Map<string, Map<string, number>>();
   let total = ZERO;
   let turns = 0;
+  let videos = 0;
+  let unpriced = noUnpriced();
   for (const r of records) {
     if (r.at < range.from || r.at >= range.to) continue;
     const spent = sumUsage(r.models);
     total = addUsage(total, spent);
     const turn = r.kind ? 0 : 1;
     turns += turn;
+    if (r.kind === 'video') videos++;
+    unpriced = addUnpriced(unpriced, unpricedOf(r));
     const s = sessions.get(r.id) ?? { key: r.id, label: r.name, role: r.role, usage: ZERO, turns: 0, models: [] };
     // Its latest name wins: a session renamed keeps one row.
     const latest = r.at >= (named.get(r.id) ?? 0);
@@ -283,7 +418,7 @@ export function summarize(records: TurnRecord[], range: Range): CostSummary {
   }
   const rows = [...sessions.values()].map((s) => ({ ...s, models: [...(byModel.get(s.key) ?? [])].sort((a, b) => b[1] - a[1]).map(([model]) => model) }));
   rows.sort((a, b) => b.usage.cost - a.usage.cost || a.label.localeCompare(b.label));
-  return { total, turns, sessions: rows, repos: byRepo(records, range, rows) };
+  return { total, turns, videos, unpriced, sessions: rows, repos: byRepo(records, range, rows), models: modelRows(records, range) };
 }
 
 /** The turns of the range by repo; `sessions` (most expensive first) orders the names of each row. */
@@ -310,6 +445,8 @@ function byRepo(records: TurnRecord[], range: Range, sessions: CostRow[]): RepoC
 export interface DayCost {
   day: number;
   cost: number;
+  /** Its turns and videos of which a part has no known price (in no cost). */
+  unpriced?: number;
 }
 
 /** Local midnight of the day of `at`. */
