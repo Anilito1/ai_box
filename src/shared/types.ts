@@ -1002,6 +1002,14 @@ export interface HubApi {
   remove(id: string): void;
   openLocalFile(id: string, path: string, action: 'open' | 'reveal'): Promise<import('./localFiles').LocalFileResult>;
   openExternal(url: string): void;
+  /** An image or a video a message names, for its session: a media-scheme URL once main allowed the file. */
+  resolveMedia(id: string, path: string): Promise<import('./media').MediaResult>;
+  /** A web image or video, asked for by the user: fetched by main (https, public host). */
+  remoteMedia(url: string): Promise<import('./media').MediaResult>;
+  /** "Save as…" for a media-scheme URL: main asks where, then copies or downloads it. */
+  saveMedia(url: string): Promise<import('./media').MediaSaveResult>;
+  /** The folder of a media-scheme URL's local file, in the file manager. */
+  revealMedia(url: string): Promise<boolean>;
   getSettings(): Promise<SettingsView>;
   saveSettings(patch: SettingsPatch): Promise<SettingsView & Result>;
   checkClaude(): Promise<ClaudeStatus>;

@@ -1,0 +1,38 @@
+[
+  "master",
+  [
+    {
+      "kind": "user",
+      "id": "media-u1",
+      "text": "Génère une courte vidéo de coucher de soleil, puis montre-moi les captures de l’interface.",
+      "images": [],
+      "files": [
+        { "name": "reference.png", "path": "attachments/reference.png" },
+        { "name": "essai-camera.mp4", "path": "attachments/essai-camera.mp4" }
+      ]
+    },
+    {
+      "kind": "tool",
+      "id": "media-t1",
+      "name": "hub · generate_video",
+      "summary": "coucher de soleil sur la mer, 8 s",
+      "detail": "{\"model\":\"wan-2.2\",\"prompt\":\"coucher de soleil sur la mer\",\"duration\":\"8s\"}",
+      "diff": false,
+      "isError": false,
+      "result": "Vidéo enregistrée : venice-wan-2-2-coucher-de-soleil.mp4 (2,9 Mo)\nFaite par venice · wan-2.2 · 8s · 16:9 · 720p\n$0.40\nPrête en 1 min 12 s. Job demo-1234.\nMontre-la à l’utilisateur avec ce lien, qui ouvre le fichier depuis la conversation : [venice-wan-2-2-coucher-de-soleil.mp4](<venice-wan-2-2-coucher-de-soleil.mp4>)"
+    },
+    {
+      "kind": "assistant",
+      "id": "media-a1",
+      "live": false,
+      "text": "Voici la vidéo générée :\n\n[venice-wan-2-2-coucher-de-soleil.mp4](<venice-wan-2-2-coucher-de-soleil.mp4>)\n\nEt les captures de l’interface :\n\n![Écran d’accueil](<captures/accueil.png>)\n\n- Le schéma : `./captures/schema.png`\n- La photo de l’atelier : [photo.jpg](photo.jpg)\n\nL’animation de démonstration ./demo-animation.mp4 montre le défilement au ralenti.\n\nUn ancien rendu, supprimé depuis, reste un simple lien : [rendu-v1.mp4](rendu-v1.mp4)\n\nUne image en ligne (rien n’est chargé avant votre clic) : https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png\n\nEt une vidéo sur une adresse non chiffrée : http://example.com/clip.mp4"
+    },
+    {
+      "kind": "peer",
+      "id": "media-p1",
+      "from": "hub-captures",
+      "text": "Rapport : captures refaites. L’écran d’accueil est ici :\n\n`./captures/accueil.png`"
+    }
+  ],
+  true
+]

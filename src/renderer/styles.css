@@ -4467,6 +4467,118 @@ kbd,
   }
 }
 
+/* ---------- images and videos a conversation shows (media.ts) ---------- */
+.media {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: fit-content;
+  min-width: min(100%, 240px);
+  max-width: min(100%, 640px);
+  margin: 0 0 10px;
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--raise);
+}
+.media-video {
+  width: min(100%, 640px);
+}
+.media-view {
+  display: block;
+  max-width: 100%;
+  max-height: min(60vh, 480px);
+  border-radius: var(--r-md);
+}
+.media-video .media-view {
+  width: 100%;
+  background: #000000;
+  object-fit: contain;
+}
+.media-image .media-view {
+  cursor: zoom-in;
+}
+.media-bar {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.media-text {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-right: auto;
+  padding: 0 var(--sp-1);
+}
+.media-name {
+  overflow: hidden;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-meta {
+  flex: none;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.media-broken {
+  padding: var(--sp-3);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.media-remote {
+  gap: var(--sp-1);
+  min-width: min(100%, 360px);
+}
+.media-remote-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0 var(--sp-1);
+}
+.media-remote-note {
+  padding: 0 var(--sp-1) var(--sp-1);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+/* A narrow card (a file the user sent, a narrow pane): its buttons keep their icon, their name in the tooltip. */
+@container (max-width: 380px) {
+  .media-bar .btn > span {
+    display: none;
+  }
+}
+.media-bar .btn[hidden] {
+  display: none;
+}
+/* A file the user sent: a thumbnail-sized card, like a pasted image, beside the message. */
+.user-col .media,
+.user-col .media-video {
+  width: auto;
+  max-width: min(100%, 360px);
+  margin: 0;
+}
+.user-col .media-video .media-view {
+  width: 340px;
+  max-width: 100%;
+}
+.user-col .media-view {
+  max-height: 220px;
+}
+.step-media {
+  margin-top: var(--sp-2);
+}
+.step-media p {
+  margin: 0 0 6px;
+}
+
 /* ---------- session mascot (Clawd): 3D on the shared stage, SVG when WebGL is unavailable ---------- */
 .avatar {
   position: relative;

@@ -1,4 +1,6 @@
 import { openLocalFile } from './localFiles';
+import { MediaFiles } from './media';
+import { MEDIA_SCHEME } from '../shared/media';
 import { VideoService } from './video/service';
 import { textModels, videoAmong } from '../shared/video';
 import './shellPath';
@@ -18,6 +20,7 @@ import {
   net,
   powerMonitor,
   powerSaveBlocker,
+  protocol,
   session,
   shell,
   type IpcMainEvent,
@@ -118,6 +121,9 @@ app.setPath(
   'userData',
   app.commandLine.hasSwitch('user-data-dir') ? app.commandLine.getSwitchValue('user-data-dir') : join(app.getPath('appData'), 'claude-hub'),
 );
+
+// The images and videos a conversation shows: served by main (media.ts), read by range, never by a file:// address.
+protocol.registerSchemesAsPrivileged([{ scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true } }]);
 
 let win: BrowserWindow | null = null;
 let manager: SessionManager | undefined;
@@ -324,6 +330,8 @@ class Hub {
   readonly prices = new PriceBook(join(this.dataDir, 'usage', 'prices.json'));
   /** The video models of the providers the user added, and the videos made with them. */
   readonly video = new VideoService({ accounts: () => this.cfg.accounts, key: (id) => this.secrets.get(`account:${id}`), outDir: () => videosDir() });
+  /** The images and videos shown in conversations, by token (media.ts). */
+  readonly media = new MediaFiles();
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
   /** The remote server (experimental): inert while remote workers are off. */
@@ -1225,6 +1233,22 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('session:open-file', (id, path, action) =>
       openLocalFile(isStr(id) ? mgr.snapshot().sessions.find((s) => s.id === id)?.cwd : undefined, path, action, shell, [videosDir()]),
     );
+    // Shown in place: the file a message names, inside its session's folder, another session's, the generated videos or
+    // the attachments. The folders come from the sessions' state, never from the renderer.
+    handle('media:resolve', (id, path) => {
+      const sessions = mgr.snapshot().sessions;
+      const cwd = isStr(id) ? sessions.find((s) => s.id === id)?.cwd : undefined;
+      return this.media.resolve(cwd, path, [videosDir(), join(this.dataDir, 'attachments'), ...sessions.map((s) => s.cwd).filter(Boolean)]);
+    });
+    handle('media:remote', (url) => this.media.remote(url));
+    handle('media:save', (url) =>
+      this.media.save(url, async (name) => {
+        const options = { title: t('media.saveTitle'), defaultPath: join(app.getPath('downloads'), name) };
+        const r = win && !win.isDestroyed() ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+        return r.canceled ? undefined : r.filePath;
+      }),
+    );
+    handle('media:reveal', (url) => this.media.reveal(url, (path) => shell.showItemInFolder(path)));
     on('open-external', (url) => {
       if (isStr(url) && /^https?:\/\//i.test(url)) void shell.openExternal(url);
     });
@@ -1568,6 +1592,7 @@ async function start(): Promise<void> {
     if (win && !win.isFocused()) win.flashFrame(true);
   });
   hub.registerIpc();
+  protocol.handle(MEDIA_SCHEME, (req) => hub.media.handle(req));
   // The microphone, for the hub's own page only and for sound only (dictation); the other permissions keep Electron's defaults.
   const audioOnly = (types: readonly string[] | undefined) => !!types && types.length > 0 && types.every((m) => m === 'audio');
   session.defaultSession.setPermissionRequestHandler((wc, permission, done, details) => {

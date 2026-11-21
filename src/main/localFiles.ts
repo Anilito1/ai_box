@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { localFilePath, type LocalFileResult } from '../shared/localFiles';
@@ -13,14 +14,14 @@ export interface LocalFileShell {
   openPath(path: string): Promise<string>;
   showItemInFolder(path: string): void;
 }
+type LocalFileError = Extract<LocalFileResult, { ok: false }>;
+
 /**
- * Receives the workspace from session state, never from the renderer. No raw OS errors cross IPC. `also`: folders the
- * hub itself saves files in (the generated videos), opened from any conversation under the same rules.
+ * A path a message names, checked against the folders it may come from: the workspace it is relative to, then `also`.
+ * Gives its canonical path (links resolved) once it is inside one of them and not private. No raw OS errors.
  */
-export async function openLocalFile(
-  workspace: string | undefined, input: unknown, action: unknown, shell: LocalFileShell, also: string[] = [],
-): Promise<LocalFileResult> {
-  if (!workspace || typeof input !== 'string' || (action !== 'open' && action !== 'reveal')) return { ok: false, error: 'invalid' };
+export async function locateLocalFile(workspace: string | undefined, input: unknown, also: string[] = []): Promise<{ ok: true; path: string; info: Stats } | LocalFileError> {
+  if (!workspace || typeof input !== 'string') return { ok: false, error: 'invalid' };
   const path = localFilePath(input);
   if (!path || /[%#?]/.test(path) || (process.platform !== 'win32' && /[\\:]/.test(path))) return { ok: false, error: 'invalid' };
   if (process.platform === 'win32') {
@@ -37,12 +38,29 @@ export async function openLocalFile(
     const canonical = await realpath(target);
     if (!inside(root, canonical)) return { ok: false, error: 'outside' };
     if (launchablePackage.test(canonical) || privatePath(relative(root, canonical))) return { ok: false, error: 'unsupported' };
-    const info = await stat(canonical);
-    if (!info.isDirectory() && (!info.isFile() || !safeTypes.has(extname(canonical).toLowerCase()))) return { ok: false, error: 'unsupported' };
+    return { ok: true, path: canonical, info: await stat(canonical) };
+  } catch (error) {
+    return { ok: false, error: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'failed' };
+  }
+}
+
+/**
+ * Receives the workspace from session state, never from the renderer. No raw OS errors cross IPC. `also`: folders the
+ * hub itself saves files in (the generated videos), opened from any conversation under the same rules.
+ */
+export async function openLocalFile(
+  workspace: string | undefined, input: unknown, action: unknown, shell: LocalFileShell, also: string[] = [],
+): Promise<LocalFileResult> {
+  if (action !== 'open' && action !== 'reveal') return { ok: false, error: 'invalid' };
+  const found = await locateLocalFile(workspace, input, also);
+  if (!found.ok) return found;
+  const { path: canonical, info } = found;
+  if (!info.isDirectory() && (!info.isFile() || !safeTypes.has(extname(canonical).toLowerCase()))) return { ok: false, error: 'unsupported' };
+  try {
     if (action === 'reveal') shell.showItemInFolder(canonical);
     else if (await shell.openPath(canonical)) return { ok: false, error: 'failed' };
     return { ok: true };
-  } catch (error) {
-    return { ok: false, error: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'failed' };
+  } catch {
+    return { ok: false, error: 'failed' };
   }
 }

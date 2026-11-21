@@ -2,6 +2,8 @@ import DOMPurify from 'dompurify';
 import { marked, Renderer } from 'marked';
 import { LOCAL_FILE_PREFIX, localFilePath } from '../shared/localFiles';
 import { decorateLocalFiles } from './localFiles';
+import { decorateMedia, mediaCard, type MediaHost } from './media';
+import { mediaType } from '../shared/media';
 import {
   ATTACH_LIMITS,
   base64Bytes,
@@ -32,12 +34,21 @@ import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
 const linkRenderer = new Renderer();
-linkRenderer.link = function (token) {
-  let target = token.href;
+const localHref = (href: string) => {
+  let target = href;
   try { target = decodeURIComponent(target); } catch { /* Main rejects malformed paths. */ }
   const path = localFilePath(target);
-  const href = path === null ? token.href : LOCAL_FILE_PREFIX + encodeURIComponent(path);
-  return `<a href="${href.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}">${this.parser.parseInline(token.tokens)}</a>`;
+  return (path === null ? href : LOCAL_FILE_PREFIX + encodeURIComponent(path)).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+};
+linkRenderer.link = function (token) {
+  return `<a href="${localHref(token.href)}">${this.parser.parseInline(token.tokens)}</a>`;
+};
+// An image the model writes (`![](…)`) is a link to it: a local file or a web address is shown by decorateMedia, after
+// main's check or the user's click, never loaded by the page itself. Inline data stays an image.
+linkRenderer.image = function (token) {
+  if (/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(token.href)) return Renderer.prototype.image.call(this, token);
+  const label = (token.text || token.href.split(/[\\/]/).pop() || token.href).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  return `<a href="${localHref(token.href)}">${label}</a>`;
 };
 
 // Model output is untrusted: no inline styles, app classes or form controls, so it cannot overlay or mimic the app's own UI.
@@ -953,6 +964,13 @@ export class ChatView {
           const row = h('div', 'user-files');
           row.append(...item.files.map((file) => fileChip(file, 'user-file')));
           col.append(row);
+          // An image or a video sent as a file is shown like the ones the conversation names, once main allows it.
+          const host = this.mediaHost();
+          item.files.forEach((file, i) => {
+            if (!file.path || !mediaType(file.name)) return;
+            const chip = row.children[i];
+            void host.resolve(file.path).then((r) => r.ok && chip.replaceWith(mediaCard(r, host)), () => undefined);
+          });
         }
         if (item.text) col.append(h('div', 'bubble', item.text), this.actions(item.text));
         wrap.append(col);
@@ -964,6 +982,9 @@ export class ChatView {
         label.append(h('span', '', t('chat.from')), h('b', '', item.from));
         const body = h('div', 'md');
         body.innerHTML = cachedMarkdown(this.cacheKey(item.id), item.text);
+        // A worker's paths are linked for its images and videos only: the master's conversation opens its own folder.
+        decorateLocalFiles(body, this.session?.cwd ?? '', t('localFile.hint'), (path) => mediaType(path) !== null);
+        decorateMedia(body, this.mediaHost());
         this.addCodeCopy(body);
         wrap.append(label, body, this.actions(item.text));
         return wrap;
@@ -983,6 +1004,7 @@ export class ChatView {
         if (this.live?.id === item.id) this.live = null;
         body.innerHTML = cachedMarkdown(this.cacheKey(item.id), item.text);
         decorateLocalFiles(body, this.session?.cwd ?? '', t('localFile.hint'));
+        decorateMedia(body, this.mediaHost());
         this.addCodeCopy(body);
         el.append(this.actions(item.text));
         return el;
@@ -1004,6 +1026,20 @@ export class ChatView {
         if (item.result) {
           body.append(h('div', 'step-label', item.isError ? t('chat.error') : t('chat.result')));
           body.append(this.code(item.result, false, item.isError ? 'result error' : 'result'));
+          // A file a tool made (generate_video's "[name](<path>)"): shown under its result too.
+          const made = item.isError ? [] : [...item.result.matchAll(/\[[^\]\n]*\]\(<([^<>\n]+)>\)/g)].map((m) => m[1]).filter((path) => mediaType(path));
+          if (made.length > 0) {
+            const box = h('div', 'step-media');
+            for (const path of new Set(made)) {
+              const a = h('a', '', path.split(/[\\/]/).pop());
+              a.setAttribute('href', LOCAL_FILE_PREFIX + encodeURIComponent(path));
+              const line = h('p');
+              line.append(a);
+              box.append(line);
+            }
+            body.append(box);
+            decorateMedia(box, this.mediaHost());
+          }
         }
         d.append(sum, body);
         return d;
@@ -1050,6 +1086,19 @@ export class ChatView {
   }
 
   /** Hover row under a message; copies its raw text (markdown source for Claude's replies). */
+  /** The media of this conversation's messages: main resolves their paths for this session. */
+  private mediaHost(): MediaHost {
+    const id = this.session?.id ?? '';
+    return {
+      resolve: (path) => this.hub.resolveMedia(id, path),
+      remote: (url) => this.hub.remoteMedia(url),
+      save: (url) => this.hub.saveMedia(url),
+      reveal: (url) => this.hub.revealMedia(url),
+      openExternal: (url) => this.hub.openExternal(url),
+      error: (text) => this.attachError(text, 8000),
+    };
+  }
+
   private actions(text: string): HTMLDivElement {
     const row = h('div', 'msg-actions');
     row.append(copyButton(() => text, t('chat.copyMessage')));

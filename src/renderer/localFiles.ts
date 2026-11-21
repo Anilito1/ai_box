@@ -1,12 +1,12 @@
 import { LOCAL_FILE_PREFIX, localFilePath } from '../shared/localFiles';
-/** Only finished assistant messages; code blocks remain copyable code. */
-export function decorateLocalFiles(body: HTMLElement, cwd: string, hint: string): void {
+/** Only finished messages; code blocks remain copyable code. `only`: the paths to link, all by default. */
+export function decorateLocalFiles(body: HTMLElement, cwd: string, hint: string, only: (path: string) => boolean = () => true): void {
   for (const code of body.querySelectorAll('code')) {
     if (code.closest('pre, a')) continue;
     const value = code.textContent ?? '';
     if (!/^(?:\/|[a-z]:[\\/]|\.\.?[\\/])/i.test(value)) continue;
     const path = localFilePath(value);
-    if (path === null) continue;
+    if (path === null || !only(path)) continue;
     const a = document.createElement('a');
     a.setAttribute('href', LOCAL_FILE_PREFIX + encodeURIComponent(path));
     code.replaceWith(a);
@@ -26,7 +26,7 @@ export function decorateLocalFiles(body: HTMLElement, cwd: string, hint: string)
     for (const match of (node.textContent ?? '').matchAll(pattern)) {
       const value = match[1].replace(/[.,;!)]*$/, '');
       const path = localFilePath(value);
-      if (!path) continue;
+      if (!path || !only(path)) continue;
       fragment.append(node.textContent!.slice(end, match.index));
       const a = document.createElement('a');
       a.textContent = value;
