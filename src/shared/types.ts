@@ -678,6 +678,8 @@ export interface ProviderBadge {
   models: ModelOption[];
   /** What is new at this provider: models never seen, a newer version of its program. */
   news: ProviderNews;
+  /** The user's favourite models of it (shared/favorites.ts): a provider the user added has its chosen models. */
+  favorites: string[];
   /** Anthropic only: the plan of the account in use ("max", "pro"…), empty when not read; Ultracode is shown by it. */
   plan?: string;
   /** Anthropic only: what that plan allows of Ultracode. */
@@ -735,7 +737,15 @@ export interface ProviderView {
   /** The program the sign-in runs in (claude, codex): found on this computer, its version, too old for the hub. */
   cli: { found: boolean; version: string; outdated: boolean } | null;
   /** A provider the user added: what its form shows again. Its key never comes back. */
-  custom?: { accountId: string; baseUrl: string; models: string[]; video: ProviderVideoView };
+  custom?: {
+    accountId: string;
+    baseUrl: string;
+    models: string[];
+    video: ProviderVideoView;
+    /** The text models its address last listed, kept across starts, and when (epoch ms, 0 when never). */
+    listed: string[];
+    listedAt: number;
+  };
 }
 
 /** A provider the user adds or changes in Settings › Accounts: any server that speaks OpenAI's Chat Completions. */
@@ -830,6 +840,8 @@ export interface HubSettings {
   workerModels: string[];
   /** Highest effort the master may pick for a mission. */
   workerMaxEffort: Effort;
+  /** The user's favourite models of each built-in provider, by its id; changed one at a time (setFavorite), never a patch. */
+  favoriteModels: Record<string, string[]>;
   /** Permanent workers, in the order the settings show them. */
   team: TeamRole[];
   /** Groups of workers under a lead; changed one at a time (saveGroup), never a patch. */
@@ -891,7 +903,7 @@ export interface SettingsView {
 }
 
 /** Sections the renderer may replace; the main process validates each field. The team changes one post at a time (saveRole). */
-export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation'>> & {
+export type SettingsPatch = Partial<Omit<HubSettings, 'onboarded' | 'github' | 'claudePath' | 'codexPath' | 'team' | 'groups' | 'accounts' | 'anthropicActive' | 'dictation' | 'favoriteModels'>> & {
   dictation?: Partial<DictationSettings>;
   github?: Partial<Pick<HubSettings['github'], 'clientId' | 'shareWithSessions'>>;
 };
@@ -1017,6 +1029,8 @@ export interface HubApi {
   checkCodex(): Promise<CodexCli>;
   /** The providers' blocks in Settings › Accounts, checked now. */
   providers(): Promise<ProviderView[]>;
+  /** Stars a model of a built-in provider, or takes its star off: its favourites as they are now, null when refused. */
+  setFavorite(provider: ProviderId, model: string, on: boolean): Promise<string[] | null>;
   /** Connects a provider with an API key (checked with its service, kept in the keychain). */
   connectProvider(provider: ProviderId, method: ProviderMethod, key: string): Promise<ProviderResult>;
   /** Opens the program's own sign-in in a terminal window; false when none could open. */

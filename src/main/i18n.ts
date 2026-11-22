@@ -124,7 +124,7 @@ const en = {
   'tool.listWorkers.name': 'One worker only (hub-xxx or xxx), in full.',
   'tool.listRepos': "Local git repositories under {roots} (worktrees included): name, path, remote, current branch. A worker's cwd = the folder's root.",
   'tool.listCapabilities':
-    'Read only. MCP servers (connected first, then to connect, then in error) and skills installed on this computer, one line each: name, source, state, who can use it (master+workers, master only, or only sessions whose cwd is a given repo). Use it to name the right skills and connectors in a brief.',
+    'Read only. MCP servers (connected first, then to connect, then in error) and skills installed on this computer, one line each: name, source, state, who can use it (master+workers, master only, or only sessions whose cwd is a given repo). Use it to name the right skills and connectors in a brief. Ends with the models of each provider, the favourites of the user starred.',
   'tool.spawn': 'Starts a worker in the hub with a self-contained mission: an ad-hoc worker, or with role an extra instance of a post for a parallel job. Returns its name (for message_worker and close_worker). It will send you its final report.',
   'tool.spawn.name': 'Short kebab-case name describing the mission (e.g. "fix-api")',
   'tool.spawn.mission':
@@ -135,6 +135,7 @@ const en = {
     "Provider the worker runs on: one of {list}. Name only the provider (\"deepseek\", \"openai\"): the hub finds its connected account, and refuses a provider that is not connected. Left out: the post's provider, else the workers' usual one. Given to message_worker, the worker restarts on it with its conversation. Pair it with model, a model of that provider.",
   'provider.off': 'not connected',
   'provider.notConnected': '{name} is not connected: the user connects it in Settings › Providers. Providers: {list}.',
+  'notice.providerOff': '{name} is not connected: connect it in Settings › Providers to run this conversation there.',
   'provider.unknown': 'Unknown provider "{name}". Providers: {list}.',
   'tool.effort': 'Effort of this mission: low, medium, high, xhigh, max (capped at the highest effort allowed). Left out: the usual one, or the previous one for a permanent worker',
   'tool.message':
@@ -821,7 +822,7 @@ const fr: Record<Key, string> = {
   'tool.listWorkers.name': 'Un seul worker (hub-xxx ou xxx), en entier.',
   'tool.listRepos': "Dépôts git locaux sous {roots} (worktrees compris) : nom, chemin, remote, branche courante. Le cwd d'un worker = la racine du dossier.",
   'tool.listCapabilities':
-    "Lecture seule. Serveurs MCP (connectés d'abord, puis à connecter, puis en erreur) et skills installés sur cet ordinateur, une ligne chacun : nom, source, état, qui peut s'en servir (maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné). Sert à citer les bons skills et connecteurs dans un brief.",
+    "Lecture seule. Serveurs MCP (connectés d'abord, puis à connecter, puis en erreur) et skills installés sur cet ordinateur, une ligne chacun : nom, source, état, qui peut s'en servir (maître+workers, maître seul, ou seulement les sessions dont le cwd est un repo donné). Sert à citer les bons skills et connecteurs dans un brief. Finit par les modèles de chaque fournisseur, les favoris de l'utilisateur étoilés.",
   'tool.spawn': 'Lance un worker dans le hub avec une mission autonome : un ponctuel, ou avec role une instance de plus d\'un poste pour un chantier en parallèle. Retourne son nom (pour message_worker et close_worker). Il t\'enverra son rapport final.',
   'tool.spawn.name': 'Nom court en kebab-case décrivant la mission (ex. "fix-api")',
   'tool.spawn.mission':
@@ -832,6 +833,7 @@ const fr: Record<Key, string> = {
     "Fournisseur sur lequel le worker tourne : parmi {list}. Donne seulement le fournisseur (\"deepseek\", \"openai\") : le hub trouve son compte connecté, et refuse un fournisseur non connecté. Omis : le fournisseur de son poste, sinon celui des workers. Passé à message_worker, le worker redémarre dessus avec sa conversation. À associer à model, un modèle de ce fournisseur.",
   'provider.off': 'non connecté',
   'provider.notConnected': "{name} n'est pas connecté : l'utilisateur le connecte dans Réglages › Fournisseurs. Fournisseurs : {list}.",
+  'notice.providerOff': "{name} n'est pas connecté : connectez-le dans Réglages › Fournisseurs pour y faire tourner cette conversation.",
   'provider.unknown': 'Fournisseur inconnu « {name} ». Fournisseurs : {list}.',
   'tool.effort': "Effort de cette mission : low, medium, high, xhigh, max (plafonné à l'effort maximal autorisé). Omis : l'effort habituel, ou le précédent pour un permanent",
   'tool.message':

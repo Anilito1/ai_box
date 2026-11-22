@@ -6,6 +6,7 @@ import { ACCOUNT_ID, checkAccount, DEFAULT_ACCOUNT, isAccountRef, isBuiltinAccou
 import { DICTATION_DEFAULTS, isDictationKey, isDictationLanguage, isSttEngine, isSttModel, isSttPreset, isSttUrl } from '../shared/dictation';
 import { isLang, type Lang } from '../shared/i18n';
 import { FALLBACK_DEFAULTS, isFallback } from '../shared/fallback';
+import { isFavoriteMap } from '../shared/favorites';
 import { isParallel, PARALLEL_DEFAULTS } from '../shared/parallel';
 import { checkGroup, GROUP_ID, GROUPS_MAX, normalizeGroup, withoutPosts, type GroupError } from '../shared/groups';
 import { isGroupPrefs } from '../shared/topicGroups';
@@ -49,6 +50,7 @@ function defaults(lang: Lang): HubConfig {
     worker: { model: '', effort: '' },
     workerModels: ['opus', 'sonnet'],
     workerMaxEffort: 'xhigh',
+    favoriteModels: {},
     team: [],
     groups: [],
     accounts: [],
@@ -138,6 +140,9 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
 
 export const ROLE_ID = /^r-[a-z0-9]{8}$/;
 
+/** The Claude models the master may run a worker on: the ones the user allows, and the user's favourites. */
+export const claudeModels = (cfg: HubConfig) => [...new Set([...cfg.workerModels, ...(cfg.favoriteModels.anthropic ?? [])])];
+
 /** Fields only the main process sets: the executable sessions run, the setup state, the GitHub sign-in and the team. */
 function mergeOwn(cfg: HubConfig, raw: Raw): void {
   if (typeof raw.onboarded === 'boolean') cfg.onboarded = raw.onboarded;
@@ -159,6 +164,8 @@ function mergeOwn(cfg: HubConfig, raw: Raw): void {
     cfg.groups = groups;
   }
   if (typeof raw.anthropicActive === 'string') cfg.anthropicActive = raw.anthropicActive;
+  // Provider by provider: one a hand edit broke is left out.
+  cfg.favoriteModels = Object.fromEntries(Object.entries(obj(raw.favoriteModels)).filter((e): e is [string, string[]] => isFavoriteMap({ [e[0]]: e[1] })));
   // Read account by account too.
   if (Array.isArray(raw.accounts)) {
     const accounts: Account[] = [];

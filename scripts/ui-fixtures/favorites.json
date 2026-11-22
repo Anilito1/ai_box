@@ -1,0 +1,232 @@
+{
+  "accounts": [
+    {
+      "id": "default",
+      "name": "Claude",
+      "kind": "default",
+      "provider": "anthropic",
+      "limitedUntil": null,
+      "pinned": false
+    },
+    {
+      "id": "a-cdx00001",
+      "name": "OpenAI (ChatGPT)",
+      "kind": "codex",
+      "provider": "openai",
+      "limitedUntil": null,
+      "pinned": false
+    },
+    {
+      "id": "a-ven00001",
+      "name": "Venice",
+      "kind": "openai",
+      "provider": "venice",
+      "limitedUntil": null,
+      "pinned": false
+    }
+  ],
+  "models": [
+    {
+      "value": "default",
+      "label": "Par défaut",
+      "description": "Le modèle recommandé",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "value": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "description": "Le plus capable",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "value": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "description": "Rapide et équilibré",
+      "efforts": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "value": "claude-haiku-4-5",
+      "label": "Haiku 4.5",
+      "description": "Le plus rapide",
+      "efforts": []
+    }
+  ],
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic",
+      "connected": true,
+      "accountId": "default",
+      "plan": "max",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "favorites": [
+        "claude-opus-5-5",
+        "claude-haiku-4-5"
+      ],
+      "models": [
+        {
+          "value": "default",
+          "label": "Par défaut",
+          "description": "Le modèle recommandé",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "claude-opus-5-5",
+          "label": "Opus 5.5",
+          "description": "Le plus capable",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "claude-sonnet-5-5",
+          "label": "Sonnet 5.5",
+          "description": "Rapide et équilibré",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "claude-haiku-4-5",
+          "label": "Haiku 4.5",
+          "description": "Le plus rapide",
+          "efforts": []
+        }
+      ]
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI",
+      "connected": true,
+      "accountId": "a-cdx00001",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "favorites": [
+        "gpt-5.5"
+      ],
+      "models": [
+        {
+          "value": "gpt-5.5",
+          "label": "GPT-5.5",
+          "description": "Codex",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        {
+          "value": "gpt-5.5-mini",
+          "label": "GPT-5.5 mini",
+          "description": "Codex, rapide",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "connected": false,
+      "accountId": "",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "favorites": [],
+      "models": []
+    },
+    {
+      "id": "gemini",
+      "label": "Gemini",
+      "connected": true,
+      "accountId": "a-gem00001",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "favorites": [],
+      "models": [
+        {
+          "value": "gemini-3-pro",
+          "label": "Gemini 3 Pro",
+          "description": "",
+          "efforts": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "noEffort": true
+        }
+      ]
+    },
+    {
+      "id": "venice",
+      "label": "Venice",
+      "connected": true,
+      "accountId": "a-ven00001",
+      "news": {
+        "models": [],
+        "cli": null,
+        "unseen": false
+      },
+      "favorites": [
+        "venice-uncensored",
+        "llama-3.3-70b",
+        "qwen3-coder-480b"
+      ],
+      "models": [
+        {
+          "value": "venice-uncensored",
+          "label": "venice-uncensored",
+          "description": "",
+          "efforts": []
+        },
+        {
+          "value": "llama-3.3-70b",
+          "label": "llama-3.3-70b",
+          "description": "",
+          "efforts": []
+        },
+        {
+          "value": "qwen3-coder-480b",
+          "label": "qwen3-coder-480b",
+          "description": "",
+          "efforts": []
+        }
+      ]
+    }
+  ]
+}

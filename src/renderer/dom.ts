@@ -79,6 +79,7 @@ export const ICONS = {
   plug: 'M6 2.5v3M10 2.5v3M4.5 5.5h7v2a3.5 3.5 0 0 1-7 0zM8 11v2.5',
   broom: 'M13 2.5L8.5 7.5M6 6.5l3.5 3-1.5 4H3.5l-1-1.5z M5 13.5l1-2.5',
   sparkle: 'M8 2.5l1.3 4.2 4.2 1.3-4.2 1.3L8 13.5l-1.3-4.2L2.5 8l4.2-1.3z',
+  star: 'M8 2.5l1.47 3.88 4.14.2-3.23 2.59 1.09 4L8 10.9l-3.47 2.27 1.09-4-3.23-2.59 4.14-.2z',
 };
 
 /** Icon button copying `text()` to the clipboard, with a brief check mark as feedback. */
@@ -157,10 +158,20 @@ export function ago(at: number): string {
   return t('ago.d', { n: Math.floor(s / 86_400) });
 }
 
+/** The menu open now, by its close. */
+let closeMenu: (() => void) | null = null;
+
 /** Popover anchored above a button (`below`: under it); closes on outside click, Escape or window blur. */
 export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: () => void) => void, below = false): void {
   const menu = document.getElementById('menu') as HTMLDivElement;
+  // One menu at a time: one opened from the keyboard over another closes that one first.
+  closeMenu?.();
+  // Once only: a later call (an answer that comes after the menu went) never closes the next menu.
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
+    if (closeMenu === close) closeMenu = null;
     menu.hidden = true;
     menu.replaceChildren();
     document.removeEventListener('mousedown', onDown, true);
@@ -171,11 +182,12 @@ export function openMenu(anchor: HTMLElement, build: (menu: HTMLElement, close: 
     if (!menu.contains(e.target as Node)) close();
   };
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && !e.isComposing) {
       e.stopPropagation();
       close();
     }
   };
+  closeMenu = close;
   menu.replaceChildren();
   build(menu, close);
   menu.hidden = false;

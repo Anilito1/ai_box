@@ -1,0 +1,159 @@
+[
+  {
+    "id": "anthropic",
+    "label": "Anthropic",
+    "connected": true,
+    "method": "cli",
+    "methods": {
+      "cli": {
+        "connected": true,
+        "detail": "user@example.test · Max",
+        "error": ""
+      },
+      "apikey": {
+        "connected": false,
+        "detail": "",
+        "error": ""
+      }
+    },
+    "accounts": [
+      {
+        "id": "own",
+        "name": "Votre compte",
+        "detail": "Max",
+        "connected": true,
+        "error": "",
+        "active": true,
+        "removable": false
+      }
+    ],
+    "cli": {
+      "found": true,
+      "version": "2.2.0",
+      "outdated": false
+    }
+  },
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "connected": true,
+    "method": "chatgpt",
+    "methods": {
+      "chatgpt": {
+        "connected": true,
+        "detail": "",
+        "error": ""
+      },
+      "apikey": {
+        "connected": false,
+        "detail": "",
+        "error": ""
+      }
+    },
+    "cli": {
+      "found": true,
+      "version": "0.130.0",
+      "outdated": false
+    }
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "connected": false,
+    "method": "",
+    "methods": {
+      "apikey": {
+        "connected": false,
+        "detail": "",
+        "error": ""
+      }
+    },
+    "cli": null
+  },
+  {
+    "id": "gemini",
+    "label": "Gemini",
+    "connected": true,
+    "method": "google",
+    "methods": {
+      "google": {
+        "connected": true,
+        "detail": "",
+        "error": ""
+      },
+      "apikey": {
+        "connected": false,
+        "detail": "",
+        "error": ""
+      }
+    },
+    "cli": {
+      "found": true,
+      "version": "0.20.0",
+      "outdated": false
+    }
+  },
+  {
+    "id": "venice",
+    "label": "Venice",
+    "connected": true,
+    "method": "apikey",
+    "methods": {
+      "apikey": {
+        "connected": true,
+        "detail": "",
+        "error": ""
+      }
+    },
+    "cli": null,
+    "custom": {
+      "accountId": "a-ven00001",
+      "baseUrl": "https://api.venice.ai/api/v1",
+      "models": [
+        "venice-uncensored",
+        "llama-3.3-70b",
+        "qwen3-coder-480b"
+      ],
+      "video": {
+        "listed": [],
+        "manual": []
+      },
+      "listed": [
+        "venice-uncensored",
+        "llama-3.3-70b",
+        "qwen3-coder-480b",
+        "mistral-1b",
+        "gemma-2b",
+        "deepseek-r1-3b",
+        "qwen3-4b",
+        "llama-4-5b",
+        "mistral-6b",
+        "gemma-7b",
+        "deepseek-r1-8b",
+        "qwen3-9b",
+        "llama-4-10b",
+        "mistral-11b",
+        "gemma-12b",
+        "deepseek-r1-13b",
+        "qwen3-14b",
+        "llama-4-15b",
+        "mistral-16b",
+        "gemma-17b",
+        "deepseek-r1-18b",
+        "qwen3-19b",
+        "llama-4-20b",
+        "mistral-21b",
+        "gemma-22b",
+        "deepseek-r1-23b",
+        "qwen3-24b",
+        "llama-4-25b",
+        "mistral-26b",
+        "gemma-27b",
+        "deepseek-r1-28b",
+        "qwen3-29b",
+        "llama-4-30b"
+      ],
+      "listedAt": 4102444800000
+    }
+  }
+]

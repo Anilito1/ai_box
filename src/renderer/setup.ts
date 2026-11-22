@@ -163,7 +163,7 @@ export class SetupView {
     /** The providers, connected or not, with the account behind each. */
     private readonly providerList: () => ProviderBadge[] = () => [],
   ) {
-    this.providers = new ProvidersPanel(hub, { rerender: () => this.render(), errorText: (code) => this.accountErrorText(code), visible: () => !this.root.hidden && this.section === 'accounts' });
+    this.providers = new ProvidersPanel(hub, { rerender: () => this.render(), errorText: (code) => this.accountErrorText(code), visible: () => !this.root.hidden && this.section === 'accounts', badges: () => this.providerList() });
     this.root.setAttribute('role', 'dialog');
     this.root.setAttribute('aria-modal', 'true');
     this.root.setAttribute('aria-labelledby', 'setup-title');
@@ -1080,13 +1080,17 @@ export class SetupView {
     // after an account is disconnected, but never seed the menu with Claude-only aliases.
     const connectedModels = this.providerList().filter((p) => p.connected).flatMap((p) => p.models.map((m) => m.value));
     const models = [...new Set([...connectedModels, ...s.workerModels])];
+    // Claude's favourite models: the master may always run a worker on them (sessions.ts, claudeModels).
+    const favorites = this.providerList().find((p) => p.id === 'anthropic')?.favorites ?? [];
     for (const m of models) {
       const label = h('label', 'setup-check');
       const box = h('input');
       box.type = 'checkbox';
-      box.checked = s.workerModels.includes(m);
+      const favorite = favorites.includes(m);
+      box.checked = favorite || s.workerModels.includes(m);
       // One model at least stays allowed.
-      box.disabled = this.busy || (box.checked && s.workerModels.length === 1);
+      box.disabled = this.busy || favorite || (box.checked && s.workerModels.length === 1);
+      if (favorite) label.title = t('setup.sessions.auto.favorite');
       box.addEventListener('change', () => {
         const next = models.filter((x) => (x === m ? box.checked : s.workerModels.includes(x)));
         void this.save({ workerModels: next });

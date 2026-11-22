@@ -559,12 +559,22 @@ function commands(): Command[] {
     { title: t('purge.title'), run: () => void purgeView.open() },
     { title: t('palette.cost'), run: () => document.querySelector<HTMLElement>('.sb-cost')?.click() },
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
+    { title: t('palette.favorites'), keys: shortcut('M', true), run: openFavorites },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
     { title: t('palette.remote'), run: () => void setup.open('settings', 'remote') },
     { title: t('update.check'), run: checkForUpdates },
   );
   for (const s of layout(snapshot.sessions).closed) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
   return list;
+}
+
+/** The favourite models, for the conversation the focus is in, else the worker's beside the master, else the master's. */
+function openFavorites(): void {
+  const focus = document.activeElement;
+  // Already open, its field typed in: it stays where it is.
+  if ($('menu').contains(focus)) return;
+  const first = $('pane-worker').contains(focus) ? workerView : $('pane-master').contains(focus) ? masterView : opened ? workerView : masterView;
+  if (!first.openFavorites()) (first === masterView ? workerView : masterView).openFavorites();
 }
 
 document.addEventListener('keydown', (e) => {
@@ -580,6 +590,10 @@ document.addEventListener('keydown', (e) => {
   } else if (isMod(e, true) && e.code === 'KeyG') {
     e.preventDefault();
     repoPanel.toggle();
+  } else if (isMod(e, true) && e.key.toLowerCase() === 'm') {
+    // The letter, wherever it is: on an AZERTY keyboard M is not on the key QWERTY calls M.
+    e.preventDefault();
+    openFavorites();
   } else if (isMod(e) && e.code === 'KeyN') {
     e.preventDefault();
     newConversation();

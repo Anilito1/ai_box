@@ -18,6 +18,7 @@ import { FILE_LIMITS, type AttachedFile, type FileInput } from '../shared/attach
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
+import { modelsText, type ProviderLine } from '../shared/favorites';
 import { costProviderOf, DEEPSEEK_MODELS, deepseekAlias, isCustomAccount, isProviderId, PROVIDER_DEFS, providerOfAccount, resolveProvider, type ProviderId, type ProviderState } from '../shared/providers';
 import { Cooldowns, isPaid, pickTarget, returnDue, type FallbackStep } from '../shared/fallback';
 import { keepAlive, KEEP_ALIVE_MAX_PINGS, MAX_PINGS, pingRead, programStamp, sameProgram } from '../shared/keepAlive';
@@ -84,7 +85,7 @@ import {
   type TeamGroup,
   type TeamRole,
 } from '../shared/types';
-import { localBlock, mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, type HubConfig } from './config';
+import { claudeModels, localBlock, mainRepoPath, masterCwd, prepareGroup, prepareRole, type GroupCheck, type HubConfig } from './config';
 import type { CostLog } from './costLog';
 import { assistantError, humanError } from './errors';
 import { lang, t, tn } from './i18n';
@@ -855,9 +856,9 @@ export class SessionManager extends EventEmitter {
       .filter((p) => p.connected)
       .map((p) => {
         const listed = p.models.filter((m) => m.value !== 'default');
-        // As the master is told (syncProviderLines): Claude's models are the ones the user allows workers.
+        // As the master is told (syncProviderLines): Claude's models are the ones the user allows workers, and their favourites.
         // Before Claude Code first said its models, an allowed one goes by its name as the settings spell it.
-        const models = p.id === 'anthropic' ? cfg.workerModels.map((value) => listed.find((m) => m.value === value) ?? { value, label: value, description: '', efforts: [] }) : listed;
+        const models = p.id === 'anthropic' ? this.claudeModels().map((value) => listed.find((m) => m.value === value) ?? { value, label: value, description: '', efforts: [] }) : listed;
         const entries = models.map((m) => ({ id: `${p.id}:${m.value}`, label: m.label, hint: m.description, target: { kind: 'model' as const, provider: p.id, model: m.value }, efforts: effortsFor(models, m.value) }));
         // A provider whose models are not known yet runs its own: the session gets the account's choice.
         if (entries.length === 0) entries.push({ id: `${p.id}:`, label: t('choices.providerModel'), hint: '', target: { kind: 'model', provider: p.id, model: '' }, efforts: [] });
@@ -1209,16 +1210,36 @@ export class SessionManager extends EventEmitter {
     return Object.fromEntries(builtin.map((p) => [p.id, p.models.filter((m) => m.value !== 'default').map((m) => ({ value: m.value, label: m.label }))]));
   }
 
-  /** The master reads which providers are connected and what models each has. */
+  /** The master reads which providers are connected, what models each has and which the user stars. */
   private syncProviderLines(): void {
-    setProviderLines(
-      this.providerBadges().map((p) => ({
-        id: p.id,
-        label: p.label,
-        connected: p.connected,
-        models: p.id === 'anthropic' ? this.opts.cfg.workerModels : p.models.map((m) => m.value).filter((m) => m !== 'default'),
-      })),
-    );
+    setProviderLines(this.providerLines());
+  }
+
+  private providerLines(): ProviderLine[] {
+    return this.providerBadges().map((p) => ({
+      id: p.id,
+      label: p.label,
+      connected: p.connected,
+      models: p.id === 'anthropic' ? this.claudeModels() : p.models.map((m) => m.value).filter((m) => m !== 'default'),
+      // A provider the user added offers only the models they chose, all favourites: no star tells them apart.
+      favorites: isProviderId(p.id) ? p.favorites : [],
+    }));
+  }
+
+  private claudeModels(): string[] {
+    return claudeModels(this.opts.cfg);
+  }
+
+  /** A star put on or taken off a model (Settings › Providers): the menus and the master follow. */
+  favoritesChanged(): void {
+    this.syncProviderLines();
+    this.changed();
+  }
+
+  /** A provider's favourites: a built-in one's from the settings, the models chosen for one the user added. */
+  private favoritesOf(id: string): string[] {
+    if (isProviderId(id)) return this.opts.cfg.favoriteModels[id] ?? [];
+    return this.opts.cfg.accounts.find((a) => isCustomAccount(a) && a.slug === id)?.models ?? [];
   }
 
   /** A provider's name for the user: its block's, the name of the one the user added, else its id. */
@@ -1235,7 +1256,7 @@ export class SessionManager extends EventEmitter {
       const models = account ? (isBuiltinAccount(account) ? this.modelOptions() : this.optionsOf(this.catalogOf(account))) : [];
       const plan = def.id === 'anthropic' && account ? this.planOf(account) : undefined;
       const news = account && isProviderId(def.id) ? (this.providerNews[def.id] ?? NO_NEWS) : NO_NEWS;
-      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models, news, ...(plan !== undefined ? { plan, ultracodeAccess: this.ultracodeAccessOf(account) } : {}) };
+      return { id: def.id, label: def.label, connected: account !== '', accountId: account, models, news, favorites: this.favoritesOf(def.id), ...(plan !== undefined ? { plan, ultracodeAccess: this.ultracodeAccessOf(account) } : {}) };
     });
   }
 
@@ -1244,11 +1265,21 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s) return;
     const r = resolveProvider(this.providerStates, provider);
-    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
-    if (r.account === (s.runAccount || this.accountOf(s))) return this.setModel(id, model);
+    if ('error' in r) return this.providerOff(s, provider);
+    if (r.account === (s.runAccount || this.accountOf(s))) {
+      // The provider it runs on, while a move elsewhere waits for its turn to end: the user's latest pick cancels it.
+      if (this.accountOf(s) !== r.account) this.setAccount(id, r.account);
+      return this.setModel(id, model);
+    }
     // Another provider: the model goes first (the move keeps it if the new account has it), then the session moves.
     Object.assign(s, { fixedModel: model, model, userModel: true });
     this.setAccount(id, r.account);
+  }
+
+  /** A provider picked in the composer is not connected (any more): said to the user, with the way to Settings › Providers. */
+  private providerOff(s: Session, provider: string): void {
+    this.upsert(s, { kind: 'notice', id: `notice-${randomUUID()}`, text: t('notice.providerOff', { name: this.providerLabel(provider) }), tone: 'error', action: 'accounts-settings' });
+    this.changed();
   }
 
   /** The user picked a provider for a session (composer): it moves to the account behind it. */
@@ -1256,7 +1287,7 @@ export class SessionManager extends EventEmitter {
     const s = this.sessions.get(id);
     if (!s) return;
     const r = resolveProvider(this.providerStates, provider);
-    if ('error' in r) return this.notice(s, t('provider.notConnected', { name: provider }), 'error');
+    if ('error' in r) return this.providerOff(s, provider);
     this.setAccount(id, r.account);
   }
 
@@ -4126,7 +4157,7 @@ export class SessionManager extends EventEmitter {
     const listShape = { detail: z.boolean().nullish().describe(t('tool.listWorkers.detail')), name: z.string().nullish().describe(t('tool.listWorkers.name')) };
     const listWorkers = tool('list_workers', t('tool.listWorkers'), listShape, (a) => run(() => this.listWorkers(undefined, a as ListOptions)));
     const listRepos = tool('list_repos', t('tool.listRepos', { roots: cfg.workspaces.join(', ') }), {}, () => run(() => this.listRepos()));
-    const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(() => this.opts.capabilities()));
+    const listCapabilities = tool('list_capabilities', t('tool.listCapabilities'), {}, () => run(async () => [await this.opts.capabilities(), modelsText(this.providerLines())].filter(Boolean).join('\n\n')));
     // Videos are made by the hub with a provider's video model, for any session that asks; such a model runs none.
     // The videos one of its calls queues are this session's spending.
     const video = this.opts.video ? videoTools(this.opts.video, () => s.cwd, (fn) => run(() => videoSpending.run((v) => this.videoSpent(s, v), fn))) : [];
@@ -4684,8 +4715,9 @@ export class SessionManager extends EventEmitter {
     // A Codex account offers the models Codex lists for it; the names the user allows are Claude's.
     const own = this.ownCatalog(account);
     const listed = this.catalogOf(account).map((m) => m.value);
-    const wanted = asked.trim();
-    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && wanted ? [wanted] : []) : this.opts.cfg.workerModels;
+    // The roster stars the user's favourites ("haiku★"): the star is no part of the name.
+    const wanted = asked.replaceAll('★', '').trim();
+    const allowed = own ? (listed.length > 0 ? listed : this.kindOf(account) === 'codex' && wanted ? [wanted] : []) : this.claudeModels();
     const lower = wanted.toLowerCase();
     // The master may say "pro" or "flash" for DeepSeek's models.
     const hit = allowed.find((m) => m.toLowerCase() === lower) ?? (own && lower ? allowed.find((m) => m.toLowerCase().endsWith(`-${lower}`)) : undefined);

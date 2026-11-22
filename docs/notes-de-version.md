@@ -12,8 +12,15 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 ## 2026-11-22
 
+### Ajouté
+
+- Modèles favoris : dans Réglages › Fournisseurs, marquez d'une étoile les modèles que vous utilisez, chez chaque fournisseur. Dans une conversation, l'onglet ★ du menu de modèle (ou Ctrl+Shift+M) les réunit, rangés par fournisseur : tapez quelques lettres, Entrée, et la conversation passe sur ce modèle, même chez un autre fournisseur, sans rien perdre.
+- Le maître connaît vos modèles favoris et peut lancer un worker sur l'un d'eux.
+
 ### Modifié
 
+- La liste des modèles d'un fournisseur ajouté (Venice…) reste en mémoire : elle s'affiche tout de suite dans ses réglages, avec un champ pour chercher quand elle est longue.
+- Le menu de modèle s'élargit pour montrer tous vos fournisseurs, même quand vous en avez ajouté.
 - Sous Linux, vos clés et jetons s'enregistrent dans le trousseau du système sur tous les bureaux (Hyprland, Sway…) ; sans trousseau, l'app le dit et n'enregistre rien.
 - Sous Linux, « Se connecter » ouvre votre terminal habituel (kitty, foot, alacritty…).
 - Sous Linux, fermer une session ou quitter l'app arrête aussi ce qu'elle avait lancé (serveurs, commandes en arrière-plan), comme sous Windows.

@@ -29,7 +29,9 @@ import { cliUpdateBox } from './cliUpdate';
 import { copyButton, displayName, failed, fmtPct, fmtTokens, h, icon, ICONS, level, oneLine, openLightbox, openMenu, statusDot, statusLabel, techDetails } from './dom';
 import { cancelDictation, createDictationUi, isDictating, stopDictation } from './dictation';
 import { effortLabel, PLATFORM, t } from './i18n';
+import { favoritePicker } from './favoritePicker';
 import { mascotMark, sessionMascot } from './mascot';
+import { shortcut } from './palette';
 import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -113,6 +115,8 @@ type Items = Map<string, ChatItem>;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
 const modeLabel = (mode: Mode) => t(`mode.${mode}`);
+/** The model menu's Favourites tab: never a provider's id (a slug starts with a letter). */
+const FAVORITES_TAB = '*';
 const modeHint = (mode: Mode) => (mode === 'dontAsk' ? '' : t(`modeHint.${mode}`));
 
 /** One conversation panel: header, message stream and composer (VS Code extension layout). */
@@ -740,14 +744,21 @@ export class ChatView {
     return this.catalogs[s.account] ?? this.models;
   }
 
-  private openModelMenu(): void {
+  /** The model menu on its Favourites tab (the shortcut's); false when this pane shows no conversation. */
+  openFavorites(): boolean {
+    if (!this.session || this.modelBtn.offsetParent === null) return false;
+    this.openModelMenu(true);
+    return true;
+  }
+
+  private openModelMenu(favorites = false): void {
     const s = this.session;
     if (!s) return;
     const badge = this.accounts.find((a) => a.id === s.account);
     // A session on an older, hand-made account that pins its model: only its effort is picked here.
     const pinned = !!badge?.pinned;
     const current = badge?.provider ?? '';
-    let tab: string = current || this.providers.find((p) => p.connected)?.id || '';
+    let tab: string = favorites ? FAVORITES_TAB : current || this.providers.find((p) => p.connected)?.id || '';
     const openSettings = (close: () => void) => {
       close();
       window.dispatchEvent(new CustomEvent('hub:open-settings', { detail: 'accounts' }));
@@ -778,6 +789,16 @@ export class ChatView {
         menu.append(root);
         // The provider first: the models below are its models. One that is not connected is greyed, and leads to Settings.
         const tabs = h('div', 'segmented provider-tabs');
+        // The user's favourites first: the models starred at every connected provider, in one list.
+        const star = h('button', tab === FAVORITES_TAB ? 'seg seg-fav active' : 'seg seg-fav');
+        star.append(icon(ICONS.star));
+        star.title = t('fav.tab', { key: shortcut('M', true) });
+        star.setAttribute('aria-label', t('fav.title'));
+        star.addEventListener('click', () => {
+          tab = FAVORITES_TAB;
+          draw();
+        });
+        tabs.append(star);
         for (const p of this.providers) {
           const b = h('button', p.id === tab ? 'seg active' : 'seg');
           b.append(mascotMark(p.id, 'seg-pic', p.label, p.models.map((m) => m.value)), p.label);
@@ -795,6 +816,22 @@ export class ChatView {
           tabs.append(b);
         }
         root.append(tabs);
+        if (tab === FAVORITES_TAB) {
+          const picker = favoritePicker({
+            providers: this.providers,
+            current: { provider: current, model: s.model },
+            pick: (provider, model) => {
+              if (provider === current) this.hub.setModel(s.id, model);
+              else this.hub.setProviderModel(s.id, provider, model);
+              close();
+            },
+            manage: () => openSettings(close),
+          });
+          root.append(picker.el);
+          // The menu shows once built: the field takes the keys then.
+          queueMicrotask(() => picker.field.focus());
+          return;
+        }
         const models = tab === current ? this.modelsFor(s) : (this.providers.find((p) => p.id === tab)?.models ?? []);
         root.append(h('div', 'menu-label', t('chat.model')));
         const list = h('div', 'menu-models');

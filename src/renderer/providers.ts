@@ -1,11 +1,13 @@
 import { OWN_ACCOUNT } from '../shared/accounts';
 import { CLI_PACKAGES } from '../shared/news';
 import { isProviderId, PROVIDER_DEFS, providerDef, type ProviderId, type ProviderMethod } from '../shared/providers';
-import type { CustomProviderAction, HubApi, ProviderAccountView, ProviderView } from '../shared/types';
+import { LIST_FRESH_MS, toggleFavorite } from '../shared/favorites';
+import type { CustomProviderAction, HubApi, ModelOption, ProviderAccountView, ProviderBadge, ProviderView } from '../shared/types';
 import { videoApiOf } from '../shared/video';
 import { errorNote, h, icon, ICONS } from './dom';
 import { t, type Key } from './i18n';
 import { mascotMark } from './mascot';
+import { shortcut } from './palette';
 
 // Settings › Accounts: one row per provider, all built the same way. A row says whether the provider is connected and
 // offers one action; the way of connecting (an account or an API key, Anthropic's other accounts) waits behind its
@@ -30,8 +32,10 @@ interface CustomForm {
   baseUrl: string;
   key: string;
   models: string;
-  /** The server's own list, once asked for: the models to pick from. */
+  /** The server's own list (the one kept from the last time, then asked for again): the models to star. */
   listed: string[];
+  /** What is typed in the field over a long list: only the models it matches show. */
+  filter: string;
   /** Video models: the ones the service lists (read only), the ones named by hand, and the name being typed. */
   videoListed: string[];
   videoModels: string[];
@@ -45,12 +49,14 @@ interface CustomForm {
   passed: string;
 }
 
-const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], videoListed: [], videoModels: [], videoTyped: '', busy: '', error: '', field: '', detail: '', passed: '' });
+const blankForm = (id: string): CustomForm => ({ id, name: '', baseUrl: '', key: '', models: '', listed: [], filter: '', videoListed: [], videoModels: [], videoTyped: '', busy: '', error: '', field: '', detail: '', passed: '' });
 
 /** The models typed in the form: one per line, or separated by commas or spaces. */
 const parseModels = (text: string) => [...new Set(text.split(/[\s,]+/).filter(Boolean))];
 /** More than this many models in a server's list: none is picked for the user, they choose. */
 const PICK_ALL_MAX = 30;
+/** A list longer than this gets a field to find a model in it. */
+const FILTER_MIN = 24;
 /** The Video section shows for a service whose video API the hub speaks, or one that already has video models named. */
 const videoShown = (f: CustomForm) => videoApiOf(f.baseUrl.trim()) !== null || f.videoModels.length > 0;
 /** The video models of a form: the ones named by hand, with the name still in the field while the section shows. */
@@ -71,6 +77,19 @@ export interface PanelHost {
   errorText(code: string): string;
   /** The user is still on this section: polling goes on only then. */
   visible(): boolean;
+  /** The providers as the hub's snapshot has them: their models and the user's favourites. */
+  badges(): ProviderBadge[];
+}
+
+/** A model to star: lit when it is a favourite. */
+function starChip(label: string, id: string, on: boolean, toggle: () => void): HTMLButtonElement {
+  const chip = h('button', on ? 'acct-chip fav-chip on' : 'acct-chip fav-chip');
+  chip.type = 'button';
+  chip.append(icon(ICONS.star), h('span', '', label));
+  chip.setAttribute('aria-pressed', String(on));
+  if (label !== id) chip.title = id;
+  chip.addEventListener('click', toggle);
+  return chip;
 }
 
 export class ProvidersPanel {
@@ -96,6 +115,8 @@ export class ProvidersPanel {
   private busyAccount = '';
   private focusKey: ProviderId | '' = '';
   private timer = 0;
+  /** The favourites of a built-in provider just starred, until the snapshot has them. */
+  private readonly favorites: Partial<Record<ProviderId, string[]>> = {};
 
   constructor(
     private readonly hub: HubApi,
@@ -110,6 +131,7 @@ export class ProvidersPanel {
     this.confirmAccount = '';
     this.form = null;
     for (const k of Object.keys(this.keys) as ProviderId[]) delete this.keys[k];
+    for (const k of Object.keys(this.favorites) as ProviderId[]) delete this.favorites[k];
     for (const k of Object.keys(this.errors)) delete this.errors[k];
   }
 
@@ -369,7 +391,31 @@ export class ProvidersPanel {
       box.append(this.button(t('provider.connectWith', { method: t(`provider.method.${method}` as Key) }), 'btn ghost small', () => void this.signIn(id, method), this.phases.has(id)));
     }
     if (id === 'anthropic' && method === 'cli') box.append(this.anthropicAccounts(v));
+    const badge = this.host.badges().find((p) => p.id === id);
+    const models = badge?.connected ? badge.models.filter((m) => m.value !== 'default') : [];
+    if (badge && models.length > 0) box.append(this.favoritesBlock(id, models, this.favorites[id] ?? badge.favorites));
     return box;
+  }
+
+  /** A connected provider's models, each with its star: the favourites the conversations' model menus offer first. */
+  private favoritesBlock(id: ProviderId, models: ModelOption[], favorites: string[]): HTMLElement {
+    const block = h('div', 'acct-favs');
+    block.append(h('span', 'setup-label', t('fav.settings')), h('span', 'setup-hint', t(id === 'anthropic' ? 'fav.settings.hintClaude' : 'fav.settings.hint', { key: shortcut('M', true) })));
+    const chips = h('div', 'acct-chips');
+    for (const m of models) {
+      const on = favorites.includes(m.value);
+      chips.append(starChip(m.label, m.value, on, () => void this.star(id, m.value, !on, favorites)));
+    }
+    block.append(chips);
+    return block;
+  }
+
+  /** Shown at once; the hub's answer (the list as it is now) replaces it, a refusal puts it back. */
+  private async star(id: ProviderId, model: string, on: boolean, before: string[]): Promise<void> {
+    this.favorites[id] = toggleFavorite(before, model, on);
+    this.host.rerender();
+    this.favorites[id] = (await this.hub.setFavorite(id, model, on).catch(() => null)) ?? before;
+    this.host.rerender();
   }
 
   private keyForm(id: ProviderId): HTMLElement {
@@ -705,22 +751,40 @@ export class ProvidersPanel {
     return box;
   }
 
-  /** The server's list: each model a toggle, the ones in the field lit. */
+  /** The server's list: each model with its star, the ones in the field (the favourites) lit; a field to find one in a long list. */
   private modelChips(f: CustomForm): HTMLElement {
+    const wrap = h('div', 'acct-favs');
     const box = h('div', 'acct-chips');
     const picked = new Set(parseModels(f.models));
-    for (const m of f.listed.slice(0, 300)) {
+    const chips = f.listed.slice(0, 1000).map((m) => {
       const on = picked.has(m);
-      const chip = h('button', on ? 'acct-chip on' : 'acct-chip', m);
-      chip.setAttribute('aria-pressed', String(on));
-      chip.addEventListener('click', () => {
+      return starChip(m, m, on, () => {
         const now = parseModels(f.models);
         f.models = (on ? now.filter((x) => x !== m) : [...now, m]).join('\n');
         this.host.rerender();
       });
-      box.append(chip);
+    });
+    // Filtered in place: the field keeps the focus while it is typed in.
+    const apply = () => {
+      const words = f.filter.toLowerCase().split(/\s+/).filter(Boolean);
+      chips.forEach((chip, i) => (chip.hidden = !words.every((w) => f.listed[i].toLowerCase().includes(w))));
+    };
+    if (f.listed.length > FILTER_MIN) {
+      const find = h('input', 'setup-input acct-filter');
+      find.type = 'search';
+      find.value = f.filter;
+      find.placeholder = t('fav.find', { count: f.listed.length });
+      find.setAttribute('aria-label', find.placeholder);
+      find.addEventListener('input', () => {
+        f.filter = find.value;
+        apply();
+      });
+      wrap.append(find);
     }
-    return box;
+    box.append(...chips);
+    apply();
+    wrap.append(box);
+    return wrap;
   }
 
   /**
@@ -802,9 +866,21 @@ export class ProvidersPanel {
   }
 
   private editCustom(v: ProviderView, c: NonNullable<ProviderView['custom']>): void {
-    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n'), videoListed: c.video.listed, videoModels: [...c.video.manual] };
+    this.form = { ...blankForm(c.accountId), name: v.label, baseUrl: c.baseUrl, models: c.models.join('\n'), listed: c.listed, videoListed: c.video.listed, videoModels: [...c.video.manual] };
     this.confirming = '';
     delete this.errors[v.id];
+    this.host.rerender();
+    // The list kept from the last time shows at once; a day old (or none), it is asked for again in the background.
+    if (v.connected && Date.now() - c.listedAt > LIST_FRESH_MS) void this.refreshList(this.form);
+  }
+
+  /** The list asked for again in the background: the form stays as it is, drawn again only when the list changed. */
+  private async refreshList(f: CustomForm): Promise<void> {
+    const draft = { id: f.id, name: f.name.trim(), baseUrl: f.baseUrl.trim(), models: parseModels(f.models), videoModels: videoNamed(f) };
+    const r = await this.hub.customProvider('models', draft, null).catch(() => null);
+    if (!r?.ok || this.form !== f || f.busy !== '' || f.baseUrl.trim() !== draft.baseUrl || r.models.join('\n') === f.listed.join('\n')) return;
+    f.listed = r.models;
+    f.videoListed = r.videoModels;
     this.host.rerender();
   }
 
@@ -824,7 +900,7 @@ export class ProvidersPanel {
       f.listed = r.models;
       f.videoListed = r.videoModels;
       // A short list is taken whole when nothing was typed; a long one waits for the user's picks.
-      if (models.length === 0 && r.models.length <= PICK_ALL_MAX) f.models = r.models.join('\n');
+      if (parseModels(f.models).length === 0 && r.models.length <= PICK_ALL_MAX) f.models = r.models.join('\n');
     } else if (action === 'test') f.passed = t('provider.custom.passed', { model: models[0] ?? '', reply: r.detail || '…' });
     else this.form = null;
     this.host.rerender();

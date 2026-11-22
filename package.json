@@ -1,6 +1,6 @@
 {
   "name": "claude-hub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Desktop hub for Claude Code: one master session plans the work and drives worker sessions, each in its own repo.",
   "author": "Anilito1 (https://github.com/Anilito1)",

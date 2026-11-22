@@ -1,12 +1,13 @@
 import { firstAccount } from '../shared/accounts';
 import { providerOfAccount } from '../shared/providers';
+import { starred, type ProviderLine } from '../shared/favorites';
 import { APP_NAME } from '../shared/brand';
 import { clientDataRule, type ClientDataVariant } from '../shared/clientData';
 import type { Lang } from '../shared/i18n';
 import { refName } from '../shared/groups';
 import { modelGrid, sessionNameOf, type Mission } from '../shared/team';
 import type { TeamGroup, TeamRole } from '../shared/types';
-import { masterCwd, type HubConfig } from './config';
+import { claudeModels, masterCwd, type HubConfig } from './config';
 import { lang } from './i18n';
 import { topicsSection } from './topics';
 
@@ -22,13 +23,6 @@ let activeMaster = '';
 /** The running master keeps its name across language changes: workers must address the session that exists. */
 export const setMasterName = (name: string) => (activeMaster = name);
 
-/** A provider as the master reads it: connected or not, and the models it may ask for. */
-export interface ProviderLine {
-  id: string;
-  label: string;
-  connected: boolean;
-  models: string[];
-}
 let providerLines: ProviderLine[] = [];
 export const setProviderLines = (lines: ProviderLine[]) => (providerLines = lines);
 /** The master's session name: workers address it with SendMessage. */
@@ -112,11 +106,12 @@ function providersText(l: Lang): string {
   if (providerLines.length === 0) return '';
   const ids = providerLines.map((p) => p.id).join(', ');
   const list = providerLines
-    .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${p.models.join(', ') || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
+    .map((p) => (p.connected ? `${p.id} (${p.label} · ${l === 'fr' ? 'connecté' : 'connected'} · ${l === 'fr' ? 'modèles' : 'models'}: ${starred(p) || (l === 'fr' ? 'celui par défaut' : 'its default')})` : `${p.id} (${p.label} · ${l === 'fr' ? 'non connecté' : 'not connected'})`))
     .join(' ; ');
+  const stars = providerLines.some((p) => p.connected && p.favorites.length > 0);
   return l === 'fr'
-    ? ` Fournisseurs : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (${ids}) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Fournisseurs.`
-    : ` Providers: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (${ids}) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Providers.`;
+    ? ` Fournisseurs${stars ? ' (★ : favori de l\'utilisateur)' : ''} : ${list}. Pour lancer un worker chez un fournisseur (« lance un agent DeepSeek ») : paramètre provider de spawn_worker ou de message_worker (${ids}) et model, un modèle de ce fournisseur ; pas besoin de nom de compte. Un fournisseur non connecté est refusé : dis à l'utilisateur de le connecter dans Réglages › Fournisseurs.`
+    : ` Providers${stars ? " (★: the user's favourite)" : ''}: ${list}. To start a worker on a provider ("start a DeepSeek agent"): the provider parameter of spawn_worker or message_worker (${ids}) and model, a model of that provider; no account name needed. A provider that is not connected is refused: tell the user to connect it in Settings › Providers.`;
 }
 
 /** The accounts besides the usual Claude access, as the master reads them; empty when there are none. */
@@ -146,8 +141,8 @@ function accountsText(cfg: HubConfig, l: Lang): string {
 
 const allowedText = (cfg: HubConfig, l: Lang) =>
   (l === 'fr'
-    ? `Modèles autorisés : ${cfg.workerModels.join(', ')} ; effort maximal : ${cfg.workerMaxEffort}. En parallèle : ${cfg.parallel.perPost} instances par poste au plus, ${cfg.parallel.maxWorkers} workers actifs en tout.`
-    : `Allowed models: ${cfg.workerModels.join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`) + providersText(l) + accountsText(cfg, l);
+    ? `Modèles autorisés : ${claudeModels(cfg).join(', ')} ; effort maximal : ${cfg.workerMaxEffort}. En parallèle : ${cfg.parallel.perPost} instances par poste au plus, ${cfg.parallel.maxWorkers} workers actifs en tout.`
+    : `Allowed models: ${claudeModels(cfg).join(', ')}; highest effort: ${cfg.workerMaxEffort}. In parallel: at most ${cfg.parallel.perPost} instances per post, ${cfg.parallel.maxWorkers} workers running in all.`) + providersText(l) + accountsText(cfg, l);
 
 /** Added to the next message the master gets once the user changed the team or the allowed models. */
 export function rosterBlock(cfg: HubConfig, l: Lang = lang()): string {

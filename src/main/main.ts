@@ -3,6 +3,7 @@ import { MediaFiles } from './media';
 import { MEDIA_SCHEME } from '../shared/media';
 import { VideoService } from './video/service';
 import { textModels, videoAmong } from '../shared/video';
+import { isModelName, toggleFavorite } from '../shared/favorites';
 import './shellPath';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -101,6 +102,7 @@ import { openTerminal } from './terminal';
 import { installTool, setToolsDir, type Tool } from './providers/tools';
 import { ProviderNewsWatch, resolved } from './news';
 import { CliUpdater, realRunner, simulatedRunner } from './cliUpdate';
+import { ModelLists } from './modelLists';
 import { ReleaseNotes } from './releaseNotes';
 import { buildIfStale } from './selfBuild';
 import { installRunning, Updater } from './updater';
@@ -334,6 +336,8 @@ class Hub {
   readonly video = new VideoService({ accounts: () => this.cfg.accounts, key: (id) => this.secrets.get(`account:${id}`), outDir: () => videosDir() });
   /** The images and videos shown in conversations, by token (media.ts). */
   readonly media = new MediaFiles();
+  /** The text models the addresses of the providers the user added listed last: their forms show them at once. */
+  readonly modelLists = new ModelLists(join(this.dataDir, 'model-lists.json'));
   readonly forum = new Forum(this.dataDir, this.secrets, app.getVersion());
   readonly mgr: SessionManager;
   /** The remote server (experimental): inert while remote workers are off. */
@@ -641,7 +645,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
         method: customViews[i].connected ? ('apikey' as const) : ('' as const),
         methods: { apikey: customViews[i] },
         cli: null,
-        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models, video: this.video.view(a) },
+        custom: { accountId: a.id, baseUrl: a.baseUrl, models: a.models, video: this.video.view(a), listed: this.modelLists.get(a.baseUrl)?.models ?? [], listedAt: this.modelLists.get(a.baseUrl)?.at ?? 0 },
       })),
     ];
     const states: Record<string, ProviderState> = {
@@ -783,7 +787,10 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     if (!k && !isLocalUrl(draft.baseUrl)) return out({ ok: false, error: 'required', field: 'key' });
     if (action === 'models') {
       const [st, listed] = await Promise.all([checkOpenAI(draft.baseUrl, k), videoListed()]);
-      if (st.ready && st.models.length > 0) return out({ ok: true, error: '', models: st.models, videoModels: listed });
+      if (st.ready && st.models.length > 0) {
+        this.modelLists.set(draft.baseUrl, st.models);
+        return out({ ok: true, error: '', models: st.models, videoModels: listed });
+      }
       if (st.ready || /^http-(404|405|501)$/.test(st.error)) return out({ ok: false, error: 'no-list', field: 'models' });
       return out({ ok: false, error: st.error, field: /^(unauthorized|forbidden)$/.test(st.error) ? 'key' : 'baseUrl' });
     }
@@ -1402,6 +1409,16 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
     handle('providers:anthropicAccount', (action, id) =>
       (action === 'use' || action === 'add' || action === 'login' || action === 'remove') && isStr(id) ? this.anthropicAccount(action, id) : { ok: false, error: 'unsupported', field: '', opened: false, views: [] },
     );
+    // A star on a built-in provider's model: its favourites as they are now. The master hears of them next.
+    handle('providers:favorite', (provider, model, on) => {
+      if (!isProviderId(provider) || !isModelName(model) || typeof on !== 'boolean') return null;
+      const list = toggleFavorite(this.cfg.favoriteModels[provider] ?? [], model, on);
+      const others = Object.fromEntries(Object.entries(this.cfg.favoriteModels).filter(([id]) => id !== provider));
+      this.cfg.favoriteModels = list.length > 0 ? { ...others, [provider]: list } : others;
+      this.save();
+      mgr.favoritesChanged();
+      return list;
+    });
     handle('providers:custom', (action, draft, key) =>
       action === 'models' || action === 'test' || action === 'save' || action === 'remove'
         ? this.customProvider(action, draft, key)

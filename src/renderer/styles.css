@@ -3400,6 +3400,8 @@ kbd,
   display: flex;
   flex-direction: column;
   min-width: 340px;
+  /* as wide as its provider tabs, which wrap past that */
+  max-width: min(480px, calc(100vw - 24px));
   overflow: hidden;
 }
 .model-menu {
@@ -7023,6 +7025,7 @@ input[type='radio']:focus-visible {
   font-weight: 600;
 }
 .provider-tabs {
+  flex-wrap: wrap;
   margin-top: 6px;
 }
 .provider-tabs .seg.off {
@@ -7030,6 +7033,7 @@ input[type='radio']:focus-visible {
 }
 .provider-tabs .seg {
   display: inline-flex;
+  flex: 1 0 auto;
   align-items: center;
   justify-content: center;
   gap: 4px;
@@ -7040,6 +7044,137 @@ input[type='radio']:focus-visible {
   width: 18px;
   height: 18px;
   object-fit: contain;
+}
+
+/* ---------- favourite models: the ★ tab of the model menu, and the stars of Settings › Providers ---------- */
+.provider-tabs .seg-fav {
+  flex: none;
+  width: 30px;
+  padding: 0;
+  color: var(--text-3);
+}
+.provider-tabs .seg-fav.active {
+  color: var(--accent);
+}
+.seg-fav.active .ico,
+.fav-chip.on .ico {
+  fill: currentColor;
+}
+.model-menu > .fav-pick {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.fav-filter {
+  flex: none;
+  height: var(--ctl-sm);
+  margin: 0 6px 4px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  outline: none;
+  background: var(--raise);
+  color: var(--text);
+  font: var(--fs-sm) var(--font-ui);
+}
+.fav-filter:focus {
+  border-color: var(--accent);
+}
+.fav-filter::placeholder {
+  color: var(--text-3);
+}
+.fav-list {
+  flex: 0 1 auto;
+  min-height: 96px;
+  overflow-y: auto;
+}
+.fav-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--sp-2) 3px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.fav-group:first-child {
+  padding-top: 2px;
+}
+.fav-mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+.fav-mark.letter-mark {
+  font-size: 9px;
+}
+/* the arrows' row is lit like the pointer's: one selection for both */
+.fav-row.active {
+  background: var(--accent-fill);
+  color: var(--text-on-accent);
+}
+.fav-row.active .menu-title,
+.fav-row.active .menu-hint,
+.fav-row.active .ico {
+  color: inherit;
+}
+.fav-row .menu-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fav-row .menu-text {
+  flex: 1;
+}
+.fav-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.fav-foot .fav-manage {
+  width: auto;
+}
+.fav-keys {
+  margin-right: var(--sp-2);
+}
+.acct-favs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 560px;
+}
+.acct-details > .acct-favs {
+  margin-top: var(--sp-2);
+}
+.acct-filter {
+  max-width: 320px;
+}
+.fav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fav-chip .ico {
+  width: 12px;
+  height: 12px;
+}
+.fav-chip.on .ico {
+  color: var(--accent);
+}
+.fav-chip[hidden] {
+  display: none;
+}
+.fav-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 @media (prefers-reduced-motion: reduce) {
   .acct-mark,
