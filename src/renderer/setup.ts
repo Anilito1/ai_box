@@ -37,9 +37,8 @@ import { mascotMark } from './mascot';
 import { busyNote } from './busyNote';
 import { forumModeration } from './forum';
 import { updateSection } from './update';
-import { RemoteSection } from './remote';
 
-type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about' | 'remote';
+type Section = 'general' | 'accounts' | 'github' | 'workspace' | 'repos' | 'sessions' | 'team' | 'about';
 type Kind = 'onboarding' | 'settings';
 type Resume = { mode: Kind; section: Section };
 /** One repo of the picker: local (path), on GitHub only (slug, no path), or both. */
@@ -99,8 +98,6 @@ export class SetupView {
   private clearTimer = 0;
   private mode: Kind = 'settings';
   private section: Section = 'general';
-  /** Settings › Remote server (experimental): built when first opened. */
-  private remote: RemoteSection | null = null;
   private view: SettingsView | null = null;
   /** The GitHub CLI on this computer; null until checked. */
   private gh: { installed: boolean; login: string } | null = null;
@@ -256,9 +253,7 @@ export class SetupView {
   private render(): void {
     const v = this.view;
     if (!v) return;
-    // The remote server's section is always in the settings: its sheet says what it is, and nothing runs until it is on.
-    const remote = this.mode === 'settings';
-    const sections = this.mode === 'onboarding' ? STEPS : remote ? [...SECTIONS, 'remote' as const] : SECTIONS;
+    const sections = this.mode === 'onboarding' ? STEPS : SECTIONS;
     const nav = h('nav', 'setup-nav');
     nav.append(h('div', 'setup-nav-title', this.mode === 'onboarding' ? t('setup.firstRun') : t('side.settings')));
     sections.forEach((id, i) => {
@@ -380,10 +375,6 @@ export class SetupView {
         return this.team(el, v);
       case 'about':
         return this.about(el, v);
-      case 'remote':
-        this.head(el, t('remote.title'), t('remote.lead'));
-        this.remote ??= new RemoteSection(this.hub);
-        return this.remote.render(el, () => this.section === 'remote' && !this.root.hidden && this.render());
     }
   }
 
@@ -1506,7 +1497,7 @@ export class SetupView {
     const row = h('div', 'setup-row team-templates');
     const full = team.length >= TEAM_MAX;
     const folder = v.settings.mainRepos[0] ?? v.settings.workspaces[0] ?? '';
-    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true, placement: 'auto' }), full));
+    row.append(this.button(t('team.blank'), 'btn', () => this.edit({ id: '', name: '', description: '', instructions: '', folders: folder ? [folder] : [], model: '', effort: '', ultracode: false, mode: '', account: '', enabled: true }), full));
     for (const id of TEMPLATE_IDS) row.append(this.button(t(`team.template.${id}`), 'btn ghost', () => this.edit(fromTemplate(id, LANG, folder)), full));
     row.append(this.button(t('team.import'), 'btn ghost', () => void this.openAgents(), full));
     add.append(row);
@@ -1972,20 +1963,6 @@ export class SetupView {
     mark('mode', modeField, mode);
     if (this.confirmPostBypass) modeField.append(this.postBypassConfirm(d, changed));
     grid.append(modeField);
-    // Experimental, set in config.json: shown once remote workers are on, or for a post already sent there.
-    if (s.remoteWorkers.enabled) {
-      const placeField = this.field(t('team.field.placement'), t('team.placement.hint'));
-      const place = h('select', 'setup-select');
-      place.append(new Option(t('team.placement.auto'), 'auto'), new Option(t('team.placement.local'), 'local'), new Option(t('team.placement.remote'), 'remote'));
-      place.value = d.placement;
-      place.addEventListener('change', () => {
-        d.placement = place.value === 'remote' || place.value === 'local' ? place.value : 'auto';
-        changed();
-      });
-      placeField.append(place);
-      mark('placement', placeField, place);
-      grid.append(placeField);
-    }
     el.append(grid);
 
     // Ultracode: only for a post that runs on Anthropic; hidden on a Pro plan, shown but off when the plan is not known.

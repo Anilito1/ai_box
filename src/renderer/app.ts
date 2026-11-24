@@ -4,7 +4,6 @@ import { Avatar, clawdEvent, forgetClawd, noteFleet } from './avatar';
 import { CapsView } from './capabilities';
 import { ChatView } from './chat';
 import { ForumView } from './forum';
-import { AwayButton } from './remote';
 import { toggleCostPanel } from './cost';
 import { asleep, displayName, failed, fmtCost, fmtPct, h, icon, ICONS, level, oneLine, statusDot, statusLabel } from './dom';
 import { taskView } from '../shared/backgroundTask';
@@ -74,9 +73,7 @@ purgeButton.title = t('purge.title');
 purgeButton.classList.add('ph-purge');
 const updateSlot = h('div', 'ph-update');
 const headActions = h('div', 'ph-actions');
-// "I'm stepping away": only once remote workers are on (the snapshot says so).
-const awayButton = new AwayButton(hub);
-headActions.append(updateSlot, awayButton.el, forumButton, mcpButton, skillsButton, purgeButton, settingsButton);
+headActions.append(updateSlot, forumButton, mcpButton, skillsButton, purgeButton, settingsButton);
 const masterView = new ChatView($('pane-master'), hub, `${t('master.empty')}\n${t('palette.hint', { key: shortcut('K') })}`, undefined, false, headActions);
 const workerView = new ChatView($('pane-worker'), hub, t('worker.empty'), () => openWorker(null), true);
 // The master's header is the window's top bar: it spans the open worker too, which opens under it.
@@ -561,7 +558,6 @@ function commands(): Command[] {
     { title: t('palette.git'), keys: shortcut('G', true), run: () => repoPanel.toggle() },
     { title: t('palette.favorites'), keys: shortcut('M', true), run: openFavorites },
     { title: t('palette.repos'), run: () => void setup.open('settings', 'repos') },
-    { title: t('palette.remote'), run: () => void setup.open('settings', 'remote') },
     { title: t('update.check'), run: checkForUpdates },
   );
   for (const s of layout(snapshot.sessions).closed) list.push({ title: t('palette.openWorker', { name: displayName(s) }), hint: t('palette.closedWorker'), run: () => openWorker(s.id) });
@@ -611,7 +607,6 @@ document.addEventListener('keydown', (e) => {
 
 hub.onSnapshot((next) => {
   snapshot = next;
-  awayButton.update(next.away);
   render();
   openPending();
 });

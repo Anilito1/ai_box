@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -87,6 +87,33 @@ test('state survives stop/restart with queued and sent inputs; provider queue co
   } finally { restored?.killAll(); done(); }
 });
 
+test('a state saved by a version with the remote server loads without it, and a worker moved there gets its own conversation back', () => {
+  const { dir, manager, s, options, done } = fixture();
+  let restored: SessionManager | undefined;
+  try {
+    manager.killAll();
+    const file = join(dir, 'state.json');
+    const state = JSON.parse(readFileSync(file, 'utf8'));
+    const entry = state.sessions.find((e: Internal) => e.id === s.id);
+    Object.assign(entry, {
+      sessionId: 'SERVER_CONV_001',
+      remoteRun: { state: 'detached', conv: 'SERVER_CONV_001', seq: 4 },
+      away: { localSessionId: 'LOCAL_CONV_001', localStarted: true, slug: 'o/r', branch: 'b', base: 'x', remoteCwd: '/r', since: 1 },
+      awayPaused: true, awayOwes: true, sentIds: ['CALL_001'],
+    });
+    writeFileSync(file, JSON.stringify({ ...state, away: { since: 1, auto: false, phase: 'away' } }));
+    restored = new SessionManager(options);
+    const back: Internal = (restored as Internal).sessions.get(s.id);
+    assert.equal(back.sessionId, 'LOCAL_CONV_001');
+    assert.equal(back.started, true);
+    for (const key of ['remoteRun', 'away', 'awayPaused', 'awayOwes', 'sentIds']) assert.equal(key in back, false, key);
+    restored.killAll();
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+    assert.equal('away' in saved, false);
+    assert.equal(JSON.stringify(saved).includes('SERVER_CONV_001'), false);
+  } finally { restored?.killAll(); done(); }
+});
+
 test('a first input is journaled before asynchronous startup and remains queued when launch is stopped', async () => {
   const { dir, inner, s, done } = fixture();
   let release!: () => void;
@@ -113,7 +140,7 @@ test('a finished parent stays active for agents, compaction, retries, approvals 
     assert.equal(inner.isWorking(s), true);
     inner.onEvent(s, q, { type: 'agentTask', id: 'AGENT_001', state: 'done' });
     assert.equal(inner.settled(s), true);
-    for (const key of ['compacting', 'retrying', 'transitioning', 'moving']) {
+    for (const key of ['compacting', 'retrying', 'transitioning']) {
       s[key] = true;
       assert.equal(inner.settled(s), false, key); assert.equal(inner.isWorking(s), true, key);
       s[key] = false;

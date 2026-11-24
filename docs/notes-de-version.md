@@ -16,6 +16,10 @@ n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis 
 
 - Réglages › Espace de travail : « Autoriser tous les dossiers sans confirmation » laisse le maître faire travailler ses workers dans n'importe quel dossier de l'ordinateur, sans vous demander votre accord à chaque fois.
 
+### Supprimé
+
+- Le serveur distant et le bouton « Je m'absente » sont retirés, avec leur page des Réglages : vos workers tournent uniquement sur votre ordinateur, et l'app ne se connecte plus à aucun serveur pour eux.
+
 ## 2026-11-22
 
 ### Ajouté

@@ -1,7 +1,6 @@
 import type { ZodRawShape } from 'zod';
 import type { Totals } from '../../shared/costs';
-import type { Effort, HarnessId, Mode, RateLimits, RemoteWorkers } from '../../shared/types';
-import type { RemoteExit, RemoteNotify, RemoteTexts } from '../remote';
+import type { Effort, HarnessId, Mode, RateLimits } from '../../shared/types';
 import type { Block } from './blocks';
 import type { EffectivePolicy, ProviderCapabilities } from './capabilities';
 
@@ -180,8 +179,6 @@ export interface LaunchSpec {
   /** Prior process totals, for providers whose protocol only reports per-prompt usage. */
   initialUsage?: Totals;
   conversation: { id: string; resume: boolean };
-  /** Runs on the remote server instead of this PC. */
-  remote?: RemoteLaunch;
   input: AsyncIterable<AgentInput>;
   /** Something really came from the process: called at reception, before any translation. No timer of its own. */
   onSignal(): void;
@@ -227,29 +224,9 @@ export interface HistoryMessage {
 }
 
 /** How to reach the program outside a session: its path and the environment of the account. */
-/** A session run on the remote server (Claude Code only): the server, and its clone of the session's checkout. */
-export interface RemoteLaunch {
-  workers: RemoteWorkers;
-  cwd: string;
-  /** How its connection ended: told before the SDK reports the failure. */
-  onExit?: (exit: RemoteExit) => void;
-  /** What the server posts to the phone on its own while the hub is away. */
-  notify?: RemoteNotify;
-  /** What the runner answers the worker while the hub is away. */
-  texts?: RemoteTexts;
-  /** Tokens of its scope (GH_TOKEN…), given to its process in memory. */
-  secrets?: Record<string, string>;
-  /** The number of the last line the hub got from this conversation (read at each connection). */
-  since?: () => number;
-  onSeq?: (seq: number) => void;
-  /** The runner no longer keeps all the hub missed: the conversation is read again from its transcript. */
-  onGap?: () => void;
-}
-
 export interface AdapterContext {
   executable: string;
   env: Record<string, string>;
-  remote?: RemoteLaunch;
 }
 
 /** What a keep-alive cost: the tokens it read from the cache, those it wrote, its reply. */

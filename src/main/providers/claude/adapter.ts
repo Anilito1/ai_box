@@ -15,7 +15,6 @@ import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
 import { limitsOfUsage } from '../../../shared/usage';
-import { remoteSpawner, remoteStore, remoteTranscript } from '../../remote';
 import { blocksOf } from '../blocks';
 import { policyOf, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy, type PolicySpec } from '../capabilities';
 import type { AgentEvent, AgentModel, AgentProcess, HistoryMessage, KeepAliveResult, LaunchSpec, ProviderAdapter } from '../types';
@@ -62,15 +61,14 @@ export const fullWindow = (model: string) => (/^claude-fable-\d/i.test(model) &&
 
 
 /**
- * The tools a session may not use: the master has no direct edit tools; a worker has no Workflow, except in Ultracode. A worker on
- * the remote server has no SendMessage (the peers are on this PC): the hub's send_message carries it, kept while away.
+ * The tools a session may not use: the master has no direct edit tools; a worker has no Workflow, except in Ultracode.
  * This is a tool filter, not a read-only sandbox: Bash and MCP can still have side effects.
  */
-export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode' | 'observer'> & { remote?: unknown }): string[] {
+export function disallowedTools(spec: Pick<LaunchSpec, 'role' | 'readOnly' | 'ultracode' | 'observer'>): string[] {
   if (spec.role === 'master') return ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', 'SendMessage'];
   const workflow = spec.ultracode ? [] : ['Workflow'];
   // A diagnosis worker has no SendMessage either: it never writes to the worker it looks into.
-  const peers = spec.remote || spec.observer ? ['SendMessage'] : [];
+  const peers = spec.observer ? ['SendMessage'] : [];
   return spec.readOnly ? ['Edit', 'Write', 'NotebookEdit', 'AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers] : ['AskUserQuestion', ...workflow, 'ScheduleWakeup', ...peers];
 }
 
@@ -89,9 +87,8 @@ export function launchSettings(spec: Pick<LaunchSpec, 'role' | 'ultracode'>): Se
 function sessionOptions(spec: LaunchSpec): Options {
   const master = spec.role === 'master';
   return {
-    // On the remote server: its clone, through SSH (src/main/remote.ts). Its sessions have no other folder.
-    cwd: spec.remote?.cwd ?? spec.cwd,
-    ...(spec.extraDirs.length > 0 && !spec.remote ? { additionalDirectories: spec.extraDirs } : {}),
+    cwd: spec.cwd,
+    ...(spec.extraDirs.length > 0 ? { additionalDirectories: spec.extraDirs } : {}),
     // No model/effort = the CLI resolves them from settings.json, exactly like a normal session.
     ...(spec.model ? { model: fullWindow(spec.model) } : {}),
     ...(spec.effort ? { effort: spec.effort } : {}),
@@ -262,7 +259,6 @@ export const claudeAdapter: ProviderAdapter = {
     })();
     const options: Options = {
       ...sessionOptions(spec),
-      ...(spec.remote ? { spawnClaudeCodeProcess: remoteSpawner(spec.remote.workers, spec.remote.cwd, spec.remote) } : {}),
       ...(spec.mode ? { permissionMode: spec.mode } : {}),
       // Lets the composer switch a session to bypass as well: an explicit choice, which the mode menu warns about.
       allowDangerouslySkipPermissions: true,
@@ -305,7 +301,7 @@ export const claudeAdapter: ProviderAdapter = {
     // Not in the SDK's types, but read by its own spawn (0.3.x): the PID without taking over how it starts the CLI.
     if (spec.onSpawn) Object.assign(options, { onProcessSpawned: spec.onSpawn });
     proc = new ClaudeProcess(query({ prompt: prompts, options }), spec.conversation.id, spec.onSignal, {
-      mode: spec.mode, readOnly: spec.readOnly, cwd: spec.remote?.cwd ?? spec.cwd, extraDirs: spec.extraDirs, readDirs: spec.readDirs,
+      mode: spec.mode, readOnly: spec.readOnly, cwd: spec.cwd, extraDirs: spec.extraDirs, readDirs: spec.readDirs,
     });
     return proc;
   },
@@ -326,13 +322,11 @@ export const claudeAdapter: ProviderAdapter = {
   },
 
   // An unreadable check keeps the id rather than dropping the link to the conversation.
-  hasConversation: (id, cwd, ctx) =>
-    (ctx.remote ? remoteTranscript(ctx.remote.workers, id).then((e) => e !== null) : getSessionInfo(id, { dir: cwd }).then(Boolean)).catch(() => true),
+  hasConversation: (id, cwd) => getSessionInfo(id, { dir: cwd }).then(Boolean).catch(() => true),
 
-  async history(id, cwd, ctx): Promise<HistoryMessage[]> {
+  async history(id, cwd): Promise<HistoryMessage[]> {
     const out: HistoryMessage[] = [];
-    const where = ctx.remote ? { dir: ctx.remote.cwd, sessionStore: remoteStore(ctx.remote.workers) } : { dir: cwd };
-    for (const m of await getSessionMessages(id, where)) {
+    for (const m of await getSessionMessages(id, { dir: cwd })) {
       if (m.parent_tool_use_id || (m.type !== 'user' && m.type !== 'assistant')) continue;
       // Claude Code stores an API error as a "<synthetic>" reply with its own wording: not shown again on reload.
       const synthetic = (m.message as { model?: unknown } | null)?.model === '<synthetic>';

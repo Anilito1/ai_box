@@ -35,8 +35,7 @@ La consigne : captures, frames, planches, rendus d'essai, aperçus, logs, script
 dans le brouillon, jamais dans le projet, `/tmp` ou le Bureau ; ailleurs, seulement les livrables. Un brouillon qui
 devient un livrable est déplacé à sa place définitive, et c'est ce chemin-là que le rapport cite.
 
-Pas de brouillon pour le maître (il ne produit rien), un worker en lecture seule ou un worker sur le serveur distant
-(le hub ne peut pas purger sa machine).
+Pas de brouillon pour le maître (il ne produit rien) ni pour un worker en lecture seule.
 
 ## 2. Purge par projet
 
