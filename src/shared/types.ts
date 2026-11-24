@@ -863,6 +863,8 @@ export interface HubSettings {
   masterInstructions: string;
   /** The "client data" rule in every session's system prompt (shared/clientData); on by default. */
   clientDataRule: boolean;
+  /** The master starts workers and gives posts folders anywhere without asking the user first; off by default. */
+  allowAllFolders: boolean;
   github: {
     /** Client ID of the GitHub OAuth App used for the device flow; empty = the build's default. */
     clientId: string;

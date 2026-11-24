@@ -865,6 +865,22 @@ export class SetupView {
       }),
     );
     el.append(f);
+    if (this.mode !== 'onboarding') el.append(this.allFoldersField(s));
+  }
+
+  /** Every folder open to the master, without the question it otherwise puts to the user for a folder outside these. */
+  private allFoldersField(s: HubSettings): HTMLElement {
+    const f = h('div', 'setup-field');
+    const on = h('label', 'setup-toggle');
+    const box = h('input');
+    box.type = 'checkbox';
+    box.checked = s.allowAllFolders;
+    box.addEventListener('change', () => void this.save({ allowAllFolders: box.checked }));
+    const text = h('span', 'setup-choice-text');
+    text.append(h('span', 'setup-choice-title', t('setup.workspace.allFolders')), h('span', 'setup-choice-hint', t('setup.workspace.allFolders.hint')));
+    on.append(box, text);
+    f.append(on);
+    return f;
   }
 
   private async setFolders(workspaces: string[]): Promise<void> {

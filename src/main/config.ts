@@ -62,6 +62,7 @@ function defaults(lang: Lang): HubConfig {
     permissionMode: '',
     masterInstructions: '',
     clientDataRule: true,
+    allowAllFolders: false,
     github: { clientId: '', source: 'none', login: '', shareWithSessions: false },
     updates: 'auto',
     topicGroups: { order: [], collapsed: [] },
@@ -116,6 +117,7 @@ function merge(cfg: HubConfig, raw: Raw): string | null {
   take('permissionMode', raw.permissionMode, (v): v is Mode | '' => v === '' || MODES.includes(v as Mode), (v) => (cfg.permissionMode = v));
   take('masterInstructions', raw.masterInstructions, (v): v is string => isStr(v, 20_000), (v) => (cfg.masterInstructions = v));
   take('clientDataRule', raw.clientDataRule, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.clientDataRule = v));
+  take('allowAllFolders', raw.allowAllFolders, (v): v is boolean => typeof v === 'boolean', (v) => (cfg.allowAllFolders = v));
   take('updates', raw.updates, (v): v is UpdateMode => UPDATE_MODES.includes(v as UpdateMode), (v) => (cfg.updates = v));
   take('background', raw.background, (v): v is string => v === '' || isStr(v, 7, /^#[0-9a-f]{6}$/), (v) => (cfg.background = v));
   take('topicGroups', raw.topicGroups, isGroupPrefs, (v) => (cfg.topicGroups = { order: v.order, collapsed: v.collapsed }));

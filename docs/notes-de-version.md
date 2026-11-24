@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-24
+
+### Ajouté
+
+- Réglages › Espace de travail : « Autoriser tous les dossiers sans confirmation » laisse le maître faire travailler ses workers dans n'importe quel dossier de l'ordinateur, sans vous demander votre accord à chaque fois.
+
 ## 2026-11-22
 
 ### Ajouté

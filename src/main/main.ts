@@ -1264,7 +1264,12 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
 
     handle('settings:get', () => this.view());
     handle('settings:save', (patch) => {
-      const before = { lang: this.cfg.language, repos: this.cfg.mainRepos.join('\n'), master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]) };
+      const before = {
+        lang: this.cfg.language,
+        repos: this.cfg.mainRepos.join('\n'),
+        master: JSON.stringify([this.cfg.master, this.cfg.workspaces[0]]),
+        allFolders: this.cfg.allowAllFolders,
+      };
       const bad = applyPatch(this.cfg, (patch ?? {}) as SettingsPatch);
       if (bad) return { ...this.view(), ok: false, error: bad };
       this.save();
@@ -1272,6 +1277,7 @@ ${fr ? 'Elle doit être identique à celle de la console de l’hébergeur.' : '
       mgr.forgetRepos();
       if (before.repos !== this.cfg.mainRepos.join('\n')) this.setWatchers();
       if (this.masterStarted && before.master !== JSON.stringify([this.cfg.master, this.cfg.workspaces[0]])) mgr.updateMaster();
+      if (!before.allFolders && this.cfg.allowAllFolders) mgr.allowAskedFolders();
       // The master's or the workers' account may have changed.
       mgr.accountsChanged();
       // The page is built in one language: it is reloaded in the new one.

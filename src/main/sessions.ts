@@ -710,6 +710,8 @@ export class SessionManager extends EventEmitter {
   /** Workers to relaunch at start, from the state saved when the hub last closed. */
   private readonly resumeOnStart = new Map<string, 'mission' | 'work'>();
   private spawnQueue: Promise<unknown> = Promise.resolve();
+  /** The master's questions about a folder outside the user's folders that wait for an answer. */
+  private readonly folderQuestions = new Set<string>();
   /** Programs closed and waiting to be cleared, by session: gathered for a moment, so closing several takes one listing. */
   private toReap = new Map<string, CliProc[]>();
   private reapTimer: NodeJS.Timeout | null = null;
@@ -5072,6 +5074,7 @@ export class SessionManager extends EventEmitter {
         facts: [t('ask.fact.paths', { list: outside.join(' · ') }), ...this.postFacts(role)],
         allow: t('ask.folder.allow'),
         deny: t('ask.folder.deny'),
+        folder: true,
       },
       signal,
     );
@@ -5097,15 +5100,17 @@ export class SessionManager extends EventEmitter {
         facts: [t('ask.fact.paths', { list: folder }), t('ask.cwd.mission', { text: oneLine(args.mission, 300) })],
         allow: t('ask.folder.allow'),
         deny: t('ask.folder.deny'),
+        folder: true,
       },
       signal,
     );
     return answer.ok ? '' : t('spawn.cwdRefused', { name, reason: answer.reason ? ` (${answer.reason})` : '' });
   }
 
-  /** Inside one of the working folders or followed repos: where the user lets the hub's sessions work. */
+  /** Where the user lets the hub's sessions work without asking: anywhere if they allowed every folder, else inside one of the working folders or followed repos. */
   private inScope(folder: string): boolean {
     const { cfg } = this.opts;
+    if (cfg.allowAllFolders) return true;
     // Real paths: a link or junction inside a working folder may lead anywhere.
     const norm = (dir: string) => (process.platform === 'linux' ? realPath(dir) : realPath(dir).toLowerCase());
     const path = norm(folder);
@@ -5115,12 +5120,18 @@ export class SessionManager extends EventEmitter {
     });
   }
 
+  /** The user has just allowed every folder: the folder questions still waiting are answered yes. */
+  allowAskedFolders(): void {
+    const master = this.sessions.get(MASTER_ID);
+    for (const id of [...this.folderQuestions]) master?.pending.get(id)?.({ behavior: 'allow' });
+  }
+
   /**
    * A question the hub puts to the user in the master's conversation, whatever the permission mode: the master cannot
    * answer it. Its own sentence and buttons; the facts fold under "Details".
    */
   private async confirm(
-    q: { tool: string; title: string; summary: string; facts: string[]; allow: string; deny: string; done?: string },
+    q: { tool: string; title: string; summary: string; facts: string[]; allow: string; deny: string; done?: string; folder?: boolean },
     signal: AbortSignal,
   ): Promise<{ ok: boolean; reason: string }> {
     const master = this.sessions.get(MASTER_ID);
@@ -5139,7 +5150,8 @@ export class SessionManager extends EventEmitter {
       canAlways: false,
       state: 'pending',
     };
-    const d = await this.ask(master, item, signal);
+    if (q.folder) this.folderQuestions.add(item.id);
+    const d = await this.ask(master, item, signal).finally(() => this.folderQuestions.delete(item.id));
     // Answered, the question folds to its outcome and its subject ("Denied · Delete a post"), plus what it was about
     // when that still matters (the folders allowed).
     this.upsert(master, { ...item, summary: q.done ?? '', state: !d ? 'expired' : d.behavior === 'deny' ? 'denied' : 'allowed' });
