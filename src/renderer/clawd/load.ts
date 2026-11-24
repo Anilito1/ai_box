@@ -1,3 +1,4 @@
+import { onPresence, presence } from '../presence';
 import type { Stage } from './stage';
 
 declare global {
@@ -26,7 +27,16 @@ function inject(resolve: (ok: boolean) => void): void {
   document.head.append(el);
 }
 
+let watched: Stage | null = null;
+
 /** The shared stage, or null when WebGL, the model or its file is unavailable (the avatars then keep their SVG). */
 export async function clawdStage(): Promise<Stage | null> {
-  return (await load()) && window.hubClawdStage ? window.hubClawdStage() : null;
+  const stage = (await load()) && window.hubClawdStage ? await window.hubClawdStage() : null;
+  if (stage && stage !== watched) {
+    watched = stage;
+    const show = () => stage.setPresence(!presence.focused, presence.onBattery);
+    onPresence(show);
+    show();
+  }
+  return stage;
 }

@@ -888,6 +888,8 @@ export interface HubApi {
   onEvent(cb: (sessionId: string, kind: HubEventKind) => void): void;
   /** Paths of the repos shown in the sidebar, sent at start and whenever the settings change them. */
   onRepos(cb: (paths: string[]) => void): void;
+  /** Whether the window has the focus, sent at start and whenever it changes. */
+  onFocus(cb: (focused: boolean) => void): void;
   ready(): void;
   /** The repo calls take the folder of a checkout (main folder or worktree) of a main repo. */
   repoGraph(path: string, filter: GraphFilter, limit: number): Promise<RepoGraph>;

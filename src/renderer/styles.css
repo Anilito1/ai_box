@@ -4641,6 +4641,9 @@ kbd,
 .avatar .clawd.still * {
   animation: none !important;
 }
+.away .clawd * {
+  animation-play-state: paused !important;
+}
 .avatar.drawn .clawd.still {
   opacity: 0;
 }
@@ -7431,10 +7434,10 @@ input[type='radio']:focus-visible {
   border-radius: 50%;
   background: var(--text-3);
 }
+/* Still: a loop here would repaint the window at the screen's rate for as long as the subagent runs. */
 .sub-dot.s-running {
   background: var(--accent);
-  box-shadow: 0 0 0 0 var(--accent-soft);
-  animation: sub-breathe 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .sub-dot.s-done {
   background: var(--ok);
@@ -7446,18 +7449,12 @@ input[type='radio']:focus-visible {
   border-radius: 2px;
   background: var(--text-3);
 }
-@keyframes sub-breathe {
-  50% {
-    box-shadow: 0 0 0 4px var(--accent-soft);
-  }
-}
 @keyframes sub-flash {
   from {
     background: var(--accent-soft);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sub-dot.s-running,
   .sub-row.flash {
     animation: none;
   }

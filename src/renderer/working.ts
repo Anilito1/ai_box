@@ -6,11 +6,13 @@ import type { ChatItem, SessionView } from '../shared/types';
 import { workView } from '../shared/workView';
 import { h, oneLine } from './dom';
 import { LANG, t } from './i18n';
+import { onPresence, presence } from './presence';
 import { SubagentSection } from './subagents';
 
 // Claude Code's spinner: the starburst breathes in and out while a verb rotates.
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const FRAME_MS = 120;
+const AWAY_MS = 1000;
 const VERB_MS = 3200;
 // Under this a tool's length would only flicker from one step to the next.
 const TOOL_SHOWN_MS = 10_000;
@@ -28,8 +30,16 @@ function startTicker(): void {
       window.clearInterval(ticker);
       ticker = null;
     }
-  }, FRAME_MS);
+  }, presence.focused ? FRAME_MS : AWAY_MS);
 }
+
+// Out of focus the starburst holds still and only the clock moves.
+onPresence(() => {
+  if (ticker === null) return;
+  window.clearInterval(ticker);
+  ticker = null;
+  startTicker();
+});
 
 const setText = (el: HTMLElement, text: string) => {
   if (el.textContent !== text) el.textContent = text;
@@ -297,8 +307,9 @@ export class WorkingLine {
     const s = this.session;
     if (!s) return;
     const limited = this.mode === 'busy' && s.limit !== null;
-    // Reduced motion: a still starburst, verbs swap without sliding in.
-    const still = this.mode === 'waiting' || limited || reducedMotion.matches;
+    // Reduced motion or nobody watching: a still starburst, verbs swap without sliding in.
+    const calm = reducedMotion.matches || !presence.focused;
+    const still = this.mode === 'waiting' || limited || calm;
     setText(this.glyph, still ? '✻' : FRAMES[Math.floor(now / FRAME_MS) % FRAMES.length]);
     const verb =
       this.mode === 'waiting'
@@ -312,7 +323,7 @@ export class WorkingLine {
               : `${VERBS[(this.seed + Math.floor((now - this.since) / VERB_MS)) % VERBS.length]}…`;
     if (this.verb.textContent !== verb) {
       this.verb.textContent = verb;
-      if (!reducedMotion.matches)
+      if (!calm)
         this.verb.animate([{ opacity: 0, transform: 'translateY(5px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'ease-out' });
     }
     this.tickInfo(s, now);

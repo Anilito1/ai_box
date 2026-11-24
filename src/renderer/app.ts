@@ -27,6 +27,8 @@ import { checkForUpdates, initUpdates } from './update';
 import { activityOf, lastOf } from './working';
 import { newConversationOpen, openNewConversation } from './newConversation';
 import { openSubagent, refreshSubagent, renderSubagentRows, setSubagentSource } from './subagents';
+import { onPresence, presence } from './presence';
+import { Unshown } from './unshown';
 import { splitBackground } from '../shared/subagentList';
 
 declare global {
@@ -335,8 +337,9 @@ function renderCard(s: SessionView): void {
   c.root.classList.toggle('instance', inTeam);
   c.root.classList.toggle('member', inGroup(s));
   c.avatar.update(s, last, sessionMascot(s, snapshot.accounts), s.role === 'master' ? workersBusy() : 0);
-  c.tree.hidden = s.tree?.state !== 'active';
-  c.mine.hidden = !s.userOpened;
+  // Written when it changes only: a `hidden` set again to the same value still restyles the card.
+  if (c.tree.hidden !== (s.tree?.state !== 'active')) c.tree.hidden = s.tree?.state !== 'active';
+  if (c.mine.hidden !== !s.userOpened) c.mine.hidden = !s.userOpened;
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
   setText(c.pct, fmtPct(m?.contextPct, m?.estimated));
@@ -610,19 +613,44 @@ hub.onSnapshot((next) => {
   render();
   openPending();
 });
+// A streaming reply sends its items up to 25 times a second per session. The store takes them at once; the screen
+// once per frame for every session together, or once a second while nobody watches (out of focus). A new
+// conversation or an approval asked shows at once.
+const AWAY_ITEMS_MS = 1000;
+const unshown = new Unshown();
+let showTimer = 0;
+let showFrame = 0;
+
+function showItems(): void {
+  window.clearTimeout(showTimer);
+  window.cancelAnimationFrame(showFrame);
+  showTimer = showFrame = 0;
+  for (const [id, changed] of unshown.take()) {
+    const map = store.get(id);
+    if (!map) continue;
+    const view = viewFor(id);
+    if (changed === 'reset') view?.reset(map);
+    else view?.upsert(changed);
+    // The card's activity line follows the latest step.
+    const s = snapshot.sessions.find((x) => x.id === id);
+    // An approval asked in the master's conversation adds to the badge of its topic.
+    if (s?.role === 'master' && (changed === 'reset' || changed.some((i) => i.kind === 'permission'))) topicsView.update(snapshot.topics, map);
+    if (s) renderCard(s);
+  }
+}
+
 hub.onItems((id, items, reset) => {
   let map = store.get(id);
   const fresh = !map || reset;
   if (!map || reset) store.set(id, (map = new Map()));
   for (const item of items) map.set(item.id, item);
-  const view = viewFor(id);
-  if (view && fresh) view.reset(map);
-  else view?.upsert(items);
-  // The card's activity line follows the latest step.
-  const s = snapshot.sessions.find((x) => x.id === id);
-  // An approval asked in the master's conversation adds to the badge of its topic.
-  if (s?.role === 'master' && (fresh || items.some((i) => i.kind === 'permission'))) topicsView.update(snapshot.topics, map);
-  if (s) renderCard(s);
+  unshown.add(id, items, fresh);
+  if (fresh || items.some((i) => i.kind === 'permission')) return showItems();
+  if (presence.focused) showFrame ||= window.requestAnimationFrame(showItems);
+  else showTimer ||= window.setTimeout(showItems, AWAY_ITEMS_MS);
+});
+onPresence(() => {
+  if (presence.focused && unshown.size > 0) showItems();
 });
 // No render: the working line reads its session's pulse at its next tick.
 hub.onPulse((pulses) => {

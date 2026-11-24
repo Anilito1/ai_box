@@ -112,6 +112,11 @@ try {
   await app.evaluate(({ BrowserWindow, app: a }, show) => {
     const w = BrowserWindow.getAllWindows()[0];
     w.setMinimumSize(1, 1);
+    // Seen as focused, as by a user at it: a window started by a script may never be activated, and out of focus the
+    // page shows streamed items once a second. `send hub:focus [false]` checks the other state.
+    w.isFocused = () => true;
+    w.on('blur', () => w.webContents.send('hub:focus', true));
+    w.webContents.send('hub:focus', true);
     if (!show) {
       w.setPosition(-4000, -4000);
       a.dock?.hide();

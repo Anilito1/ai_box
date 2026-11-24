@@ -211,7 +211,11 @@ function createWindow(mgr: SessionManager, lang: Lang): void {
     if (/^https?:\/\//i.test(p.linkURL)) items.push({ label: t('menu.copyLink'), click: () => clipboard.writeText(p.linkURL) });
     if (win && items.length > 0) Menu.buildFromTemplate(items).popup({ window: win });
   });
-  win.on('focus', () => win?.flashFrame(false));
+  win.on('focus', () => {
+    win?.flashFrame(false);
+    send('hub:focus', true);
+  });
+  win.on('blur', () => send('hub:focus', false));
   win.on('close', (e) => {
     if (quitting) return; // Confirmed by before-quit.
     if (process.platform === 'darwin') {
@@ -1139,6 +1143,7 @@ class Hub {
       for (const [id, items] of mgr.allItems()) sender.send('hub:items', id, items, true);
       sender.send('hub:repos', repoWatchers.map((r) => r.path));
       for (const repo of repoWatchers) sender.send('hub:repo', repo.status);
+      sender.send('hub:focus', win?.isFocused() ?? false);
       rendererReady = true;
     });
     on('session:send', (id, text, images, topic, files) => {

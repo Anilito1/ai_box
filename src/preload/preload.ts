@@ -24,6 +24,9 @@ const api: HubApi = {
   onRepos: (cb) => {
     ipcRenderer.on('hub:repos', (_e, paths: string[]) => cb(paths));
   },
+  onFocus: (cb) => {
+    ipcRenderer.on('hub:focus', (_e, focused: boolean) => cb(focused));
+  },
   onTeam: (cb) => {
     ipcRenderer.on('hub:team', (_e, team: TeamRole[]) => cb(team));
   },

@@ -65,21 +65,20 @@ export const FIDGETS = new Set<Clip>(['idle_look_around', 'idle_hop', 'idle_stre
 const FULL_FPS = 24;
 /** Calm loops, fidgets and blinks; also the cards at work. */
 const SLOW_FPS = 12;
-/** Every mascot with the hub in the background: the slowest pace, so the longest frame. */
-export const QUIET_FPS = 8;
+/** On battery every pace is halved, down to this one: the longest frame. */
+export const SLOWEST_FPS = SLOW_FPS / 2;
 /** A longer mixer step is a pause (a view off screen, a late timer), not a frame: the move resumes without a jump. */
-export const MAX_STEP_S = 2 / QUIET_FPS;
+export const MAX_STEP_S = 0.25;
 
 /**
  * Frames per second of a moving mascot. Each frame drawn makes the whole window composite again, which costs more
  * than the drawing: every rate divides 24, so views at different paces share the same frames of the window.
- * `large`: the mascot atop the open conversation (the rig's own rate); `quiet`: the hub window is in the background.
+ * `large`: the mascot atop the open conversation (the rig's own rate); `onBattery`: every pace halved.
  * Blinks and fidgets of a resting Clawd go slow; reactions (a celebration, a push) keep the view's full rate.
  */
-export function frameRate(clip: Clip, large: boolean, quiet: boolean): number {
-  if (quiet) return QUIET_FPS;
-  if (CALM.has(clip) || REST.has(clip) || FIDGETS.has(clip)) return SLOW_FPS;
-  return large ? FULL_FPS : SLOW_FPS;
+export function frameRate(clip: Clip, large: boolean, onBattery: boolean): number {
+  const rate = large && !CALM.has(clip) && !REST.has(clip) && !FIDGETS.has(clip) ? FULL_FPS : SLOW_FPS;
+  return onBattery ? rate / 2 : rate;
 }
 
 /** Lying down: entered through fall_asleep / crash_ko, left through wake_up. */
@@ -308,7 +307,7 @@ export class Mind {
     if (this.play(reaction.clip, reaction.prio, reaction.reps ?? 1, now)) this.lastPlayed.set(reaction.clip, now);
   }
 
-  /** `quiet`: the hub is in the background, the Clawd does not fidget. */
+  /** `quiet`: nobody watches the hub, the Clawd does not fidget. */
   pose(now: number, quiet = false): Pose {
     const sig = this.sig;
     if (!sig) throw new Error('Mind.pose before update');
@@ -340,13 +339,13 @@ export class Mind {
   }
 
   /**
-   * Blinks so far: every 5-12 s, sometimes twice, never over an expression nor while `quiet`. A view blinks when
-   * the count moves, so every view of the session blinks together.
+   * Blinks so far: every 5-12 s, sometimes twice, never over an expression. A view blinks when the count moves, so
+   * every view of the session blinks together.
    */
-  blinks(now: number, quiet = false): number {
+  blinks(now: number): number {
     if (now < this.nextBlink) return this.blinkCount;
     this.nextBlink = now + (this.random() < 0.2 ? DOUBLE_BLINK_MS : this.between(BLINK_MS));
-    if (!quiet && !CLIPS[this.shot?.clip ?? this.base].expr) this.blinkCount++;
+    if (!CLIPS[this.shot?.clip ?? this.base].expr) this.blinkCount++;
     return this.blinkCount;
   }
 

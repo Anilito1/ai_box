@@ -27,7 +27,7 @@ import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import { clone } from 'three/addons/utils/SkeletonUtils.js';
 import glb from '../../../assets/clawd.glb';
 import type { MascotId } from '../mascot';
-import { CLIPS, frameRate, MAX_STEP_S, QUIET_FPS, REST, type Clip, type Hat, type Mind, type Pose } from './state';
+import { CLIPS, frameRate, MAX_STEP_S, REST, SLOWEST_FPS, type Clip, type Hat, type Mind, type Pose } from './state';
 
 declare global {
   interface Window {
@@ -42,10 +42,9 @@ declare global {
 //
 // Every frame put on a canvas costs the same whatever draws it, so frames are only drawn while something moves:
 // - at work, the pace of frameRate (state.ts): fastest for the large mascot of the open conversation, slower for the
-//   sidebar cards and calm loops, slowest with the hub in the background;
-// - at rest, a still pose, livened now and then by a blink or a fidget at 12 fps (never with the hub in the
-//   background);
-// - a closed session is drawn once; a hidden or minimized hub draws nothing.
+//   sidebar cards and calm loops, half as fast on battery;
+// - at rest, a still pose, livened now and then by a blink or a fidget at 12 fps;
+// - a closed session, or any with the hub out of focus, is drawn once per change; a hidden hub draws nothing.
 
 const BASE_FADE_S = 0.25;
 const SHOT_FADE_S = 0.1;
@@ -84,8 +83,10 @@ class Stage {
   readonly views = new Set<StageView>();
   private readonly models = new Map<MascotId, Promise<Model | null>>();
   reduced = reducedMotion.matches;
-  /** The hub window is in the background: no fidgets nor blinks, work at the slow pace. */
-  quiet = !document.hasFocus();
+  /** Nobody watches the hub (out of focus): every mascot holds still. */
+  quiet = false;
+  /** Every pace halved. */
+  onBattery = false;
   private timer = 0;
   private timerAt = Infinity;
   private lost = false;
@@ -99,6 +100,10 @@ class Stage {
     const key = new DirectionalLight(0xffffff, 1.6);
     key.position.set(-2, 4, 5);
     this.scene.add(key);
+    // Every view's rig stays in the scene, hidden but for its own draw: left to the renderer, each draw would refresh
+    // the world matrices of all of them. The light never moves; a view refreshes its own rig (draw).
+    key.updateMatrixWorld();
+    this.scene.matrixWorldAutoUpdate = false;
 
     renderer.domElement.addEventListener('webglcontextlost', () => {
       this.lost = true;
@@ -110,13 +115,15 @@ class Stage {
       this.reduced = reducedMotion.matches;
       this.wake();
     });
-    const focus = (focused: boolean) => () => {
-      this.quiet = !focused;
-      this.wake();
-    };
-    window.addEventListener('focus', focus(true));
-    window.addEventListener('blur', focus(false));
     document.addEventListener('visibilitychange', () => (document.hidden ? this.stop() : this.wake()));
+  }
+
+  /** Set by the main bundle (presence.ts), at start and on every change. */
+  setPresence(quiet: boolean, onBattery: boolean): void {
+    if (quiet === this.quiet && onBattery === this.onBattery) return;
+    this.quiet = quiet;
+    this.onBattery = onBattery;
+    this.wake();
   }
 
   /** `large`: the mascot atop an open conversation, animated at the full rate. */
@@ -289,8 +296,9 @@ export class StageView {
     const quiet = this.stage.quiet;
     const pose = this.mind.pose(now, quiet);
     const dressed = this.dress(pose);
-    // Closed, or reduced motion: one frame per change, of the base loop.
-    if (pose.still || this.stage.reduced) {
+    // Closed, reduced motion or nobody watching: one frame per change, of the base loop. Out of focus the mind is
+    // still checked once a second, as at rest: a worker done or dozing off shows on the next still frame.
+    if (pose.still || this.stage.reduced || quiet) {
       const clip = pose.still ? pose.clip : pose.base;
       const key = `${clip}|${pose.hat}|${pose.blueprint}|${this.canvas.width}x${this.canvas.height}`;
       if (key !== this.drawn) {
@@ -298,7 +306,7 @@ export class StageView {
         this.draw();
         this.drawn = key;
       }
-      return Infinity;
+      return pose.still || this.stage.reduced ? Infinity : t + REST_CHECK_MS;
     }
     this.drawn = '';
     if (this.dirty || dressed) {
@@ -313,7 +321,7 @@ export class StageView {
       this.start(pose, resting, t);
     }
     this.overlay(pose.sweat, resting, t);
-    const blinks = this.mind.blinks(now, quiet);
+    const blinks = this.mind.blinks(now);
     if (blinks !== this.blinked) {
       this.blinked = blinks;
       if (!this.model.expressions.has(pose.clip)) {
@@ -336,7 +344,7 @@ export class StageView {
     if (t < this.nextAt - TIMER_SLACK_MS) return this.nextAt;
     // Frames fall on a grid per rate, so views at the same pace share the timer's wake-ups (12 fps is every other
     // 24 fps frame).
-    const step = 1000 / frameRate(pose.clip, this.large, quiet);
+    const step = 1000 / frameRate(pose.clip, this.large, this.stage.onBattery);
     this.nextAt = (Math.floor(t / step) + 1) * step;
     const dt = this.last ? Math.min(MAX_STEP_S, (t - this.last) / 1000) : 0;
     this.last = t;
@@ -359,7 +367,7 @@ export class StageView {
 
   /** Keeps drawing for `seconds` (plus a frame), so a move at rest ends on screen. */
   private settle(t: number, seconds: number): void {
-    this.settleUntil = Math.max(this.settleUntil, t + seconds * 1000 + 1000 / QUIET_FPS);
+    this.settleUntil = Math.max(this.settleUntil, t + seconds * 1000 + 1000 / SLOWEST_FPS);
   }
 
   /** From the base loop to a one-shot (or back), crossfaded; loops start at the worker's own phase, rest poses hold. */
@@ -455,6 +463,7 @@ export class StageView {
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     this.root.visible = true;
+    this.root.updateMatrixWorld();
     renderer.render(scene, camera);
     this.root.visible = false;
     // The viewport sits at the bottom-left of the shared canvas; bitmap coordinates start at the top. The snapshot
