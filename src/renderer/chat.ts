@@ -32,6 +32,7 @@ import { effortLabel, PLATFORM, t } from './i18n';
 import { favoritePicker } from './favoritePicker';
 import { mascotMark, sessionMascot } from './mascot';
 import { shortcut } from './palette';
+import { RemoteControl } from './remote';
 import { SlashMenu } from './slash';
 import { activityOf, lastOf, WorkingLine } from './working';
 
@@ -135,6 +136,7 @@ export class ChatView {
   private readonly fileInput = h('input');
   private readonly working = new WorkingLine((url) => this.hub.openExternal(url), (id) => this.hub.analyze(id));
   private readonly slash: SlashMenu;
+  private readonly remote: RemoteControl;
   /** The session's Clawd, large, in the header of a panel that asks for one. */
   private readonly mascot: Avatar | null;
   private readonly nodes = new Map<string, HTMLElement>();
@@ -240,7 +242,9 @@ export class ChatView {
         this.input.value = '';
         this.syncSend();
       },
+      openRemote: () => this.remote.open(),
     });
+    this.remote = new RemoteControl(hub);
     this.input.addEventListener('input', () => {
       this.syncSend();
       this.slash.update();
@@ -354,9 +358,9 @@ export class ChatView {
       changed: () => this.syncSend(),
     });
     const bar = h('div', 'composer-bar');
-    bar.append(attachBtn, this.modeBtn, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, voice.button, this.sendBtn);
+    bar.append(attachBtn, this.modeBtn, this.remote.chip, this.modelBtn, slashBtn, h('span', 'spacer'), ctxRoot, voice.button, this.sendBtn);
     const box = h('div', 'composer-box');
-    box.append(this.slash.root, this.attachStrip, this.attachNote, this.slash.confirmation, voice.field, bar, this.fileInput);
+    box.append(this.slash.root, this.remote.panel, this.attachStrip, this.attachNote, this.slash.confirmation, voice.field, bar, this.fileInput);
     box.addEventListener('mousedown', (e) => {
       if (e.target === box) e.preventDefault();
     });
@@ -424,6 +428,7 @@ export class ChatView {
       this.reset(items);
     }
     this.renderChrome();
+    this.remote.update(this.session, switched);
     this.syncWorking();
   }
 
@@ -985,6 +990,11 @@ export class ChatView {
       case 'user': {
         const wrap = h('div', 'msg msg-user');
         const col = h('div', 'user-col');
+        if (item.remote) {
+          const from = h('div', 'user-from');
+          from.append(icon(ICONS.phone, 'ico small'), h('span', '', t('chat.fromRemote')));
+          col.append(from);
+        }
         if (item.images.length > 0) {
           const grid = h('div', 'user-images');
           for (const src of item.images) {

@@ -8172,3 +8172,122 @@ input[type='radio']:focus-visible {
 .purge-help p {
   margin: 0;
 }
+
+/* Remote Control: the chip of the composer bar, its panel, the marks of the card, the status bar and a message */
+.cbtn-remote {
+  color: var(--accent);
+}
+.remote-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.remote-dot.on {
+  background: var(--ok);
+}
+.remote-dot.warn {
+  background: var(--warn);
+}
+.remote-panel {
+  margin-bottom: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  font-size: var(--fs-sm);
+}
+.remote-panel[hidden] {
+  display: none;
+}
+.remote-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.remote-title {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.remote-state {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-head .spacer {
+  flex: 1;
+}
+.remote-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.remote-qr {
+  flex: none;
+  width: 132px;
+  height: 132px;
+  border-radius: var(--r-sm);
+}
+.remote-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 200px;
+}
+.remote-text p {
+  margin: 0;
+  color: var(--text-2);
+}
+.remote-text .remote-mode.danger {
+  color: var(--danger-text);
+}
+.remote-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.remote-url {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-link .btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.remote-link .btn .ico {
+  width: 12px;
+  height: 12px;
+}
+.card-remote {
+  color: var(--accent);
+}
+.sb-num.sb-remote {
+  color: var(--accent);
+}
+.user-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.user-from .ico {
+  width: 12px;
+  height: 12px;
+}

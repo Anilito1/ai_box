@@ -260,6 +260,19 @@ export interface SubagentView {
   result: string;
 }
 
+/**
+ * A session driven from claude.ai/code or the Claude app as well (Claude Code's Remote Control). `starting`: asked, not
+ * answered yet; `on`: its link works; `reconnecting`: the program lost its connection and tries again; `stopping`.
+ */
+export interface RemoteView {
+  state: 'starting' | 'on' | 'reconnecting' | 'stopping';
+  /** The program said it is connected to claude.ai (not only that its link is ready). */
+  connected: boolean;
+  /** The session's page on claude.ai; empty until the program gives it. */
+  url: string;
+  since: number;
+}
+
 export interface SessionView {
   id: string;
   role: Role;
@@ -323,6 +336,10 @@ export interface SessionView {
   ultracode: boolean;
   /** What its account's plan allows of Ultracode (see shared/ultracode.ts). */
   ultracodeAccess: UltracodeAccess;
+  /** Claude Code on a claude.ai sign-in: Remote Control can be turned on (by the user, from the composer). */
+  remoteCapable: boolean;
+  /** Remote Control while it is on (or being turned on or off), else null. Never saved: it ends with the process. */
+  remote: RemoteView | null;
   /** The last analysis of its silence the user asked for (running or ended), else null. */
   diagnosis?: DiagnosisView | null;
   /** A diagnosis worker: the name of the worker it looks into. */
@@ -693,7 +710,8 @@ export interface CustomProviderResult extends ProviderResult {
  * topics of a request about several jobs.
  */
 export type ChatItem = (
-  | { kind: 'user'; id: string; text: string; images: string[]; files?: AttachedFile[] }
+  /** `remote`: written from claude.ai or the Claude app (Remote Control), not in the hub. */
+  | { kind: 'user'; id: string; text: string; images: string[]; files?: AttachedFile[]; remote?: boolean }
   | { kind: 'peer'; id: string; from: string; text: string }
   | { kind: 'assistant'; id: string; text: string; live: boolean }
   | { kind: 'thinking'; id: string; text: string }
@@ -924,6 +942,8 @@ export interface HubApi {
   /** Turns Ultracode on or off for a session (Claude Code, a plan that allows it). */
   setUltracode(id: string, on: boolean): void;
   setMode(id: string, mode: Mode): void;
+  /** Turns Remote Control on or off: only from the user's own action in the composer. */
+  setRemote(id: string, on: boolean): void;
   /** Moves a session to another account (an id, "default"); it restarts on it with its conversation. */
   setAccount(id: string, account: string): void;
   /** Puts a session on a provider (anthropic, openai, deepseek): it moves to the account behind it, if connected. */

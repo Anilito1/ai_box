@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 // Bundled into dist/renderer/app.js. The Agent SDK and zod stay in node_modules (installed, not bundled).
-const BUNDLED = ['three', 'marked', 'dompurify'];
+const BUNDLED = ['three', 'marked', 'dompurify', 'uqr'];
 const VSCODE_MIT = `MIT License
 
 Copyright (c) Microsoft Corporation. All rights reserved.

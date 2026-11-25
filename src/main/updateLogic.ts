@@ -156,9 +156,12 @@ export function redact(text: string): string {
 
 // ---------- when to install ----------
 
-/** A session with nothing under way: no turn, approval, start, background task, subagent, compaction, retry or install. */
+/**
+ * A session with nothing under way: no turn, approval, start, background task, subagent, compaction, retry or install,
+ * and no Remote Control (the user drives it from elsewhere: being away from the hub says nothing of them then).
+ */
 const quietOne = (s: SessionView) =>
-  (s.status === 'idle' || s.status === 'exited') && s.background.length === 0 && s.agents === 0 && !s.compacting && !s.retrying && s.tree?.install !== 'running';
+  (s.status === 'idle' || s.status === 'exited') && s.background.length === 0 && s.agents === 0 && !s.compacting && !s.retrying && s.tree?.install !== 'running' && !s.remote;
 
 export const sessionsQuiet = (sessions: SessionView[]) => sessions.every(quietOne);
 /** Sessions an install now would interrupt. */

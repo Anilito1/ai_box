@@ -98,6 +98,8 @@ interface Card {
   tree: HTMLSpanElement;
   /** Mark of a conversation the user opened. */
   mine: HTMLSpanElement;
+  /** Mark of a session driven from claude.ai or the Claude app too (Remote Control). */
+  remote: HTMLSpanElement;
   name: HTMLSpanElement;
   model: HTMLSpanElement;
   pct: HTMLSpanElement;
@@ -257,8 +259,12 @@ function ensureCard(s: SessionView): Card {
   mine.append(icon(ICONS.user));
   mine.setAttribute('aria-hidden', 'true');
   mine.hidden = true;
+  const remote = h('span', 'card-tree card-remote');
+  remote.append(icon(ICONS.phone));
+  remote.title = t('remote.card');
+  remote.hidden = true;
   const name = h('span', 'card-name');
-  row.append(mine, tree, name);
+  row.append(remote, mine, tree, name);
   const meta = h('div', 'card-meta');
   const model = h('span');
   const pct = h('span', 'card-pct');
@@ -276,7 +282,7 @@ function ensureCard(s: SessionView): Card {
     else openWorker(opened === s.id ? null : s.id);
   });
   if (s.role === 'master') masterSlot.append(root);
-  const card = { root, avatar, tree, mine, name, model, pct, fill, sub, subs, actions, actionsKey: '' };
+  const card = { root, avatar, tree, mine, remote, name, model, pct, fill, sub, subs, actions, actionsKey: '' };
   cards.set(s.id, card);
   return card;
 }
@@ -340,6 +346,7 @@ function renderCard(s: SessionView): void {
   // Written when it changes only: a `hidden` set again to the same value still restyles the card.
   if (c.tree.hidden !== (s.tree?.state !== 'active')) c.tree.hidden = s.tree?.state !== 'active';
   if (c.mine.hidden !== !s.userOpened) c.mine.hidden = !s.userOpened;
+  if (c.remote.hidden !== !s.remote) c.remote.hidden = !s.remote;
   setText(c.name, inTeam && s.instance ? s.instance.topic : displayName(s));
   setText(c.model, [s.modelLabel, s.effort ? effortLabel(s.effort) : ''].filter(Boolean).join(' · '));
   setText(c.pct, fmtPct(m?.contextPct, m?.estimated));
@@ -421,7 +428,9 @@ function renderStatusbar(usage: UsageState | null): void {
   const sameDay = snapshot.costToday.day === dayOf(Date.now());
   const today = sameDay ? snapshot.costToday.cost : 0;
   const unpriced = sameDay ? (snapshot.costToday.unpriced ?? 0) : 0;
-  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, fmtCost(today), unpriced, usage, usageClock()]);
+  // Never out of sight while it is on: the sessions claude.ai or the Claude app can drive.
+  const remote = snapshot.sessions.filter((s) => s.remote).map(displayName);
+  const key = JSON.stringify([master && statusDot(master), master && statusLabel(master), workers.length, running, attention, remote, fmtCost(today), unpriced, usage, usageClock()]);
   if (key === statusKey) return;
   statusKey = key;
 
@@ -434,6 +443,7 @@ function renderStatusbar(usage: UsageState | null): void {
   left.push(h('span', 'sb-sep'), sbItem(t('sb.active'), String(workers.length)));
   if (running) left.push(sbItem(t('sb.running'), String(running)));
   if (attention) left.push(sbItem(t('sb.toApprove'), String(attention), 'warn'));
+  if (remote.length) left.push(sbItem(t('sb.remote'), String(remote.length), 'sb-remote', t('sb.remoteTip', { names: remote.join(', ') })));
   $('sb-left').replaceChildren(...left);
 
   // Today's cost; a click opens the cost by provider and by repo. Turns without a known price are not in it: "+?" says so.

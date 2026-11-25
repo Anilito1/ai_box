@@ -31,7 +31,12 @@ const steps = (parent: string, message: unknown): AgentEvent[] => {
 
 export function translate(msg: SDKMessage): AgentEvent[] {
   switch (msg.type) {
-    case 'system':
+    case 'system': {
+      // Remote Control's connection (not in the SDK's types): Claude Code says it only once its host turned it on.
+      if ((msg.subtype as string) === 'bridge_state') {
+        const m = msg as unknown as { state?: unknown; detail?: unknown };
+        return [{ type: 'remote', state: typeof m.state === 'string' ? m.state : '', detail: typeof m.detail === 'string' ? m.detail : '' }];
+      }
       switch (msg.subtype) {
         case 'init':
           return [{ type: 'conversation', id: msg.session_id, mode: msg.permissionMode, effort: (msg.effort as Effort | undefined) || null, model: msg.model }];
@@ -84,6 +89,7 @@ export function translate(msg: SDKMessage): AgentEvent[] {
         default:
           return ACTIVITY;
       }
+    }
     case 'rate_limit_event':
       // Refused by a plan limit: the CLI waits or gives up; either way the session is stuck until the next frame.
       return msg.rate_limit_info.status === 'rejected'
@@ -123,6 +129,8 @@ export function translate(msg: SDKMessage): AgentEvent[] {
         return own.length > 0 ? own : ACTIVITY;
       }
       const blocks = blocksOf(msg.message);
+      // The hub stamps no origin on its own prompts: a person's message stamped so came through Remote Control.
+      if ('isReplay' in msg && msg.isReplay && msg.origin?.kind === 'human') return [{ type: 'remotePrompt', id: msg.uuid ?? null, blocks }];
       if ('isReplay' in msg && msg.isReplay && msg.origin?.kind !== 'peer') return [{ type: 'promptTaken', text: textOf(blocks) }];
       if (msg.origin?.kind === 'peer') {
         // `body` (the sender's raw text) is sent by the CLI but not yet in the SDK typings.

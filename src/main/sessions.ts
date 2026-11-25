@@ -15,6 +15,7 @@ import { isPostRef, leads, ledBy, memberOf, refName, refsOf, withoutPosts } from
 import { parseTopicCall, TopicTracker, workerName, type ReplayStep, type TopicInput } from '../shared/topics';
 import { parseSlash, visibleCli, type CliCommand } from '../shared/slash';
 import { FILE_LIMITS, type AttachedFile, type FileInput } from '../shared/attachments';
+import { remoteAfter, remoteCapable, remoteEnds } from '../shared/remote';
 import { canonAccount, DEFAULT_ACCOUNT, findAccount, firstAccount, harnessOf, isBuiltinAccount, modelStreams, OWN_ACCOUNT, pinsModel, runsClaude } from '../shared/accounts';
 import { effortsFor } from '../shared/models';
 import { NO_NEWS, type ProviderNews } from '../shared/news';
@@ -160,7 +161,7 @@ import type {
   PermissionRequest,
 } from './providers/types';
 
-interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'diagnosis' | 'diagFor' | 'busy'> {
+interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 'group' | 'leads' | 'tree' | 'account' | 'accountPending' | 'fallbackFrom' | 'ultracodeAccess' | 'remoteCapable' | 'tool' | 'pulse' | 'modelStreams' | 'subagents' | 'diagnosis' | 'diagFor' | 'busy'> {
   sessionId: string;
   /** Account picked for it (by the user, or the master at its start); empty = its post's, else the usual one. */
   accountId: string;
@@ -300,6 +301,8 @@ interface Session extends Omit<SessionView, 'idleSince' | 'post' | 'instance' | 
   userEffort: boolean;
   /** The user chose its Ultracode by hand: the master's choices leave it alone. */
   userUltracode: boolean;
+  /** Claude Code said its connection ended while it was being turned on: why, until that request is answered. */
+  remoteLost: string | null;
   /** The conversation that got the handoff note with its first message: each new one gets it once. */
   noteSentTo: string;
   /** The note is on its way with a first message: until the conversation exists, it is not added again. */
@@ -600,6 +603,9 @@ const tokens = (n: number) => new Intl.NumberFormat(lang(), { notation: 'compact
 
 export class SessionManager extends EventEmitter {
   private readonly modeChanges = new WeakMap<AgentProcess, Promise<void>>();
+  /** Processes that answered ready: Remote Control is asked of them only then. */
+  private readonly readyProcs = new WeakSet<AgentProcess>();
+  private readonly remoteCalls = new WeakMap<AgentProcess, Promise<string>>();
   private readonly sessions = new Map<string, Session>();
   private modelInfos: AgentModel[] = [];
   /** The models of each Codex account, as Codex lists them. */
@@ -1101,6 +1107,102 @@ export class SessionManager extends EventEmitter {
       });
     }
     this.changed();
+  }
+
+  // ---------- Remote Control ----------
+
+  /** Claude Code signed in to claude.ai: the only sessions Remote Control can reach. */
+  private remoteAllowed(s: Session): boolean {
+    return remoteCapable(this.kindOf(s.runAccount || this.accountOf(s)), this.opts.cfg.provider);
+  }
+
+  /**
+   * Remote Control, from the composer only (IPC session:remote): the master and the workers have no tool for it, and
+   * Claude Code itself turns it on only when its host asks. A session asleep is started for it. Kept in memory only.
+   */
+  setRemote(id: string, on: boolean): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    if (!on) return this.stopRemote(s);
+    if (s.remote) return;
+    if (!this.remoteAllowed(s)) return this.notice(s, t('notice.remoteUnavailable'), 'error');
+    if (!s.inbox && (this.ended(s) || this.orphan(s))) return this.notice(s, t('notice.remoteClosed'), 'info');
+    s.remote = { state: 'starting', connected: false, url: '', since: Date.now() };
+    s.remoteLost = null;
+    if (s.query && this.readyProcs.has(s.query)) this.startRemote(s, s.query);
+    else if (!s.inbox) this.resume(s.id);
+    this.changed();
+  }
+
+  /**
+   * Requests to one process go one after the other: turning it off while it is being turned on reaches Claude Code
+   * once the first request is answered, never before (it would find nothing to end, and the first would then succeed).
+   */
+  private remoteCall(q: AgentProcess, on: boolean, name: string): Promise<string> {
+    const call = (this.remoteCalls.get(q) ?? Promise.resolve('')).catch(() => '').then(() => q.remoteControl!(on, name));
+    this.remoteCalls.set(q, call);
+    return call;
+  }
+
+  private startRemote(s: Session, q: AgentProcess): void {
+    if (!q.remoteControl) {
+      s.remote = null;
+      this.notice(s, t('notice.remoteUnavailable'), 'error');
+      return this.changed();
+    }
+    this.remoteCall(q, true, displayName(s)).then(
+      (url) => {
+        if (s.query !== q || !s.remote) return;
+        // Turned off meanwhile: the request that ends it follows this one.
+        if (s.remote.state === 'stopping') return void (s.remote = { ...s.remote, url });
+        // Ended before the answer came: no link to show for a connection that is gone.
+        if (s.remoteLost !== null) {
+          s.remote = null;
+          this.notice(s, t('notice.remoteLost'), 'error', s.remoteLost);
+          return this.changed();
+        }
+        s.remote = { ...s.remote, state: 'on', url };
+        this.notice(s, t('notice.remoteOn'), 'info');
+        this.changed();
+      },
+      (err: unknown) => {
+        if (s.query !== q || s.remote?.state !== 'starting') return;
+        s.remote = null;
+        this.notice(s, t('notice.remoteRefused'), 'error', errorText(err));
+        this.changed();
+      },
+    );
+  }
+
+  private stopRemote(s: Session): void {
+    const q = s.query;
+    const was = s.remote;
+    if (!was || was.state === 'stopping') return;
+    // Not asked of the process yet (it is starting): it never will be.
+    if (!q?.remoteControl || !this.readyProcs.has(q)) {
+      s.remote = null;
+      return this.changed();
+    }
+    s.remote = { ...was, state: 'stopping' };
+    this.changed();
+    this.remoteCall(q, false, '').then(
+      () => {
+        if (s.query !== q || s.remote?.state !== 'stopping') return;
+        s.remote = null;
+        this.notice(s, t('notice.remoteOff'), 'info');
+        this.changed();
+        // The master closed it while it was driven from elsewhere: it closes now, as it would have.
+        if (s.closeWhenDone) this.closeIfDone(s, q);
+      },
+      (err: unknown) => {
+        if (s.query !== q || s.remote?.state !== 'stopping') return;
+        // Still on, as far as anyone knows: said, and the switch stays on. Without a link it never was.
+        const on = !!s.remote.url;
+        s.remote = on ? { ...s.remote, state: 'on' } : null;
+        this.notice(s, t(on ? 'notice.remoteStopFailed' : 'notice.remoteOff'), on ? 'error' : 'info', on ? errorText(err) : '');
+        this.changed();
+      },
+    );
   }
 
   decide(id: string, requestId: string, decision: PermissionDecision): void {
@@ -1776,6 +1878,8 @@ export class SessionManager extends EventEmitter {
         userAccount: s.userAccount,
         ultracode: s.ultracode,
         ultracodeAccess: this.ultracodeAccessOf(s.runAccount || this.accountOf(s)),
+        remoteCapable: this.remoteAllowed(s),
+        remote: s.remote,
         ...(s.role === 'worker' && !s.diagOf ? { diagnosis: this.diagView(s.id) } : {}),
         ...(s.diagOf ? { diagFor: this.sessions.get(s.diagOf.target)?.name ?? '' } : {}),
         ...(s.userOpened ? { userOpened: true } : {}),
@@ -2084,6 +2188,9 @@ export class SessionManager extends EventEmitter {
     s.usageAccount = '';
     s.switchPending = false;
     s.ultracodePending = false;
+    // Remote Control lives in the process: it ends with it, and nothing turns it back on but the user.
+    if ((s.remote?.state === 'on' || s.remote?.state === 'reconnecting') && !this.quitting) this.notice(s, t('notice.remoteEnded'), 'info');
+    s.remote = null;
     // Withdrawn, not refused: nobody answered them.
     for (const finish of [...s.pending.values()]) finish(null);
     s.status = 'exited';
@@ -2316,6 +2423,27 @@ export class SessionManager extends EventEmitter {
         if (s.id === MASTER_ID) this.topics.taken(ev.text);
         this.markBusy(s, true);
         break;
+      case 'remote': {
+        // Only Remote Control the user turned on: the hub never shows (nor keeps) one it did not ask for.
+        if (!s.remote) break;
+        if (s.remote.state === 'starting' && remoteEnds(ev.state)) s.remoteLost = ev.detail;
+        const next = remoteAfter(s.remote, ev.state);
+        if (!next) this.notice(s, t('notice.remoteLost'), 'error', ev.detail);
+        s.remote = next;
+        break;
+      }
+      case 'remotePrompt': {
+        // Written on claude.ai or in the Claude app: Claude Code took it in itself, no input of the hub's waits on it.
+        const id = `remote-${ev.id ?? randomUUID()}`;
+        const item = userTextItem(ev.blocks, id);
+        if (!item) break;
+        const topic = s.id === MASTER_ID ? this.topics.shown(id, { topic: null, worker: null, user: true }, false, item.text) : null;
+        this.upsert(s, { ...(item.kind === 'user' ? { ...item, remote: true } : item), ...(topic ? { topic } : {}) });
+        Object.assign(s, { noteFresh: false, handoffDone: false, handoffStale: s.handoff });
+        this.markBusy(s, true);
+        this.event(s, 'message_in');
+        break;
+      }
       case 'peer': {
         const text = ev.body ?? userTextItem(ev.blocks, '')?.text ?? '';
         const id = `peer-${ev.id ?? randomUUID()}`;
@@ -2708,11 +2836,14 @@ export class SessionManager extends EventEmitter {
       return;
     }
     if (s.query !== q) return;
+    this.readyProcs.add(q);
     s.error = '';
     if (s.status === 'starting') {
       s.status = 'idle';
       s.idleAt = Date.now();
     }
+    // Asked while the session was starting (or asleep): turned on now that the process takes requests.
+    if (s.remote?.state === 'starting') this.startRemote(s, q);
     await this.refreshContext(s, q);
     void this.refreshUsage(s, q);
     this.changed();
@@ -3312,6 +3443,8 @@ export class SessionManager extends EventEmitter {
   /** End of the turn (and of its background tasks) of a worker the master closed while it was finishing. */
   private closeIfDone(s: Session, q: AgentProcess): void {
     if (s.query !== q || !s.closeWhenDone || !this.settled(s)) return;
+    // The user drives it from elsewhere: they alone end it (Remote Control off, then it closes as usual).
+    if (s.remote) return;
     if (Date.now() - s.activeAt < SILENCE_MS) {
       setTimeout(() => this.closeIfDone(s, q), SILENCE_MS);
       return;
@@ -3389,6 +3522,8 @@ export class SessionManager extends EventEmitter {
   private closeIdle(): void {
     for (const s of this.sessions.values()) {
       if (s.role !== 'worker' || !s.query || !this.settled(s)) continue;
+      // Driven from claude.ai or the Claude app: the user may be away from the hub, not from the session.
+      if (s.remote) continue;
       if (Date.now() - s.activeAt < (s.roleId ? PERMANENT_SLEEP_MIN : IDLE_CLOSE_MIN) * 60_000) continue;
       if (s.roleId) {
         this.sleep(s, PERMANENT_SLEEP_MIN);
@@ -3713,6 +3848,7 @@ export class SessionManager extends EventEmitter {
               const s = this.findWorker(name);
               // The user's own conversation: they alone close it (it falls asleep by itself when idle).
               if (s.userOpened) throw new Error(t('close.userOpened', { name: s.name }));
+              if (s.remote) throw new Error(t('close.remote', { name: s.name }));
               if (!s.query) {
                 const tree = s.retiring ? await s.retiring : '';
                 return tree || t(s.roleId ? 'close.alreadyAsleep' : this.ended(s) ? 'close.alreadyEnded' : 'close.already', { name: s.name });
@@ -5321,6 +5457,8 @@ ${s.role === 'worker' ? t('memory.rules.worker', { topic: topic ?? '' }) : t('me
       userUltracode: false,
       ultracode: false,
       runUltracode: false,
+      remote: null,
+      remoteLost: null,
       noteSentTo: '',
       noteSending: false,
       noteDue: false,

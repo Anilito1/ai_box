@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { filterCommands, needsArgument, parseSlash, pickOption, resolveSlash, type CliCommand } from './slash';
+import { filterCommands, needsArgument, parseSlash, pickOption, resolveSlash, visibleCli, type CliCommand } from './slash';
 
 const cli = (name: string, aliases: string[] = [], argumentHint = ''): CliCommand => ({ name, description: `${name} command`, argumentHint, aliases });
 const CLI = [cli('context'), cli('usage', ['stats']), cli('feature-dev:feature-dev'), cli('rename', [], '[name]'), cli('clear'), cli('__remote-workflow')];
@@ -93,4 +93,10 @@ test('needsArgument: only a required hint', () => {
   assert.equal(needsArgument('<instruction>'), true);
   assert.equal(needsArgument('[url]'), false);
   assert.equal(needsArgument(''), false);
+});
+
+test('/remote-control and /rc are the hub’s own: a command of that name in the provider’s list is never offered', () => {
+  assert.deepEqual(resolveSlash({ name: 'rc', arg: '' }, CLI), { kind: 'hub', command: 'remote-control', arg: '' });
+  assert.deepEqual(resolveSlash({ name: 'Remote-Control', arg: 'off' }, [cli('remote-control')]), { kind: 'hub', command: 'remote-control', arg: 'off' });
+  assert.equal(visibleCli(cli('remote-control')), false);
 });

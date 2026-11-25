@@ -14,6 +14,7 @@ import {
 import { WORKER_DENIED_MCP } from '../../../shared/capabilities';
 import { totalsOf } from '../../../shared/costs';
 import type { Effort, Mode, RateLimits } from '../../../shared/types';
+import { remoteLink } from '../../../shared/remote';
 import { limitsOfUsage } from '../../../shared/usage';
 import { blocksOf } from '../blocks';
 import { policyOf, PROVIDER_CAPABILITIES, refusedPolicy, type EffectivePolicy, type PolicySpec } from '../capabilities';
@@ -234,6 +235,21 @@ export class ClaudeProcess implements AgentProcess {
       return false;
     }
     return (await this.q.mcpServerStatus()).some((s) => s.name === name && s.status === 'connected');
+  }
+
+  /**
+   * Remote Control through the SDK's own call for it, the one Claude Code's hosts (VS Code, Desktop) use: a
+   * `remote_control` control request, in the SDK's code but not in its types. Asked again while on, it gives the same
+   * session. The page is kept only when it is claude.ai's.
+   */
+  async remoteControl(on: boolean, name: string): Promise<string> {
+    const q = this.q as Query & { enableRemoteControl?: (enabled: boolean, name?: string) => Promise<{ session_url?: unknown } | undefined> };
+    if (typeof q.enableRemoteControl !== 'function') throw new Error('Remote Control: this Agent SDK has no enableRemoteControl');
+    const answer = await q.enableRemoteControl(on, on ? name : undefined);
+    if (!on) return '';
+    const url = remoteLink(answer?.session_url);
+    if (!url) throw new Error('Remote Control: the answer holds no claude.ai link');
+    return url;
   }
 
   async rateLimits(): Promise<RateLimits | null> {

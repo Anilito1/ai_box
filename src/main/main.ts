@@ -1158,6 +1158,7 @@ class Hub {
     on('session:effort', (id, effort) => isStr(id) && EFFORTS.includes(effort as Effort) && mgr.setEffort(id, effort as Effort));
     on('session:ultracode', (id, on_) => isStr(id) && typeof on_ === 'boolean' && mgr.setUltracode(id, on_));
     on('session:mode', (id, mode) => isStr(id) && MODES.includes(mode as Mode) && mgr.setMode(id, mode as Mode));
+    on('session:remote', (id, on_) => isStr(id) && typeof on_ === 'boolean' && mgr.setRemote(id, on_));
     on('session:account', (id, account) => isStr(id) && (account === '' || isAccountRef(account)) && mgr.setAccount(id, account as string));
     on('session:decide', (id, requestId, decision) => {
       const d = decision as PermissionDecision | null;

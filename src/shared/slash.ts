@@ -1,9 +1,9 @@
 /** Commands the hub runs itself, in every session (master, worker or post), in the order the menu lists them. */
-export const HUB_COMMANDS = ['compact', 'clear', 'model', 'effort', 'mode', 'cost', 'mcp', 'skills', 'config', 'login', 'help'] as const;
+export const HUB_COMMANDS = ['compact', 'clear', 'model', 'effort', 'mode', 'cost', 'mcp', 'skills', 'config', 'login', 'remote-control', 'help'] as const;
 export type HubCommand = (typeof HUB_COMMANDS)[number];
 
 /** Claude Code's names for what the hub shows in its own panels: they open the panel rather than a terminal menu. */
-const HUB_ALIASES: Record<string, HubCommand> = { settings: 'config', plugin: 'skills', plugins: 'skills', logout: 'login', status: 'login' };
+const HUB_ALIASES: Record<string, HubCommand> = { settings: 'config', plugin: 'skills', plugins: 'skills', logout: 'login', status: 'login', rc: 'remote-control' };
 
 /**
  * Claude Code commands that only a terminal runs, or that the hub does itself: refused with a line on where to do it

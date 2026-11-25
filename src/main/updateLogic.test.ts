@@ -195,6 +195,8 @@ test('sessionsQuiet: any work under way keeps the hub awake', () => {
     session({ compacting: true }),
     session({ retrying: true }),
     session({ tree: { branch: 'b', state: 'active', kept: [], install: 'running' } }),
+    // Driven from the phone while the hub's window sits unused: a restart would cut it.
+    session({ remote: { state: 'on', connected: true, url: 'https://claude.ai/code/session_1', since: 0 } }),
   ]) {
     assert.equal(sessionsQuiet([session({}), busy]), false, JSON.stringify(busy));
     assert.equal(sessionsAtWork([session({}), busy, busy]), 2);

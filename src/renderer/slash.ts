@@ -14,6 +14,8 @@ export interface SlashHost {
   note(text: string): void;
   /** Empties the text field; images waiting in the draft stay. */
   clearText(): void;
+  /** The Remote Control panel of the session: its link, its QR code, its state and its stop button. */
+  openRemote(): void;
 }
 
 interface Entry {
@@ -45,8 +47,9 @@ export class SlashMenu {
   /** Closed with Escape: it stays closed until the text changes. */
   private dismissed = '';
   private confirming = false;
-  /** The open /clear question stops a session at work. */
-  private forcing = false;
+  /** What the question above the field does once answered yes; Enter answers it only when `enterYes`. */
+  private onYes: (() => void) | null = null;
+  private enterYes = false;
   /** The selection was moved by hand (arrows, pointer) since the list was last filtered. */
   private chosen = false;
   /** Opened from the composer's "/" button: the draft set aside ('' if none); a pick is written, never run. */
@@ -80,14 +83,14 @@ export class SlashMenu {
   reset(): void {
     this.held = null;
     this.close();
-    this.cancelClear();
+    this.cancelAsk();
     this.dismissed = '';
   }
 
   /** After each keystroke: open and filtered while the first word is a "/name" being typed. */
   update(): void {
-    // The text changed under the /clear question: it no longer stands.
-    if (this.confirming) this.cancelClear();
+    // The text changed under the question: it no longer stands.
+    if (this.confirming) this.cancelAsk();
     const value = this.input.value;
     const typing = COMMAND.test(value) && value !== this.dismissed;
     if (!typing) return this.close();
@@ -117,9 +120,9 @@ export class SlashMenu {
   onKey(e: KeyboardEvent): boolean {
     if (this.confirming) {
       if (e.key === 'Enter' && !e.isComposing) {
-        if (!this.forcing) this.confirmClear();
+        if (this.enterYes) this.yes();
       }
-      else if (e.key === 'Escape') this.cancelClear();
+      else if (e.key === 'Escape') this.cancelAsk();
       else return false;
       e.preventDefault();
       e.stopPropagation();
@@ -197,6 +200,9 @@ export class SlashMenu {
       case 'clear':
         this.askClear();
         return;
+      case 'remote-control':
+        this.remote(s, arg);
+        return;
       case 'model': {
         if (!arg) {
           this.host.openModelMenu();
@@ -270,34 +276,74 @@ export class SlashMenu {
     return current?.efforts.length ? current.efforts : EFFORTS;
   }
 
-  // ---------- /clear: a light confirmation above the field ----------
+  // ---------- /remote-control ----------
+
+  /**
+   * Off: a question first, answered by a click only (Enter does not), that says with which permissions the session
+   * will be driven from elsewhere. On: its panel. "off" (or "stop") turns it off.
+   */
+  private remote(s: SessionView, arg: string): void {
+    if (!s.remoteCapable) return this.host.note(t('slash.remoteUnavailable'));
+    if (/^(off|stop|arr[eê]t(er)?)$/i.test(arg)) {
+      if (!s.remote) return this.host.note(t('slash.remoteNotOn'));
+      this.hub.setRemote(s.id, false);
+      this.host.clearText();
+      return;
+    }
+    if (s.remote) {
+      this.host.clearText();
+      this.host.openRemote();
+      return;
+    }
+    const bypass = s.mode === 'bypassPermissions';
+    const yes = h('button', bypass ? 'btn small danger' : 'btn small primary', t('slash.remoteYes'));
+    const text = bypass ? t('slash.remoteBypass') : t('slash.remoteConfirm', { mode: t(`mode.${s.mode ?? 'default'}`) });
+    this.ask(text, yes, false, () => {
+      const now = this.host.session();
+      if (!now || now.id !== s.id) return;
+      this.hub.setRemote(s.id, true);
+      this.host.clearText();
+      this.host.openRemote();
+    });
+  }
+
+  // ---------- a light question above the field (/clear, /remote-control) ----------
+
+  private ask(text: string, yes: HTMLButtonElement, enterYes: boolean, onYes: () => void): void {
+    yes.addEventListener('click', () => this.yes());
+    const no = h('button', 'btn small ghost', t('setup.cancel'));
+    no.addEventListener('click', () => this.cancelAsk());
+    this.confirmBox.replaceChildren(h('span', 'slash-confirm-text', text), yes, no);
+    this.confirmBox.hidden = false;
+    this.confirming = true;
+    this.enterYes = enterYes;
+    this.onYes = onYes;
+    this.input.focus();
+  }
+
+  private yes(): void {
+    const run = this.onYes;
+    this.cancelAsk();
+    run?.();
+  }
 
   /** A session at work says what it is doing: clearing it anyway stops that, on a click (Enter does not). */
   private askClear(): void {
     const busy = this.host.session()?.busy ?? [];
-    this.forcing = busy.length > 0;
-    const yes = this.forcing ? h('button', 'btn small danger', t('slash.clearAnyway')) : h('button', 'btn small primary', t('slash.clearYes'));
-    yes.addEventListener('click', () => this.confirmClear());
-    const no = h('button', 'btn small ghost', t('setup.cancel'));
-    no.addEventListener('click', () => this.cancelClear());
-    const text = this.forcing ? t('slash.clearBusy', { why: busy.join(' · ') }) : t('slash.clearConfirm');
-    this.confirmBox.replaceChildren(h('span', 'slash-confirm-text', text), yes, no);
-    this.confirmBox.hidden = false;
-    this.confirming = true;
-    this.input.focus();
+    const force = busy.length > 0;
+    const yes = force ? h('button', 'btn small danger', t('slash.clearAnyway')) : h('button', 'btn small primary', t('slash.clearYes'));
+    const text = force ? t('slash.clearBusy', { why: busy.join(' · ') }) : t('slash.clearConfirm');
+    this.ask(text, yes, !force, () => {
+      const s = this.host.session();
+      if (!s) return;
+      this.hub.clear(s.id, force);
+      this.host.clearText();
+    });
   }
 
-  private confirmClear(): void {
-    const s = this.host.session();
-    const force = this.forcing;
-    this.cancelClear();
-    if (!s) return;
-    this.hub.clear(s.id, force);
-    this.host.clearText();
-  }
-
-  private cancelClear(): void {
+  private cancelAsk(): void {
     this.confirming = false;
+    this.onYes = null;
     this.confirmBox.hidden = true;
     this.confirmBox.replaceChildren();
   }
@@ -339,9 +385,12 @@ export class SlashMenu {
       skills: '',
       config: t('slash.arg.config'),
       login: '',
+      'remote-control': s?.remote ? '[off]' : '',
       help: '',
     };
-    return HUB_COMMANDS.map((c) => ({ name: c, args: args[c], description: t(`slash.${c}`), hub: c, cli: null }));
+    // Claude Code on a claude.ai sign-in only: elsewhere the command does not exist.
+    const shown = HUB_COMMANDS.filter((c) => c !== 'remote-control' || s?.remoteCapable);
+    return shown.map((c) => ({ name: c, args: args[c], description: t(c === 'remote-control' && s?.remote ? 'slash.remote-control.on' : `slash.${c}`), hub: c, cli: null }));
   }
 
   private draw(query: string): void {

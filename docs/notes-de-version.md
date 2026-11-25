@@ -10,6 +10,12 @@ réécrire une ligne déjà publiée : modifiée, elle serait montrée à nouvea
 n'a pas de ligne. `npm run notes` propose un brouillon tiré des commits depuis la dernière modification de ce fichier ;
 `npm test` vérifie sa forme.
 
+## 2026-11-25
+
+### Ajouté
+
+- `/remote-control` (ou `/rc`) dans une conversation Claude : après confirmation, elle se pilote aussi depuis claude.ai ou l'app Claude sur votre téléphone. Le lien, son QR code et l'état de la connexion s'affichent, avec un bouton Arrêter ; un témoin « À distance » reste visible tant que c'est actif.
+
 ## 2026-11-24
 
 ### Ajouté

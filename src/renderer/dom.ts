@@ -42,6 +42,7 @@ export function icon(path: string, cls = 'ico'): SVGSVGElement {
 
 export const ICONS = {
   stop: 'M4.5 4.5h7v7h-7z',
+  phone: 'M5.5 2h5a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1zM7.3 12h1.4',
   resume: 'M3.5 8a4.5 4.5 0 1 0 1.4-3.3M4.5 2.5v2.4h2.4',
   remove: 'M4.5 4.5l7 7M11.5 4.5l-7 7',
   send: 'M8 13V3M3.5 7.5L8 3l4.5 4.5',

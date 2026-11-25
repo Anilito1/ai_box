@@ -85,6 +85,18 @@ test('user frames: a replayed prompt, a message from a peer, tool results', () =
   assert.deepEqual(results, [{ type: 'toolResults', blocks: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }]);
 });
 
+test('Remote Control: its states, and a message written from claude.ai is no echo of the hub', () => {
+  // Frames as Claude Code 2.1.331 sent them (probe on a real session); the detail of a refusal is its own wording.
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'bridge_state', state: 'connected', bridge_epoch: 1 })), [{ type: 'remote', state: 'connected', detail: '' }]);
+  assert.deepEqual(translate(msg({ type: 'system', subtype: 'bridge_state', state: 'failed', detail: 'requires claude.ai subscription auth', failure_kind: 'terminal' })), [
+    { type: 'remote', state: 'failed', detail: 'requires claude.ai subscription auth' },
+  ]);
+  const remote = translate(msg({ type: 'user', uuid: 'r1', isReplay: true, parent_tool_use_id: null, origin: { kind: 'human' }, message: { content: 'Depuis le téléphone' } }));
+  assert.deepEqual(remote, [{ type: 'remotePrompt', id: 'r1', blocks: [{ type: 'text', text: 'Depuis le téléphone' }] }]);
+  // The hub's own prompt comes back without an origin: a receipt, as before.
+  assert.deepEqual(translate(msg({ type: 'user', isReplay: true, parent_tool_use_id: null, message: { content: 'Du hub' } })), [{ type: 'promptTaken', text: 'Du hub' }]);
+});
+
 test('a result becomes a turn: its outcome, the prompts left in the queue, the context windows, the running totals', () => {
   const [ev] = translate(
     msg({

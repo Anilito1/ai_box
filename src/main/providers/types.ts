@@ -146,6 +146,10 @@ export type AgentEvent =
   | { type: 'reply' }
   /** A subagent's model answered. Which subagent the program does not say of its limits and retries, so nor does this. */
   | { type: 'subagent' }
+  /** Remote Control (Claude Code): the state the program reports of its connection to claude.ai, and why it ended. */
+  | { type: 'remote'; state: string; detail: string }
+  /** A message the user wrote from claude.ai or the Claude app (Remote Control): the program takes it in itself. */
+  | { type: 'remotePrompt'; id: string | null; blocks: Block[] }
   /** Something arrived that changes nothing but "the session is alive". */
   | { type: 'activity' };
 
@@ -214,6 +218,11 @@ export interface AgentProcess {
    * false when it could not, null when the process has no server of that name. Absent: the program cannot.
    */
   reconnectMcp?(name: string): Promise<boolean | null>;
+  /**
+   * Remote Control: makes the session reachable from claude.ai and the Claude app under `name`, or ends that. Resolves
+   * with the session's page once on ('' once off); rejects with the program's reason. Absent: the program has none.
+   */
+  remoteControl?(on: boolean, name: string): Promise<string>;
 }
 
 /** A message of a stored conversation, as the program kept it. */

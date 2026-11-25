@@ -43,6 +43,7 @@ const api: HubApi = {
   setEffort: (id, effort) => ipcRenderer.send('session:effort', id, effort),
   setUltracode: (id, on) => ipcRenderer.send('session:ultracode', id, on),
   setMode: (id, mode) => ipcRenderer.send('session:mode', id, mode),
+  setRemote: (id, on) => ipcRenderer.send('session:remote', id, on),
   setAccount: (id, account) => ipcRenderer.send('session:account', id, account),
   setProvider: (id, provider) => ipcRenderer.send('session:provider', id, provider),
   setProviderModel: (id, provider, model) => ipcRenderer.send('session:providerModel', id, provider, model),
